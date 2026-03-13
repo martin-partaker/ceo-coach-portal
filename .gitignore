@@ -37,3 +37,10 @@ CLAUDE.local.md
 
 # Temporary AI research files
 _ai_temp/
+
+# Next.js
+.next/
+next-env.d.ts
+
+# pnpm
+pnpm-debug.log*

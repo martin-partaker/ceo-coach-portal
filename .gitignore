@@ -1,0 +1,39 @@
+# Environment
+.env
+.env.*
+.env.local
+
+# Dependencies
+node_modules/
+vendor/
+.venv/
+__pycache__/
+
+# Build output
+dist/
+build/
+bin/
+out/
+
+# Test artifacts
+coverage/
+test-results/
+playwright-report/
+.pytest_cache/
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude local overrides
+CLAUDE.local.md
+
+# Temporary AI research files
+_ai_temp/

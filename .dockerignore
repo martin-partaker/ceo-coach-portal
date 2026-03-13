@@ -1,0 +1,13 @@
+.env
+.env.*
+.git/
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+.venv/
+__pycache__/
+*.md
+!README.md
+_ai_temp/

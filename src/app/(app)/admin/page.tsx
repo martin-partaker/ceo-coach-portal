@@ -57,7 +57,7 @@ export default async function AdminPage() {
                         Admin
                       </Badge>
                     )}
-                    {coach.neonAuthUserId.startsWith('pending_') && (
+                    {!coach.neonAuthUserId && (
                       <Badge variant="outline" className="text-[10px] text-muted-foreground">
                         Pending signup
                       </Badge>

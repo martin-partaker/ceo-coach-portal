@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Users, CheckCircle2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ArrowLeft, Users, CheckCircle2, Eye } from 'lucide-react';
 import { AdminToggleButton } from '@/components/admin/admin-toggle-button';
 
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,17 @@ export default async function AdminCoachDetailPage({
             </div>
             <p className="mt-1 text-sm text-muted-foreground font-mono">{coach.email}</p>
           </div>
-          <AdminToggleButton coachId={coach.id} isAdmin={coach.isSuperAdmin} isSelf={coach.id === me.id} />
+          <div className="flex gap-2">
+            <AdminToggleButton coachId={coach.id} isAdmin={coach.isSuperAdmin} isSelf={coach.id === me.id} />
+            {coach.neonAuthUserId && (
+              <Button variant="outline" size="sm" asChild>
+                <Link href={`/admin/coaches/${coach.id}/view-as`}>
+                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                  View as coach
+                </Link>
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -65,7 +76,7 @@ export default async function AdminCoachDetailPage({
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Status</span>
-              <span>{coach.neonAuthUserId.startsWith('pending_') ? 'Pending signup' : 'Active'}</span>
+              <span>{!coach.neonAuthUserId ? 'Pending signup' : 'Active'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Zoom email</span>

@@ -11,7 +11,6 @@ export const adminRouter = createTRPCRouter({
       .from(coaches)
       .orderBy(desc(coaches.createdAt));
 
-    // Enrich with CEO count
     const enriched = await Promise.all(
       allCoaches.map(async (coach) => {
         const [countResult] = await ctx.db
@@ -45,7 +44,6 @@ export const adminRouter = createTRPCRouter({
         .where(eq(ceos.coachId, coach.id))
         .orderBy(desc(ceos.createdAt));
 
-      // Enrich with latest cycle + report status
       const enriched = await Promise.all(
         coachCeos.map(async (ceo) => {
           const [latestCycle] = await ctx.db
@@ -81,7 +79,6 @@ export const adminRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Check if email already exists
       const [existing] = await ctx.db
         .select()
         .from(coaches)
@@ -95,11 +92,10 @@ export const adminRouter = createTRPCRouter({
         });
       }
 
-      // Create coach slot — neonAuthUserId will be filled when they sign up
+      // Create coach slot — neonAuthUserId is null until they sign up
       const [created] = await ctx.db
         .insert(coaches)
         .values({
-          neonAuthUserId: `pending_${Date.now()}`,
           name: input.name,
           email: input.email,
           isSuperAdmin: input.isSuperAdmin ?? false,
@@ -119,7 +115,6 @@ export const adminRouter = createTRPCRouter({
         .limit(1);
       if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      // Don't let admin remove their own admin status
       if (coach.id === ctx.coach.id) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -134,5 +129,48 @@ export const adminRouter = createTRPCRouter({
         .returning();
 
       return updated;
+    }),
+
+  // View-as: get a coach's dashboard data (CEOs with status)
+  viewAsCoach: adminProcedure
+    .input(z.object({ coachId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [coach] = await ctx.db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, input.coachId))
+        .limit(1);
+      if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const coachCeos = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.coachId, coach.id))
+        .orderBy(desc(ceos.createdAt));
+
+      const enriched = await Promise.all(
+        coachCeos.map(async (ceo) => {
+          const [latestCycle] = await ctx.db
+            .select()
+            .from(cycles)
+            .where(eq(cycles.ceoId, ceo.id))
+            .orderBy(desc(cycles.createdAt))
+            .limit(1);
+
+          let hasReport = false;
+          if (latestCycle) {
+            const [report] = await ctx.db
+              .select({ id: reports.id })
+              .from(reports)
+              .where(eq(reports.cycleId, latestCycle.id))
+              .limit(1);
+            hasReport = !!report;
+          }
+
+          return { ceo, latestCycle: latestCycle ?? null, hasReport };
+        })
+      );
+
+      return { coach, ceos: enriched };
     }),
 });

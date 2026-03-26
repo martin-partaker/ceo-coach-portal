@@ -11,7 +11,7 @@ import {
 
 export const coaches = pgTable('coaches', {
   id: uuid('id').primaryKey().defaultRandom(),
-  neonAuthUserId: text('neon_auth_user_id').notNull().unique(),
+  neonAuthUserId: text('neon_auth_user_id').unique(),
   name: text('name').notNull(),
   email: text('email').notNull().unique(),
   zoomUserEmail: text('zoom_user_email'), // their email in the shared Zoom account (for filtering meetings)

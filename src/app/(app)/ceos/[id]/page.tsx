@@ -5,7 +5,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Calendar, Plus } from 'lucide-react';
+import { Calendar } from 'lucide-react';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
 import { TenXGoalEditor } from '@/components/ceos/ten-x-goal-editor';
 import { CeoDetailsEditor } from '@/components/ceos/ceo-details-editor';
 import { CreateCycleDialog } from '@/components/ceos/create-cycle-dialog';
@@ -31,15 +39,19 @@ export default async function CeoProfilePage({
 
   return (
     <div className="space-y-8">
-      {/* Back link + header */}
+      {/* Breadcrumbs + header */}
       <div>
-        <Link
-          href="/dashboard"
-          className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to dashboard
-        </Link>
+        <Breadcrumb className="mb-4">
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink href="/dashboard">Dashboard</BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{ceo.name}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
         <div className="flex items-end justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">{ceo.name}</h1>

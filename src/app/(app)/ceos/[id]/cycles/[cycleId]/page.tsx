@@ -1,7 +1,13 @@
 import { createServerCaller } from '@/lib/trpc/server';
 import { notFound } from 'next/navigation';
-import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
 import { CycleInputForm } from '@/components/cycles/cycle-input-form';
 import { ActionItems } from '@/components/cycles/action-items';
 import { ReportView } from '@/components/cycles/report-view';
@@ -31,15 +37,21 @@ export default async function CyclePage({
   return (
     <div className="space-y-8">
       {/* Non-sticky back link */}
-      <div>
-        <Link
-          href={`/ceos/${ceoId}`}
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to {ceo.name}
-        </Link>
-      </div>
+      <Breadcrumb>
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink href="/dashboard">Dashboard</BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbLink href={`/ceos/${ceoId}`}>{ceo.name}</BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>{cycle.label}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
 
       {/* Sticky header with progress — rendered inside CycleInputForm as client component */}
       <CycleInputForm

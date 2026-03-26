@@ -119,28 +119,28 @@ Coach can create a cycle and fill in all inputs manually.
 
 ---
 
-## Phase 3 — Zoom Integration
-**Goal:** Coach connects Zoom once; pulls transcript per cycle.
+## Phase 3 — Zoom Integration (Server-to-Server OAuth)
+**Goal:** Coach sets Zoom email once; pulls transcript per cycle via shared S2S credentials.
 **Estimated effort:** 2–3 days
 
 ### Prerequisites:
-- Zoom OAuth app already registered — credentials available
-- Need env vars: `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`, `ZOOM_REDIRECT_URI`
+- Zoom S2S OAuth app registered — credentials available
+- Need env vars: `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`
 
 ### Tasks:
-- [ ] Coach settings page (`/settings`) with Zoom OAuth connect button
-- [ ] Zoom OAuth callback route (`/api/zoom/callback`)
-- [ ] Store Zoom access + refresh token on `coaches.zoom_oauth_token` (as JSON)
-- [ ] Token refresh middleware (refresh on expiry before API calls)
-- [ ] Per cycle: "Link Zoom meeting" button
-- [ ] API route to list recent Zoom cloud-recorded meetings (last 30 days)
-- [ ] Coach selects meeting → transcript pulled via Zoom API → stored in `cycles.zoom_transcript`
-- [ ] Handle errors: no cloud recording, expired token, no transcript available
+- [x] Coach settings page (`/settings`) with Zoom email input
+- [x] Zoom S2S OAuth client — account_credentials grant, token caching
+- [x] tRPC zoom router: `listRecordings` (last 30 days), `importTranscript`
+- [x] Per cycle: "Import from Zoom" dialog — lists meetings, shows transcript availability
+- [x] Coach selects meeting → transcript fetched via Zoom API → VTT cleaned to plain text → stored in `cycles.zoom_transcript`
+- [x] Handle errors: no Zoom email set, no recordings, no transcript, API failures
+- [x] Manual paste fallback still available alongside Zoom import
 
-### Zoom API endpoints needed:
-- `GET /v2/users/me/recordings` — list recordings
-- `GET /v2/meetings/{meetingId}/recordings` — get transcript download URL
-- Download VTT/plain text transcript
+### Zoom API endpoints used:
+- `POST /oauth/token` (grant_type=account_credentials) — S2S token
+- `GET /v2/users/{email}/recordings` — list cloud recordings
+- `GET /v2/meetings/{meetingId}/recordings` — get recording files
+- Download VTT transcript file → clean to plain text
 
 ### Deliverable:
 Coach can pull a Zoom transcript with one click instead of pasting.
@@ -320,13 +320,13 @@ NEON_AUTH_BASE_URL=
 NEON_AUTH_COOKIE_SECRET=
 DATABASE_URL=          # Neon connection string
 
-# Phase 3
+# Phase 3 — Zoom S2S OAuth
+ZOOM_ACCOUNT_ID=
 ZOOM_CLIENT_ID=
 ZOOM_CLIENT_SECRET=
-ZOOM_REDIRECT_URI=https://your-domain.com/api/zoom/callback
 
-# Phase 5
-ANTHROPIC_API_KEY=
+# Phase 5 — AI Generation
+OPENAI_API_KEY=
 ```
 
 ---

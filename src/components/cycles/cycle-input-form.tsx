@@ -21,10 +21,13 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
 import type { Cycle } from '@/db/schema';
 
 interface CycleInputFormProps {
   cycle: Cycle;
+  ceoId: string;
+  hasZoomEmail: boolean;
 }
 
 type CycleField = keyof Pick<
@@ -40,7 +43,7 @@ type CycleField = keyof Pick<
   | 'transcriptSkipped'
 >;
 
-export function CycleInputForm({ cycle }: CycleInputFormProps) {
+export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormProps) {
   const router = useRouter();
 
   const [values, setValues] = useState({
@@ -240,11 +243,16 @@ export function CycleInputForm({ cycle }: CycleInputFormProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base font-medium">Zoom Transcript</CardTitle>
-            {(isFilled(values.zoomTranscript) || values.transcriptSkipped) ? (
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            ) : (
-              <Circle className="h-4 w-4 text-muted-foreground/40" />
+            <div className="flex items-center gap-3">
+              <CardTitle className="text-base font-medium">Zoom Transcript</CardTitle>
+              {(isFilled(values.zoomTranscript) || values.transcriptSkipped) ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <Circle className="h-4 w-4 text-muted-foreground/40" />
+              )}
+            </div>
+            {!values.transcriptSkipped && (
+              <ZoomImportDialog cycleId={cycle.id} ceoId={ceoId} hasZoomEmail={hasZoomEmail} />
             )}
           </div>
         </CardHeader>
@@ -267,7 +275,7 @@ export function CycleInputForm({ cycle }: CycleInputFormProps) {
           {!values.transcriptSkipped && (
             <>
               <p className="text-xs text-muted-foreground">
-                Paste the Zoom meeting transcript below. Zoom integration coming soon.
+                Import from Zoom or paste the transcript manually below.
               </p>
               <Textarea
                 value={values.zoomTranscript}

@@ -25,6 +25,8 @@ export default async function CyclePage({
   const { cycle, ceo } = data;
   if (ceo.id !== ceoId) notFound();
 
+  const coach = await api.coaches.getMe();
+
   const inputs = [
     !!cycle.monthlyGoals?.trim(),
     !!cycle.weeklyJournal1?.trim(),
@@ -68,7 +70,7 @@ export default async function CyclePage({
       </div>
 
       {/* Input form */}
-      <CycleInputForm cycle={cycle} />
+      <CycleInputForm cycle={cycle} ceoId={ceoId} hasZoomEmail={!!coach.zoomUserEmail} />
     </div>
   );
 }

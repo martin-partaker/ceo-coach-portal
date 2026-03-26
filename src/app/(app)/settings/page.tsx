@@ -1,7 +1,14 @@
-import { Card, CardContent } from '@/components/ui/card';
-import { Settings } from 'lucide-react';
+import { createServerCaller } from '@/lib/trpc/server';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { ZoomEmailSetting } from '@/components/settings/zoom-email-setting';
 
-export default function SettingsPage() {
+export const dynamic = 'force-dynamic';
+
+export default async function SettingsPage() {
+  const api = await createServerCaller();
+  const coach = await api.coaches.getMe();
+
   return (
     <div className="space-y-8">
       <div>
@@ -11,15 +18,38 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      {/* Zoom Integration */}
       <Card>
-        <CardContent className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <Settings className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <h3 className="mt-4 text-sm font-medium">Coming soon</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Zoom integration and account settings will appear here.
+        <CardHeader>
+          <CardTitle className="text-base font-medium">Zoom Integration</CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <p className="mb-4 text-sm text-muted-foreground">
+            Enter the email address associated with your Zoom account.
+            This is used to find your cloud-recorded meetings and pull transcripts.
           </p>
+          <ZoomEmailSetting currentEmail={coach.zoomUserEmail} />
+        </CardContent>
+      </Card>
+
+      {/* Profile */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-medium">Profile</CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Name</span>
+              <span>{coach.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Email</span>
+              <span className="font-mono text-xs">{coach.email}</span>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>

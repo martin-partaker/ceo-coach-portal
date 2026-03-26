@@ -1,11 +1,13 @@
 import { authClient } from '@/lib/auth/client';
-import { NeonAuthUIProvider, UserButton } from '@neondatabase/auth/react';
+import { NeonAuthUIProvider } from '@neondatabase/auth/react';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { ThemeProvider } from '@/components/providers/theme-provider';
 import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'CEO Coach Portal',
-  description: 'Your executive coaching platform',
+  description: 'Executive coaching platform',
 };
 
 export default function RootLayout({
@@ -16,17 +18,15 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <NeonAuthUIProvider
-          authClient={authClient}
-          redirectTo="/"
-          credentials={{ forgotPassword: true }}
-        >
-          <header className="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
-            <span className="font-semibold text-gray-900">CEO Coach Portal</span>
-            <UserButton size="icon" />
-          </header>
-          {children}
-        </NeonAuthUIProvider>
+        <ThemeProvider>
+          <NeonAuthUIProvider
+            authClient={authClient}
+            redirectTo="/dashboard"
+            credentials={{ forgotPassword: true }}
+          >
+            <TooltipProvider>{children}</TooltipProvider>
+          </NeonAuthUIProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

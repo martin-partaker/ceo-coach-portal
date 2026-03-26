@@ -147,7 +147,7 @@ export const cyclesRouter = createTRPCRouter({
 
       const [created] = await ctx.db
         .insert(journalEntries)
-        .values({ cycleId: input.cycleId, weekNumber: input.weekNumber, title: input.title })
+        .values({ cycleId: input.cycleId, weekNumber: input.weekNumber, title: input.title, content: '' })
         .returning();
       return created;
     }),

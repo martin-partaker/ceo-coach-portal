@@ -117,7 +117,7 @@ export function AuthForm({ mode }: AuthFormProps) {
           <p className="text-sm text-muted-foreground">
             {mode === 'sign-up' ? (
               <>
-                Already have an account?{' '}
+                Already have an accountsss?{' '}
                 <Link href="/auth/sign-in" className="font-medium text-foreground hover:underline">
                   Sign in
                 </Link>

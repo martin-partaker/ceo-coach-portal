@@ -36,7 +36,29 @@
       "WebFetch(domain:ericpartaker.com)",
       "WebFetch(domain:eric-partaker.mykajabi.com)",
       "WebFetch(domain:jakobgreenfeld.com)",
-      "WebFetch(domain:www.neurohackingly.com)"
+      "WebFetch(domain:www.neurohackingly.com)",
+      "mcp__Neon__get_database_tables",
+      "Bash(git checkout:*)",
+      "Bash(pnpm drizzle-kit:*)",
+      "Bash(pnpm dlx:*)",
+      "Bash(pnpm:*)",
+      "Bash(git push:*)",
+      "Bash(git config:*)",
+      "Bash(ssh -T git@github.com)",
+      "Bash(cat /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app/\\\\\\(app\\\\\\)/dashboard/page.tsx)",
+      "Bash(cat /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app/\\\\\\(app\\\\\\)/layout.tsx)",
+      "Bash(vercel ls:*)",
+      "Bash(vercel inspect:*)",
+      "Bash(vercel env:*)",
+      "Bash(vercel deploy:*)",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_take_screenshot",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(npx next:*)",
+      "Bash(find node_modules/@neondatabase/auth -name *.css -o -name tailwind*)",
+      "Bash(find node_modules/@neondatabase/auth/dist -name *.css)",
+      "Bash(grep -r AuthView node_modules/@neondatabase/auth/dist/ --include=*.mjs -l)",
+      "Bash(ls:*)"
     ]
   }
 }

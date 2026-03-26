@@ -50,6 +50,11 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   // Undo state for AI-prefilled fields
   const [undoValues, setUndoValues] = useState<Record<string, string>>({});
+  const [noExtraContext, setNoExtraContext] = useState(false);
+  // Fields are unlocked once AI has prefilled OR coach already has content from a previous load
+  const [prefillDone, setPrefillDone] = useState(
+    !!(cycle.monthlyGoals?.trim()) || !!(cycle.monthlyReflection?.trim()) || cycle.transcriptSkipped
+  );
 
   // Journal entries as list
   const [journalList, setJournalList] = useState<JournalEntry[]>(initialJournals);
@@ -79,6 +84,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
       }));
       setAiSuggested(new Set(['monthlyGoals', 'monthlyReflection']));
       setPrefilling(false);
+      setPrefillDone(true);
       router.refresh();
     },
     onError: () => setPrefilling(false),
@@ -108,6 +114,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
   }
 
   const transcriptReady = transcriptList.length > 0 || values.transcriptSkipped;
+  const contextReady = values.additionalContext.trim().length > 0 || noExtraContext;
 
   const [expandedJournalId, setExpandedJournalId] = useState<string | null>(
     journalList.length > 0 ? journalList[0].id : null
@@ -364,52 +371,87 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
         </Card>
       ) : (
         <>
-          {/* Additional Context */}
-          <InputSection
-            title="Extra Notes & Context"
-            filled={isFilled(values.additionalContext)}
-            description="Paste any additional context — emails, notes, meeting prep — that should inform this session."
-          >
-            <Textarea
-              value={values.additionalContext}
-              onChange={(e) => {
-                setValues((prev) => ({ ...prev, additionalContext: e.target.value }));
-                autoSave('additionalContext', e.target.value);
-              }}
-              placeholder="Paste emails, Slack messages, notes, or any other context here..."
-              rows={4}
-              className={cn(saving === 'additionalContext' && 'border-primary/50')}
-            />
-          </InputSection>
+          {/* Step 2: Additional Context */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                {contextReady ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                ) : (
+                  <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">2</div>
+                )}
+                <CardTitle className="text-base font-medium">Extra Notes & Context</CardTitle>
+              </div>
+            </CardHeader>
+            <Separator />
+            <CardContent className="space-y-3 pt-4">
+              <p className="text-xs text-muted-foreground">
+                Paste any additional context — emails, notes, meeting prep — that should inform this session.
+              </p>
+              {!noExtraContext && (
+                <Textarea
+                  value={values.additionalContext}
+                  onChange={(e) => {
+                    setValues((prev) => ({ ...prev, additionalContext: e.target.value }));
+                    autoSave('additionalContext', e.target.value);
+                  }}
+                  placeholder="Paste emails, Slack messages, notes, or any other context here..."
+                  rows={4}
+                  className={cn(saving === 'additionalContext' && 'border-primary/50')}
+                />
+              )}
+              <div className="flex items-center gap-3">
+                <Checkbox
+                  id="no-extra-context"
+                  checked={noExtraContext}
+                  onCheckedChange={(checked) => setNoExtraContext(checked === true)}
+                />
+                <Label htmlFor="no-extra-context" className="text-sm font-normal text-muted-foreground cursor-pointer">
+                  No additional context for this session
+                </Label>
+              </div>
+            </CardContent>
+          </Card>
 
-          {/* Pre-fill trigger */}
-          {!aiSuggested.has('monthlyGoals') && !isFilled(values.monthlyGoals) && transcriptReady && !values.transcriptSkipped && (
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="flex items-center justify-between py-4">
-                <div>
-                  <p className="text-sm font-medium">Ready to pre-fill</p>
-                  <p className="text-xs text-muted-foreground">
-                    AI will extract goals and reflections from the transcript and context above.
+          {/* Step 3: Pre-fill gate */}
+          {!prefillDone ? (
+            contextReady ? (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardContent className="flex items-center justify-between py-4">
+                  <div>
+                    <p className="text-sm font-medium">
+                      {prefilling ? 'Analyzing transcript and context...' : 'Ready to pre-fill'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      AI will extract goals and reflections from the transcript and context above.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={triggerPrefill} disabled={prefilling}>
+                      {prefilling ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4" />}
+                      {prefilling ? 'Pre-filling...' : 'Pre-fill with AI'}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setPrefillDone(true)}>
+                      Skip
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-8 text-center">
+                  <Circle className="h-6 w-6 text-muted-foreground/20" />
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Add context above or check &quot;No additional context&quot; to continue.
                   </p>
-                </div>
-                <Button size="sm" onClick={triggerPrefill} disabled={prefilling}>
-                  {prefilling ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4" />}
-                  {prefilling ? 'Pre-filling...' : 'Pre-fill with AI'}
-                </Button>
-              </CardContent>
-            </Card>
-          )}
+                </CardContent>
+              </Card>
+            )
+          ) : null}
 
-          {/* Prefill loading state */}
-          {prefilling && (
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="flex items-center gap-3 py-4">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                <span className="text-sm">Analyzing transcript and pre-filling fields...</span>
-              </CardContent>
-            </Card>
-          )}
-
+          {/* Remaining fields — only visible after prefill or skip */}
+          {prefillDone && (
+            <>
           {/* Monthly Goals */}
           <InputSection
             title="Monthly Goals & Commitments"
@@ -572,6 +614,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
           {/* Completion Summary */}
           <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} cycleId={cycle.id} journalCount={journalCount} transcriptReady={transcriptReady} />
+            </>
+          )}
         </>
       )}
     </div>

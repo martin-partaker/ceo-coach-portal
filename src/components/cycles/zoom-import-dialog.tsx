@@ -13,6 +13,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
+import Link from 'next/link';
 import { Download, Loader2, Video, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -73,7 +74,7 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail }: ZoomImportDia
               <div className="text-sm">
                 <p className="font-medium text-amber-800 dark:text-amber-300">Zoom email not set</p>
                 <p className="mt-1 text-amber-700 dark:text-amber-400/80">
-                  Go to Settings and enter your Zoom email address first.
+                  <Link href="/settings" className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-300">Go to Settings</Link> and enter your Zoom email address first.
                 </p>
               </div>
             </div>

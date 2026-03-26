@@ -83,13 +83,15 @@ App boots, auth works end-to-end, DB schema applied, theme toggle works, coach r
 **Estimated effort:** 2–3 days
 
 ### Tasks:
-- [ ] `/dashboard` — list of coach's CEOs with status chip per CEO
+- [x] `/dashboard` — list of coach's CEOs with status chip per CEO
   - Status: `In progress` / `Ready to generate` / `Generated`
-- [ ] "What's missing" at-a-glance panel (no active cycle, incomplete inputs)
-- [ ] Add CEO form (name, email) — modal or page
-- [ ] `/ceos/[id]` — CEO profile page (name, email, 10x goal)
-- [ ] 10x goal field: set once, editable, shows last-updated date
-- [ ] Route structure: `/dashboard` → `/ceos/[id]` → `/ceos/[id]/cycles/[cycleId]`
+- [x] "What's missing" at-a-glance panel (no active cycle, incomplete inputs)
+- [x] Add CEO form (name, email) — dialog modal with optional 10x goal
+- [x] `/ceos/[id]` — CEO profile page (name, email, 10x goal, cycles list)
+- [x] 10x goal field: editable, shows last-updated date
+- [x] Route structure: `/dashboard` → `/ceos/[id]` → `/ceos/[id]/cycles/[cycleId]`
+- [x] Edit CEO details dialog (name, email)
+- [x] Create cycle dialog with auto-label generation
 
 ### Deliverable:
 Coach can manage their CEO roster.

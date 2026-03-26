@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Plus, Users, AlertCircle, TrendingUp, Clock, CheckCircle2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AddCeoDialog } from '@/components/ceos/add-ceo-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,12 +54,7 @@ export default async function DashboardPage() {
             Manage your coachees and their coaching cycles.
           </p>
         </div>
-        <Button asChild size="sm">
-          <Link href="/ceos/new">
-            <Plus className="mr-1.5 h-4 w-4" />
-            Add CEO
-          </Link>
-        </Button>
+        <AddCeoDialog />
       </div>
 
       {/* Stats row */}

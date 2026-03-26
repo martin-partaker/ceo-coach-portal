@@ -105,6 +105,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
   const [saving, setSaving] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const journalSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const updateCycle = trpc.cycles.update.useMutation({
     onSuccess: () => {
@@ -136,6 +137,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      if (journalSaveTimeoutRef.current) clearTimeout(journalSaveTimeoutRef.current);
     };
   }, []);
 
@@ -171,8 +173,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   function handleJournalContentChange(journalId: string, value: string) {
     setJournalList((prev) => prev.map((j) => j.id === journalId ? { ...j, content: value } : j));
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => {
+    if (journalSaveTimeoutRef.current) clearTimeout(journalSaveTimeoutRef.current);
+    journalSaveTimeoutRef.current = setTimeout(() => {
       setSaving(`journal-${journalId}`);
       updateJournal.mutate({ id: journalId, content: value });
     }, 800);
@@ -180,8 +182,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   function handleJournalTitleChange(journalId: string, title: string) {
     setJournalList((prev) => prev.map((j) => j.id === journalId ? { ...j, title } : j));
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => {
+    if (journalSaveTimeoutRef.current) clearTimeout(journalSaveTimeoutRef.current);
+    journalSaveTimeoutRef.current = setTimeout(() => {
       setSaving(`journal-title-${journalId}`);
       updateJournal.mutate({ id: journalId, title });
     }, 800);

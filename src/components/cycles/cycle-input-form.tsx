@@ -279,19 +279,28 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormPro
 
           {!values.transcriptSkipped && (
             <>
-              <p className="text-xs text-muted-foreground">
-                Import from Zoom or paste the transcript manually below.
-              </p>
-              <Textarea
-                value={values.zoomTranscript}
-                onChange={(e) => handleTextChange('zoomTranscript', e.target.value)}
-                placeholder="Paste transcript here..."
-                rows={8}
-                className={cn(
-                  'font-mono text-xs',
-                  saving === 'zoomTranscript' && 'border-primary/50'
-                )}
-              />
+              {isFilled(values.zoomTranscript) ? (
+                <TranscriptCards
+                  transcript={values.zoomTranscript}
+                  onEdit={(text) => handleTextChange('zoomTranscript', text)}
+                />
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Import from Zoom or paste the transcript manually below.
+                  </p>
+                  <Textarea
+                    value={values.zoomTranscript}
+                    onChange={(e) => handleTextChange('zoomTranscript', e.target.value)}
+                    placeholder="Paste transcript here..."
+                    rows={8}
+                    className={cn(
+                      'font-mono text-xs',
+                      saving === 'zoomTranscript' && 'border-primary/50'
+                    )}
+                  />
+                </>
+              )}
             </>
           )}
         </CardContent>
@@ -375,6 +384,105 @@ function CompletionSummary({ values }: { values: { monthlyGoals: string; weeklyJ
       </CardContent>
     </Card>
   );
+}
+
+function TranscriptCards({ transcript, onEdit }: { transcript: string; onEdit: (text: string) => void }) {
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [showRawEdit, setShowRawEdit] = useState(false);
+
+  // Parse sections separated by === headers ===
+  const sections = parseTranscriptSections(transcript);
+
+  if (showRawEdit) {
+    return (
+      <div className="space-y-3">
+        <Textarea
+          value={transcript}
+          onChange={(e) => onEdit(e.target.value)}
+          rows={12}
+          className="font-mono text-xs"
+        />
+        <Button variant="outline" size="sm" onClick={() => setShowRawEdit(false)}>
+          Done editing
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {sections.map((section, i) => (
+        <div key={i} className="rounded-lg border border-border">
+          <button
+            type="button"
+            onClick={() => setExpandedIndex(expandedIndex === i ? null : i)}
+            className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
+          >
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+              <div>
+                <p className="text-sm font-medium">{section.title}</p>
+                {section.meta && (
+                  <p className="text-xs text-muted-foreground font-mono">{section.meta}</p>
+                )}
+              </div>
+            </div>
+            {expandedIndex === i ? (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            )}
+          </button>
+          {expandedIndex === i && (
+            <div className="border-t border-border px-4 py-3">
+              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground font-mono leading-relaxed">
+                {section.content.trim()}
+              </pre>
+            </div>
+          )}
+        </div>
+      ))}
+      <div className="flex items-center gap-3 pt-1">
+        <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => setShowRawEdit(true)}>
+          Edit raw transcript
+        </Button>
+        <Button variant="ghost" size="sm" className="text-xs text-destructive" onClick={() => onEdit('')}>
+          Clear all
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function parseTranscriptSections(transcript: string): { title: string; meta: string; content: string }[] {
+  const headerRegex = /^===\s*(.+?)\s*\(([^)]+)\)\s*===$/gm;
+  const sections: { title: string; meta: string; content: string }[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = headerRegex.exec(transcript)) !== null) {
+    // If there's content before the first header, add it as "Pasted transcript"
+    if (sections.length === 0 && match.index > 0) {
+      const before = transcript.slice(0, match.index).trim();
+      if (before) sections.push({ title: 'Pasted transcript', meta: '', content: before });
+    }
+    // Save start of this section's content
+    if (sections.length > 0) {
+      sections[sections.length - 1].content = transcript.slice(lastIndex, match.index);
+    }
+    sections.push({ title: match[1], meta: match[2], content: '' });
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining content goes to last section
+  if (sections.length > 0) {
+    sections[sections.length - 1].content = transcript.slice(lastIndex);
+  } else {
+    // No headers found — show as single block
+    sections.push({ title: 'Transcript', meta: '', content: transcript });
+  }
+
+  return sections;
 }
 
 function InputSection({

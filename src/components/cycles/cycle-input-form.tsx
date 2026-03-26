@@ -16,14 +16,13 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
-  Save,
   Sparkles,
   AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
 import { GenerateReportButton } from '@/components/cycles/report-view';
-import type { Cycle } from '@/db/schema';
+import type { Cycle, JournalEntry, Transcript } from '@/db/schema';
 
 interface CycleInputFormProps {
   cycle: Cycle;
@@ -32,35 +31,28 @@ interface CycleInputFormProps {
   cycleLabel: string;
   hasZoomEmail: boolean;
   hasTenXGoal?: boolean;
+  initialJournals: JournalEntry[];
+  initialTranscripts: Transcript[];
 }
 
-type CycleField = keyof Pick<
-  Cycle,
-  | 'monthlyGoals'
-  | 'weeklyJournal1'
-  | 'weeklyJournal2'
-  | 'weeklyJournal3'
-  | 'weeklyJournal4'
-  | 'weeklyJournal5'
-  | 'monthlyReflection'
-  | 'zoomTranscript'
-  | 'transcriptSkipped'
->;
-
-export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail, hasTenXGoal }: CycleInputFormProps) {
+export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail, hasTenXGoal, initialJournals, initialTranscripts }: CycleInputFormProps) {
   const router = useRouter();
 
   const [values, setValues] = useState({
     monthlyGoals: cycle.monthlyGoals ?? '',
-    weeklyJournal1: cycle.weeklyJournal1 ?? '',
-    weeklyJournal2: cycle.weeklyJournal2 ?? '',
-    weeklyJournal3: cycle.weeklyJournal3 ?? '',
-    weeklyJournal4: cycle.weeklyJournal4 ?? '',
-    weeklyJournal5: cycle.weeklyJournal5 ?? '',
     monthlyReflection: cycle.monthlyReflection ?? '',
-    zoomTranscript: cycle.zoomTranscript ?? '',
     transcriptSkipped: cycle.transcriptSkipped,
   });
+
+  // Journal entries keyed by week number
+  const [journals, setJournals] = useState<Record<number, string>>(() => {
+    const map: Record<number, string> = {};
+    initialJournals.forEach((j) => { map[j.weekNumber] = j.content; });
+    return map;
+  });
+
+  // Transcripts list
+  const [transcriptList, setTranscriptList] = useState<Transcript[]>(initialTranscripts);
 
   const [aiSuggested, setAiSuggested] = useState<Set<string>>(() => {
     const set = new Set<string>();
@@ -106,18 +98,13 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     }
   }
 
-  const transcriptReady = !!(values.zoomTranscript.trim()) || values.transcriptSkipped;
+  const transcriptReady = transcriptList.length > 0 || values.transcriptSkipped;
 
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(() => {
-    // Auto-expand weeks that have content
     const expanded = new Set<number>();
-    for (let i = 1; i <= 5; i++) {
-      const key = `weeklyJournal${i}` as CycleField;
-      if (cycle[key] && String(cycle[key]).trim()) {
-        expanded.add(i);
-      }
-    }
-    // Always expand at least week 1 if none have content
+    Object.keys(journals).forEach((k) => {
+      if (journals[Number(k)]?.trim()) expanded.add(Number(k));
+    });
     if (expanded.size === 0) expanded.add(1);
     return expanded;
   });
@@ -159,10 +146,27 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     };
   }, []);
 
-  function handleTextChange(field: CycleField, value: string) {
+  const upsertJournal = trpc.cycles.upsertJournal.useMutation({
+    onSuccess: () => {
+      setLastSaved(new Date().toLocaleTimeString());
+      setSaving(null);
+    },
+    onError: () => setSaving(null),
+  });
+
+  function handleCycleFieldChange(field: 'monthlyGoals' | 'monthlyReflection', value: string) {
     setValues((prev) => ({ ...prev, [field]: value }));
     clearAiSuggested(field);
     autoSave(field, value);
+  }
+
+  function handleJournalChange(weekNumber: number, value: string) {
+    setJournals((prev) => ({ ...prev, [weekNumber]: value }));
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      setSaving(`journal-${weekNumber}`);
+      upsertJournal.mutate({ cycleId: cycle.id, weekNumber, content: value });
+    }, 800);
   }
 
   function handleCheckboxChange(checked: boolean) {
@@ -185,15 +189,12 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   const isFilled = (val: string) => val.trim().length > 0;
 
+  const journalCount = Object.values(journals).filter((v) => isFilled(v)).length;
   const inputsFilled = [
     isFilled(values.monthlyGoals),
-    isFilled(values.weeklyJournal1),
-    isFilled(values.weeklyJournal2),
-    isFilled(values.weeklyJournal3),
-    isFilled(values.weeklyJournal4),
-    isFilled(values.weeklyJournal5),
+    journalCount > 0,
     isFilled(values.monthlyReflection),
-    isFilled(values.zoomTranscript) || values.transcriptSkipped,
+    transcriptReady,
   ];
   const filledCount = inputsFilled.filter(Boolean).length;
   const totalInputs = inputsFilled.length;
@@ -244,10 +245,9 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
                 cycleId={cycle.id}
                 ceoId={ceoId}
                 hasZoomEmail={hasZoomEmail}
-                existingTranscript={values.zoomTranscript}
-                onTranscriptImported={(transcript) => {
-                  setValues((prev) => ({ ...prev, zoomTranscript: transcript }));
-                  autoSave('zoomTranscript', transcript);
+                existingTranscripts={transcriptList}
+                onTranscriptsImported={(newTranscripts) => {
+                  setTranscriptList((prev) => [...prev, ...newTranscripts]);
                   // Auto-trigger prefill after import
                   setTimeout(() => triggerPrefill(), 1000);
                 }}
@@ -273,27 +273,16 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
           {!values.transcriptSkipped && (
             <>
-              {isFilled(values.zoomTranscript) ? (
-                <TranscriptCards
-                  transcript={values.zoomTranscript}
-                  onEdit={(text) => handleTextChange('zoomTranscript', text)}
-                />
+              {transcriptList.length > 0 ? (
+                <div className="space-y-2">
+                  {transcriptList.map((t) => (
+                    <TranscriptCard key={t.id} transcript={t} />
+                  ))}
+                </div>
               ) : (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    Import from Zoom or paste the transcript manually below.
-                  </p>
-                  <Textarea
-                    value={values.zoomTranscript}
-                    onChange={(e) => handleTextChange('zoomTranscript', e.target.value)}
-                    placeholder="Paste transcript here..."
-                    rows={8}
-                    className={cn(
-                      'font-mono text-xs',
-                      saving === 'zoomTranscript' && 'border-primary/50'
-                    )}
-                  />
-                </>
+                <p className="text-xs text-muted-foreground">
+                  Import from Zoom using the button above.
+                </p>
               )}
             </>
           )}
@@ -332,7 +321,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
           >
             <Textarea
               value={values.monthlyGoals}
-              onChange={(e) => handleTextChange('monthlyGoals', e.target.value)}
+              onChange={(e) => handleCycleFieldChange('monthlyGoals', e.target.value)}
               placeholder="Enter the CEO's monthly goals and commitments..."
               rows={5}
               className={cn(saving === 'monthlyGoals' && 'border-primary/50')}
@@ -343,22 +332,21 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
           <Card>
             <CardHeader>
               <div className="flex items-center gap-3">
-                {[1, 2, 3, 4, 5].some((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)) ? (
+                {journalCount > 0 ? (
                   <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
                 ) : (
                   <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
                 )}
                 <CardTitle className="text-base font-medium">Weekly Journals</CardTitle>
                 <Badge variant="secondary" className="ml-auto text-[11px]">
-                  {[1, 2, 3, 4, 5].filter((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)).length}/5
+                  {journalCount} entries
                 </Badge>
               </div>
             </CardHeader>
             <Separator />
             <CardContent className="space-y-2 pt-4">
               {[1, 2, 3, 4, 5].map((week) => {
-                const field = `weeklyJournal${week}` as CycleField;
-                const value = values[field] as string;
+                const value = journals[week] ?? '';
                 const expanded = expandedWeeks.has(week);
                 const filled = isFilled(value);
 
@@ -387,10 +375,10 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
                       <div className="border-t border-border px-4 py-3">
                         <Textarea
                           value={value}
-                          onChange={(e) => handleTextChange(field, e.target.value)}
+                          onChange={(e) => handleJournalChange(week, e.target.value)}
                           placeholder={`Week ${week} journal entry...`}
                           rows={4}
-                          className={cn(saving === field && 'border-primary/50')}
+                          className={cn(saving === `journal-${week}` && 'border-primary/50')}
                         />
                       </div>
                     )}
@@ -409,7 +397,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
           >
             <Textarea
               value={values.monthlyReflection}
-              onChange={(e) => handleTextChange('monthlyReflection', e.target.value)}
+              onChange={(e) => handleCycleFieldChange('monthlyReflection', e.target.value)}
               placeholder="Enter the CEO's monthly reflection..."
               rows={5}
               className={cn(saving === 'monthlyReflection' && 'border-primary/50')}
@@ -417,22 +405,22 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
           </InputSection>
 
           {/* Completion Summary */}
-          <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} cycleId={cycle.id} />
+          <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} cycleId={cycle.id} journalCount={journalCount} transcriptReady={transcriptReady} />
         </>
       )}
     </div>
   );
 }
 
-function CompletionSummary({ values, hasTenXGoal, cycleId }: { values: { monthlyGoals: string; weeklyJournal1: string; weeklyJournal2: string; weeklyJournal3: string; weeklyJournal4: string; weeklyJournal5: string; monthlyReflection: string; zoomTranscript: string; transcriptSkipped: boolean }; hasTenXGoal?: boolean; cycleId: string }) {
+function CompletionSummary({ values, hasTenXGoal, cycleId, journalCount, transcriptReady }: { values: { monthlyGoals: string; monthlyReflection: string }; hasTenXGoal?: boolean; cycleId: string; journalCount: number; transcriptReady: boolean }) {
   const isFilled = (val: string) => val.trim().length > 0;
 
   const checks = [
     { label: '10x goal set', done: !!hasTenXGoal, required: true },
     { label: 'Monthly goals', done: isFilled(values.monthlyGoals), required: true },
-    { label: 'At least one weekly journal', done: [values.weeklyJournal1, values.weeklyJournal2, values.weeklyJournal3, values.weeklyJournal4, values.weeklyJournal5].some((j) => isFilled(j)), required: true },
+    { label: 'At least one weekly journal', done: journalCount > 0, required: true },
     { label: 'Monthly reflection', done: isFilled(values.monthlyReflection), required: false },
-    { label: 'Zoom transcript', done: isFilled(values.zoomTranscript) || values.transcriptSkipped, required: true },
+    { label: 'Zoom transcript', done: transcriptReady, required: true },
   ];
 
   const requiredDone = checks.filter((c) => c.required && c.done).length;
@@ -492,103 +480,43 @@ function CompletionSummary({ values, hasTenXGoal, cycleId }: { values: { monthly
   );
 }
 
-function TranscriptCards({ transcript, onEdit }: { transcript: string; onEdit: (text: string) => void }) {
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
-  const [showRawEdit, setShowRawEdit] = useState(false);
-
-  // Parse sections separated by === headers ===
-  const sections = parseTranscriptSections(transcript);
-
-  if (showRawEdit) {
-    return (
-      <div className="space-y-3">
-        <Textarea
-          value={transcript}
-          onChange={(e) => onEdit(e.target.value)}
-          rows={12}
-          className="font-mono text-xs"
-        />
-        <Button variant="outline" size="sm" onClick={() => setShowRawEdit(false)}>
-          Done editing
-        </Button>
-      </div>
-    );
-  }
+function TranscriptCard({ transcript }: { transcript: Transcript }) {
+  const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="space-y-2">
-      {sections.map((section, i) => (
-        <div key={i} className="rounded-lg border border-border">
-          <button
-            type="button"
-            onClick={() => setExpandedIndex(expandedIndex === i ? null : i)}
-            className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
-          >
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-              <div>
-                <p className="text-sm font-medium">{section.title}</p>
-                {section.meta && (
-                  <p className="text-xs text-muted-foreground font-mono">{section.meta}</p>
-                )}
-              </div>
-            </div>
-            {expandedIndex === i ? (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
-          {expandedIndex === i && (
-            <div className="border-t border-border px-4 py-3">
-              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground font-mono leading-relaxed">
-                {section.content.trim()}
-              </pre>
-            </div>
-          )}
+    <div className="rounded-lg border border-border">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
+      >
+        <div className="flex items-center gap-3">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+          <div>
+            <p className="text-sm font-medium">{transcript.title}</p>
+            <p className="text-xs text-muted-foreground font-mono">
+              {transcript.recordedAt
+                ? new Date(transcript.recordedAt).toLocaleDateString()
+                : new Date(transcript.createdAt).toLocaleDateString()}
+              {transcript.duration ? ` · ${transcript.duration} min` : ''}
+            </p>
+          </div>
         </div>
-      ))}
-      <div className="flex items-center gap-3 pt-1">
-        <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => setShowRawEdit(true)}>
-          Edit raw transcript
-        </Button>
-        <Button variant="ghost" size="sm" className="text-xs text-destructive" onClick={() => onEdit('')}>
-          Clear all
-        </Button>
-      </div>
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t border-border px-4 py-3">
+          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground font-mono leading-relaxed">
+            {transcript.content}
+          </pre>
+        </div>
+      )}
     </div>
   );
-}
-
-function parseTranscriptSections(transcript: string): { title: string; meta: string; content: string }[] {
-  const headerRegex = /^===\s*(.+?)\s*\(([^)]+)\)\s*===$/gm;
-  const sections: { title: string; meta: string; content: string }[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = headerRegex.exec(transcript)) !== null) {
-    // If there's content before the first header, add it as "Pasted transcript"
-    if (sections.length === 0 && match.index > 0) {
-      const before = transcript.slice(0, match.index).trim();
-      if (before) sections.push({ title: 'Pasted transcript', meta: '', content: before });
-    }
-    // Save start of this section's content
-    if (sections.length > 0) {
-      sections[sections.length - 1].content = transcript.slice(lastIndex, match.index);
-    }
-    sections.push({ title: match[1], meta: match[2], content: '' });
-    lastIndex = match.index + match[0].length;
-  }
-
-  // Remaining content goes to last section
-  if (sections.length > 0) {
-    sections[sections.length - 1].content = transcript.slice(lastIndex);
-  } else {
-    // No headers found — show as single block
-    sections.push({ title: 'Transcript', meta: '', content: transcript });
-  }
-
-  return sections;
 }
 
 function InputSection({

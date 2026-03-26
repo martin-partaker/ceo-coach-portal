@@ -13,13 +13,14 @@ export const dynamic = 'force-dynamic';
 type CycleStatus = 'no-cycle' | 'in-progress' | 'ready' | 'generated';
 
 function getCycleStatus(
-  latestCycle: { monthlyGoals: string | null; zoomTranscript: string | null; transcriptSkipped: boolean } | null,
-  hasReport: boolean
+  latestCycle: { monthlyGoals: string | null; transcriptSkipped: boolean } | null,
+  hasReport: boolean,
+  hasTranscripts: boolean
 ): CycleStatus {
   if (!latestCycle) return 'no-cycle';
   if (hasReport) return 'generated';
   const hasGoals = !!latestCycle.monthlyGoals?.trim();
-  const hasTranscript = !!latestCycle.zoomTranscript?.trim() || latestCycle.transcriptSkipped;
+  const hasTranscript = hasTranscripts || latestCycle.transcriptSkipped;
   if (hasGoals && hasTranscript) return 'ready';
   return 'in-progress';
 }
@@ -35,8 +36,8 @@ export default async function DashboardPage() {
   const api = await createServerCaller();
   const coachCeos = await api.ceos.list();
 
-  const ceoData = coachCeos.map(({ ceo, latestCycle, hasReport }) => {
-    const status = getCycleStatus(latestCycle, hasReport);
+  const ceoData = coachCeos.map(({ ceo, latestCycle, hasReport, hasTranscripts }) => {
+    const status = getCycleStatus(latestCycle, hasReport, hasTranscripts);
     return { ceo, latestCycle, status };
   });
 

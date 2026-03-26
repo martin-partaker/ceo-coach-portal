@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { eq, desc, and } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { ceos, cycles, reports } from '@/db/schema';
+import { ceos, cycles, reports, transcripts } from '@/db/schema';
+import { sql } from 'drizzle-orm';
 
 export const ceosRouter = createTRPCRouter({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -23,6 +24,7 @@ export const ceosRouter = createTRPCRouter({
           .limit(1);
 
         let hasReport = false;
+        let hasTranscripts = false;
         if (latestCycle) {
           const [report] = await ctx.db
             .select({ id: reports.id })
@@ -30,9 +32,15 @@ export const ceosRouter = createTRPCRouter({
             .where(eq(reports.cycleId, latestCycle.id))
             .limit(1);
           hasReport = !!report;
+
+          const [tCount] = await ctx.db
+            .select({ count: sql<number>`count(*)` })
+            .from(transcripts)
+            .where(eq(transcripts.cycleId, latestCycle.id));
+          hasTranscripts = Number(tCount?.count ?? 0) > 0;
         }
 
-        return { ceo, latestCycle: latestCycle ?? null, hasReport };
+        return { ceo, latestCycle: latestCycle ?? null, hasReport, hasTranscripts };
       })
     );
 

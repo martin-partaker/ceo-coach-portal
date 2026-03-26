@@ -17,16 +17,17 @@ import {
 import { Badge } from '@/components/ui/badge';
 import Link from 'next/link';
 import { Download, Loader2, Video, AlertCircle, CheckCircle2 } from 'lucide-react';
+import type { Transcript } from '@/db/schema';
 
 interface ZoomImportDialogProps {
   cycleId: string;
   ceoId: string;
   hasZoomEmail: boolean;
-  existingTranscript?: string;
-  onTranscriptImported?: (transcript: string) => void;
+  existingTranscripts: Transcript[];
+  onTranscriptsImported?: (transcripts: Transcript[]) => void;
 }
 
-export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscript, onTranscriptImported }: ZoomImportDialogProps) {
+export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscripts, onTranscriptsImported }: ZoomImportDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -49,30 +50,35 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
     });
   }
 
+  function isAlreadyImported(meetingId: number): boolean {
+    return existingTranscripts.some((t) => t.zoomMeetingId === String(meetingId));
+  }
+
   async function handleImport() {
     if (selected.size === 0) return;
     setImporting(true);
 
-    const transcripts: string[] = [];
+    const imported: Transcript[] = [];
 
     for (const uuid of selected) {
       const meeting = recordings.data?.find((m) => m.uuid === uuid);
       if (!meeting) continue;
       try {
-        const result = await importTranscript.mutateAsync({ cycleId, meetingId: meeting.id });
-        const header = `=== ${meeting.topic} (${new Date(meeting.startTime).toLocaleDateString()}, ${meeting.duration} min) ===`;
-        transcripts.push(`${header}\n\n${result.cycle.zoomTranscript ?? ''}`);
+        const result = await importTranscript.mutateAsync({
+          cycleId,
+          meetingId: meeting.id,
+          meetingTopic: meeting.topic,
+          meetingDuration: meeting.duration,
+          meetingStartTime: meeting.startTime,
+        });
+        imported.push(result.transcript);
       } catch {
-        // Skip failed transcripts, continue with others
+        // Skip failed, continue
       }
     }
 
-    if (transcripts.length > 0) {
-      const newContent = transcripts.join('\n\n\n');
-      const combined = existingTranscript
-        ? `${existingTranscript.trimEnd()}\n\n\n${newContent}`
-        : newContent;
-      onTranscriptImported?.(combined);
+    if (imported.length > 0) {
+      onTranscriptsImported?.(imported);
     }
 
     setImporting(false);
@@ -91,11 +97,6 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
       setImportSuccess(false);
       setSelected(new Set());
     }
-  }
-
-  function isAlreadyImported(topic: string): boolean {
-    if (!existingTranscript) return false;
-    return existingTranscript.includes(`=== ${topic} (`);
   }
 
   const meetingsWithTranscript = recordings.data?.filter((m) => m.hasTranscript) ?? [];
@@ -159,7 +160,7 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
             <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
               {recordings.data.map((meeting) => {
                 const isSelected = selected.has(meeting.uuid);
-                const alreadyImported = isAlreadyImported(meeting.topic);
+                const alreadyImported = isAlreadyImported(meeting.id);
                 const canSelect = meeting.hasTranscript && !alreadyImported;
                 return (
                   <div

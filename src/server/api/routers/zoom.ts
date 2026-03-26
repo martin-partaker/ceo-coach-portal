@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { cycles, ceos } from '@/db/schema';
+import { cycles, ceos, transcripts } from '@/db/schema';
 import { listRecordings, fetchTranscript } from '@/lib/zoom/client';
 
 export const zoomRouter = createTRPCRouter({
@@ -42,6 +42,9 @@ export const zoomRouter = createTRPCRouter({
       z.object({
         cycleId: z.string().uuid(),
         meetingId: z.union([z.string(), z.number()]),
+        meetingTopic: z.string().optional(),
+        meetingDuration: z.number().optional(),
+        meetingStartTime: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -77,16 +80,19 @@ export const zoomRouter = createTRPCRouter({
         });
       }
 
-      // Save to cycle
-      const [updated] = await ctx.db
-        .update(cycles)
-        .set({
-          zoomTranscript: result.transcript,
+      // Save to transcripts table
+      const [created] = await ctx.db
+        .insert(transcripts)
+        .values({
+          cycleId: input.cycleId,
+          title: input.meetingTopic ?? result.meetingTopic,
+          content: result.transcript,
           zoomMeetingId: String(input.meetingId),
+          duration: input.meetingDuration ?? null,
+          recordedAt: input.meetingStartTime ? new Date(input.meetingStartTime) : null,
         })
-        .where(eq(cycles.id, input.cycleId))
         .returning();
 
-      return { cycle: updated, meetingTopic: result.meetingTopic };
+      return { transcript: created };
     }),
 });

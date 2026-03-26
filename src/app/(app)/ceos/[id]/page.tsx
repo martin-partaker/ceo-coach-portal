@@ -119,12 +119,11 @@ export default async function CeoProfilePage({
   );
 }
 
-function CycleStatusBadge({ cycle }: { cycle: { monthlyGoals: string | null; zoomTranscript: string | null; transcriptSkipped: boolean } }) {
+function CycleStatusBadge({ cycle }: { cycle: { monthlyGoals: string | null; transcriptSkipped: boolean } }) {
   const hasGoals = !!cycle.monthlyGoals?.trim();
-  const hasTranscript = !!cycle.zoomTranscript?.trim() || cycle.transcriptSkipped;
 
-  if (hasGoals && hasTranscript) {
-    return <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 text-[11px]">Ready</Badge>;
+  if (hasGoals) {
+    return <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 text-[11px]">In progress</Badge>;
   }
-  return <Badge variant="secondary" className="text-[11px]">In progress</Badge>;
+  return <Badge variant="secondary" className="text-[11px]">New</Badge>;
 }

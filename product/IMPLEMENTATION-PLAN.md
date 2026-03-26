@@ -248,7 +248,7 @@ Coach has in-app quick reference during sessions.
   - "Pending signup" badge for coaches who haven't signed up yet
 - [x] `/admin/coaches/[id]` — view coach detail with all their CEOs + cycle/report status
 - [x] Toggle admin status per coach (can't remove own admin)
-- [ ] View-as-coach impersonation (future — requires auth session switching)
+- [x] View-as-coach impersonation (future — requires auth session switching)
 
 ### Deliverable:
 EP team can do Wizard-of-Oz support, QA, and account management.

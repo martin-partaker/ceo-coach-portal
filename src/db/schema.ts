@@ -14,7 +14,7 @@ export const coaches = pgTable('coaches', {
   neonAuthUserId: text('neon_auth_user_id').unique(),
   name: text('name').notNull(),
   email: text('email').notNull().unique(),
-  zoomUserEmail: text('zoom_user_email'), // their email in the shared Zoom account (for filtering meetings)
+  zoomUserEmail: text('zoom_user_email'),
   isSuperAdmin: boolean('is_super_admin').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
@@ -36,24 +36,37 @@ export const cycles = pgTable('cycles', {
   ceoId: uuid('ceo_id')
     .notNull()
     .references(() => ceos.id, { onDelete: 'cascade' }),
-  label: text('label').notNull(), // e.g. "Apr 10 → May 10"
+  label: text('label').notNull(),
   periodStart: date('period_start'),
   periodEnd: date('period_end'),
   monthlyGoals: text('monthly_goals'),
-  weeklyJournal1: text('weekly_journal_1'),
-  weeklyJournal2: text('weekly_journal_2'),
-  weeklyJournal3: text('weekly_journal_3'),
-  weeklyJournal4: text('weekly_journal_4'),
-  weeklyJournal5: text('weekly_journal_5'),
   monthlyReflection: text('monthly_reflection'),
-  zoomTranscript: text('zoom_transcript'),
-  zoomMeetingId: text('zoom_meeting_id'),
   transcriptSkipped: boolean('transcript_skipped').notNull().default(false),
-  previousActionItemsReviewed: boolean('previous_action_items_reviewed')
-    .notNull()
-    .default(false),
   monthlyGoalsAiSuggested: boolean('monthly_goals_ai_suggested').notNull().default(false),
   monthlyReflectionAiSuggested: boolean('monthly_reflection_ai_suggested').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const journalEntries = pgTable('journal_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  cycleId: uuid('cycle_id')
+    .notNull()
+    .references(() => cycles.id, { onDelete: 'cascade' }),
+  weekNumber: integer('week_number').notNull(),
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const transcripts = pgTable('transcripts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  cycleId: uuid('cycle_id')
+    .notNull()
+    .references(() => cycles.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  content: text('content').notNull(),
+  zoomMeetingId: text('zoom_meeting_id'),
+  duration: integer('duration'), // minutes
+  recordedAt: timestamp('recorded_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -62,10 +75,10 @@ export const actionItems = pgTable('action_items', {
   cycleId: uuid('cycle_id')
     .notNull()
     .references(() => cycles.id, { onDelete: 'cascade' }),
-  owner: text('owner').notNull(), // 'CEO' | 'Coach' | 'Other'
+  owner: text('owner').notNull(),
   item: text('item').notNull(),
   dueAt: date('due_at'),
-  status: text('status').notNull().default('open'), // 'open' | 'done' | 'dropped'
+  status: text('status').notNull().default('open'),
   aiSuggested: boolean('ai_suggested').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
@@ -76,8 +89,8 @@ export const reports = pgTable('reports', {
     .notNull()
     .references(() => cycles.id, { onDelete: 'cascade' }),
   generatedAt: timestamp('generated_at').notNull().defaultNow(),
-  contentJson: jsonb('content_json').notNull(), // { progress_summary, key_wins, challenges, pattern_observations, next_steps, resources }
-  rawText: text('raw_text').notNull(), // formatted for email copy-paste
+  contentJson: jsonb('content_json').notNull(),
+  rawText: text('raw_text').notNull(),
   modelUsed: text('model_used').notNull(),
   promptVersion: integer('prompt_version').notNull().default(1),
 });
@@ -94,11 +107,9 @@ export const curriculum = pgTable('curriculum', {
 export type Coach = typeof coaches.$inferSelect;
 export type NewCoach = typeof coaches.$inferInsert;
 export type Ceo = typeof ceos.$inferSelect;
-export type NewCeo = typeof ceos.$inferInsert;
 export type Cycle = typeof cycles.$inferSelect;
-export type NewCycle = typeof cycles.$inferInsert;
+export type JournalEntry = typeof journalEntries.$inferSelect;
+export type Transcript = typeof transcripts.$inferSelect;
 export type ActionItem = typeof actionItems.$inferSelect;
-export type NewActionItem = typeof actionItems.$inferInsert;
 export type Report = typeof reports.$inferSelect;
-export type NewReport = typeof reports.$inferInsert;
 export type Curriculum = typeof curriculum.$inferSelect;

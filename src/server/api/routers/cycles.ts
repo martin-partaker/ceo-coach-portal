@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, asc } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { ceos, cycles, actionItems } from '@/db/schema';
+import { ceos, cycles, journalEntries, transcripts } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
 
 const anthropic = new Anthropic();
@@ -19,7 +19,6 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      // Verify coach owns the parent CEO
       const [ceo] = await ctx.db
         .select()
         .from(ceos)
@@ -27,13 +26,19 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const items = await ctx.db
+      const journals = await ctx.db
         .select()
-        .from(actionItems)
-        .where(eq(actionItems.cycleId, cycle.id))
-        .orderBy(desc(actionItems.createdAt));
+        .from(journalEntries)
+        .where(eq(journalEntries.cycleId, cycle.id))
+        .orderBy(asc(journalEntries.weekNumber));
 
-      return { cycle, ceo, actionItems: items };
+      const cycleTranscripts = await ctx.db
+        .select()
+        .from(transcripts)
+        .where(eq(transcripts.cycleId, cycle.id))
+        .orderBy(desc(transcripts.createdAt));
+
+      return { cycle, ceo, journals, transcripts: cycleTranscripts };
     }),
 
   create: protectedProcedure
@@ -46,7 +51,6 @@ export const cyclesRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Verify ownership
       const [ceo] = await ctx.db
         .select()
         .from(ceos)
@@ -72,16 +76,8 @@ export const cyclesRouter = createTRPCRouter({
         id: z.string().uuid(),
         label: z.string().min(1).optional(),
         monthlyGoals: z.string().nullable().optional(),
-        weeklyJournal1: z.string().nullable().optional(),
-        weeklyJournal2: z.string().nullable().optional(),
-        weeklyJournal3: z.string().nullable().optional(),
-        weeklyJournal4: z.string().nullable().optional(),
-        weeklyJournal5: z.string().nullable().optional(),
         monthlyReflection: z.string().nullable().optional(),
-        zoomTranscript: z.string().nullable().optional(),
-        zoomMeetingId: z.string().nullable().optional(),
         transcriptSkipped: z.boolean().optional(),
-        previousActionItemsReviewed: z.boolean().optional(),
         monthlyGoalsAiSuggested: z.boolean().optional(),
         monthlyReflectionAiSuggested: z.boolean().optional(),
       })
@@ -103,7 +99,6 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      // Only update provided fields
       const updatePayload = Object.fromEntries(
         Object.entries(fields).filter(([, v]) => v !== undefined)
       );
@@ -133,6 +128,140 @@ export const cyclesRouter = createTRPCRouter({
         .orderBy(desc(cycles.createdAt));
     }),
 
+  // Journal entries
+  upsertJournal: protectedProcedure
+    .input(
+      z.object({
+        cycleId: z.string().uuid(),
+        weekNumber: z.number().min(1),
+        content: z.string(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Check if journal entry exists for this week
+      const [existing] = await ctx.db
+        .select()
+        .from(journalEntries)
+        .where(
+          and(
+            eq(journalEntries.cycleId, input.cycleId),
+            eq(journalEntries.weekNumber, input.weekNumber)
+          )
+        )
+        .limit(1);
+
+      if (input.content.trim() === '' && existing) {
+        // Delete empty entries
+        await ctx.db.delete(journalEntries).where(eq(journalEntries.id, existing.id));
+        return null;
+      }
+
+      if (input.content.trim() === '') return null;
+
+      if (existing) {
+        const [updated] = await ctx.db
+          .update(journalEntries)
+          .set({ content: input.content })
+          .where(eq(journalEntries.id, existing.id))
+          .returning();
+        return updated;
+      }
+
+      const [created] = await ctx.db
+        .insert(journalEntries)
+        .values({
+          cycleId: input.cycleId,
+          weekNumber: input.weekNumber,
+          content: input.content,
+        })
+        .returning();
+      return created;
+    }),
+
+  // Add transcript
+  addTranscript: protectedProcedure
+    .input(
+      z.object({
+        cycleId: z.string().uuid(),
+        title: z.string().min(1),
+        content: z.string().min(1),
+        zoomMeetingId: z.string().nullable().optional(),
+        duration: z.number().nullable().optional(),
+        recordedAt: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [created] = await ctx.db
+        .insert(transcripts)
+        .values({
+          cycleId: input.cycleId,
+          title: input.title,
+          content: input.content,
+          zoomMeetingId: input.zoomMeetingId ?? null,
+          duration: input.duration ?? null,
+          recordedAt: input.recordedAt ? new Date(input.recordedAt) : null,
+        })
+        .returning();
+      return created;
+    }),
+
+  deleteTranscript: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [transcript] = await ctx.db
+        .select()
+        .from(transcripts)
+        .where(eq(transcripts.id, input.id))
+        .limit(1);
+      if (!transcript) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Verify ownership via cycle -> ceo -> coach
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, transcript.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await ctx.db.delete(transcripts).where(eq(transcripts.id, input.id));
+      return { success: true };
+    }),
+
   prefill: protectedProcedure
     .input(z.object({ cycleId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -150,14 +279,26 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      if (!cycle.zoomTranscript?.trim()) {
+      // Get transcripts for this cycle
+      const cycleTranscripts = await ctx.db
+        .select()
+        .from(transcripts)
+        .where(eq(transcripts.cycleId, input.cycleId));
+
+      if (cycleTranscripts.length === 0 && !cycle.transcriptSkipped) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
           message: 'Import a transcript first before pre-filling.',
         });
       }
 
-      const { systemPrompt, userPrompt } = await buildPrefillPrompt({ cycle, ceo });
+      const transcriptText = cycleTranscripts.map((t) => t.content).join('\n\n---\n\n');
+
+      const { systemPrompt, userPrompt } = await buildPrefillPrompt({
+        cycle,
+        ceo,
+        transcriptText,
+      });
 
       const message = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
@@ -178,7 +319,6 @@ export const cyclesRouter = createTRPCRouter({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to parse AI response' });
       }
 
-      // Save to DB and mark as AI-suggested
       const [updated] = await ctx.db
         .update(cycles)
         .set({

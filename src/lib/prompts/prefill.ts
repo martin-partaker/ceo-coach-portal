@@ -7,9 +7,11 @@ import type { Cycle, Ceo } from '@/db/schema';
 export async function buildPrefillPrompt({
   cycle,
   ceo,
+  transcriptText,
 }: {
   cycle: Cycle;
   ceo: Ceo;
+  transcriptText: string;
 }) {
   // Get previous cycle's context
   const allCycles = await db
@@ -72,7 +74,7 @@ ${previousGoals}
 ${previousEmail}
 ` : ''}
 ## Current Session Transcript
-${cycle.zoomTranscript?.trim() || '(no transcript available)'}
+${transcriptText || '(no transcript available)'}
 
 Extract the monthly goals and reflection from this session now.`;
 

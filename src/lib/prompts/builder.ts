@@ -1,6 +1,7 @@
 import 'server-only';
 import { db } from '@/db';
-import { curriculum } from '@/db/schema';
+import { curriculum, journalEntries, transcripts } from '@/db/schema';
+import { eq, asc } from 'drizzle-orm';
 import type { Cycle, Ceo, Report } from '@/db/schema';
 
 export async function buildPrompt({
@@ -18,20 +19,41 @@ export async function buildPrompt({
   const rows = await db.select().from(curriculum);
   const curriculumText = rows.map((r) => `### ${r.title}\n${r.contentText}`).join('\n\n');
 
+  // Fetch journals and transcripts for this cycle
+  const journals = await db
+    .select()
+    .from(journalEntries)
+    .where(eq(journalEntries.cycleId, cycle.id))
+    .orderBy(asc(journalEntries.weekNumber));
+
+  const cycleTranscripts = await db
+    .select()
+    .from(transcripts)
+    .where(eq(transcripts.cycleId, cycle.id));
+
   // Build missing fields warning
   const missing: string[] = [];
   if (!ceo.tenXGoal?.trim()) missing.push('10x goal');
   if (!cycle.monthlyGoals?.trim()) missing.push('monthly goals');
-  const hasJournal = [cycle.weeklyJournal1, cycle.weeklyJournal2, cycle.weeklyJournal3, cycle.weeklyJournal4, cycle.weeklyJournal5].some((j) => j?.trim());
-  if (!hasJournal) missing.push('weekly journals');
+  if (journals.length === 0) missing.push('weekly journals');
   if (!cycle.monthlyReflection?.trim()) missing.push('monthly reflection');
-  if (!cycle.zoomTranscript?.trim() && !cycle.transcriptSkipped) missing.push('zoom transcript');
+  if (cycleTranscripts.length === 0 && !cycle.transcriptSkipped) missing.push('zoom transcript');
 
   const missingWarning = missing.length > 0
     ? `\n\n⚠️ MISSING INPUTS: The following inputs were not provided: ${missing.join(', ')}. Work with what you have — be transparent where you're working from limited information, but don't generate vague filler.`
     : '';
 
   const ceoFirstName = ceo.name.split(' ')[0];
+
+  const journalText = journals.length > 0
+    ? journals.map((j) => `### Week ${j.weekNumber}\n${j.content}`).join('\n\n')
+    : '(no journals provided)';
+
+  const transcriptText = cycleTranscripts.length > 0
+    ? cycleTranscripts.map((t) => `### ${t.title}\n${t.content}`).join('\n\n---\n\n')
+    : cycle.transcriptSkipped
+      ? '(transcript skipped for this session)'
+      : '(not provided)';
 
   const systemPrompt = `You are writing a personalised coaching update email on behalf of a coach named ${coachName} to their CEO client named ${ceo.name}. This email is sent after each coaching cycle to make the CEO feel heard, understood, and motivated.
 
@@ -66,30 +88,25 @@ Return a JSON object with exactly these keys:
 
 Return ONLY the JSON object, no markdown fences, no extra text.`;
 
-  const journals = [cycle.weeklyJournal1, cycle.weeklyJournal2, cycle.weeklyJournal3, cycle.weeklyJournal4, cycle.weeklyJournal5]
-    .map((j, i) => j?.trim() ? `### Week ${i + 1}\n${j}` : null)
-    .filter(Boolean)
-    .join('\n\n');
-
   const userPrompt = `## CEO Profile
 - Name: ${ceo.name}
 - 10x Goal: ${ceo.tenXGoal?.trim() || '(not set)'}
 
-## Cycle: ${cycle.label}
+## Session: ${cycle.label}
 
 ### Monthly Goals & Commitments
 ${cycle.monthlyGoals?.trim() || '(not provided)'}
 
 ### Weekly Journals
-${journals || '(no journals provided)'}
+${journalText}
 
 ### Monthly Reflection
 ${cycle.monthlyReflection?.trim() || '(not provided)'}
 
 ### Zoom Session Transcript
-${cycle.zoomTranscript?.trim() || (cycle.transcriptSkipped ? '(transcript skipped for this cycle)' : '(not provided)')}
+${transcriptText}
 ${previousReport ? `
-### Previous Cycle Email (for continuity)
+### Previous Session Email (for continuity)
 ${previousReport.rawText?.substring(0, 1500) ?? ''}
 ` : ''}${missingWarning}
 

@@ -28,7 +28,7 @@ export default async function CyclePage({
     notFound();
   }
 
-  const { cycle, ceo } = data;
+  const { cycle, ceo, journals, transcripts: cycleTranscripts } = data;
   if (ceo.id !== ceoId) notFound();
 
   const coach = await api.coaches.getMe();
@@ -58,6 +58,8 @@ export default async function CyclePage({
         cycleLabel={cycle.label}
         hasZoomEmail={!!coach.zoomUserEmail}
         hasTenXGoal={!!ceo.tenXGoal?.trim()}
+        initialJournals={journals}
+        initialTranscripts={cycleTranscripts}
       />
 
       <ReportView cycleId={cycleId} />

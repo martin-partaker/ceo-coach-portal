@@ -1,6 +1,5 @@
 import { AuthView } from '@neondatabase/auth/react';
 import { Users } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
 
 export const dynamicParams = false;
 
@@ -16,7 +15,7 @@ export default async function AuthPage({
   const { path } = await params;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         {/* Brand */}
         <div className="mb-8 flex flex-col items-center text-center">
@@ -31,12 +30,8 @@ export default async function AuthPage({
           </p>
         </div>
 
-        {/* Auth form */}
-        <Card>
-          <CardContent className="pt-6">
-            <AuthView path={path} />
-          </CardContent>
-        </Card>
+        {/* Auth form — AuthView renders its own styled card */}
+        <AuthView path={path} />
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
           Powered by Partaker Coaching

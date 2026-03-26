@@ -1,10 +1,9 @@
 import { createServerCaller } from '@/lib/trpc/server';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, CheckCircle2, Circle } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
+import { CycleInputForm } from '@/components/cycles/cycle-input-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,26 +23,23 @@ export default async function CyclePage({
   }
 
   const { cycle, ceo } = data;
-
-  // Verify the CEO matches the URL
   if (ceo.id !== ceoId) notFound();
 
   const inputs = [
-    { label: 'Monthly goals', filled: !!cycle.monthlyGoals?.trim() },
-    { label: 'Weekly journal 1', filled: !!cycle.weeklyJournal1?.trim() },
-    { label: 'Weekly journal 2', filled: !!cycle.weeklyJournal2?.trim() },
-    { label: 'Weekly journal 3', filled: !!cycle.weeklyJournal3?.trim() },
-    { label: 'Weekly journal 4', filled: !!cycle.weeklyJournal4?.trim() },
-    { label: 'Weekly journal 5', filled: !!cycle.weeklyJournal5?.trim() },
-    { label: 'Monthly reflection', filled: !!cycle.monthlyReflection?.trim() },
-    { label: 'Zoom transcript', filled: !!cycle.zoomTranscript?.trim() || cycle.transcriptSkipped },
+    !!cycle.monthlyGoals?.trim(),
+    !!cycle.weeklyJournal1?.trim(),
+    !!cycle.weeklyJournal2?.trim(),
+    !!cycle.weeklyJournal3?.trim(),
+    !!cycle.weeklyJournal4?.trim(),
+    !!cycle.weeklyJournal5?.trim(),
+    !!cycle.monthlyReflection?.trim(),
+    !!cycle.zoomTranscript?.trim() || cycle.transcriptSkipped,
   ];
-
-  const filledCount = inputs.filter((i) => i.filled).length;
+  const filledCount = inputs.filter(Boolean).length;
 
   return (
     <div className="space-y-8">
-      {/* Back link + header */}
+      {/* Header */}
       <div>
         <Link
           href={`/ceos/${ceoId}`}
@@ -59,38 +55,20 @@ export default async function CyclePage({
               Coaching cycle for {ceo.name}
             </p>
           </div>
-          <Badge variant="secondary" className="text-xs">
-            {filledCount}/{inputs.length} inputs
+          <Badge
+            variant="secondary"
+            className={filledCount === inputs.length
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-xs'
+              : 'text-xs'
+            }
+          >
+            {filledCount}/{inputs.length} inputs complete
           </Badge>
         </div>
       </div>
 
-      {/* Input completeness */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-medium">Cycle Inputs</CardTitle>
-        </CardHeader>
-        <Separator />
-        <CardContent className="pt-4">
-          <div className="grid gap-2">
-            {inputs.map(({ label, filled }) => (
-              <div key={label} className="flex items-center gap-3 py-1">
-                {filled ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                ) : (
-                  <Circle className="h-4 w-4 text-muted-foreground/40" />
-                )}
-                <span className={`text-sm ${filled ? 'text-foreground' : 'text-muted-foreground'}`}>
-                  {label}
-                </span>
-              </div>
-            ))}
-          </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            Full input editing will be available in the next update.
-          </p>
-        </CardContent>
-      </Card>
+      {/* Input form */}
+      <CycleInputForm cycle={cycle} />
     </div>
   );
 }

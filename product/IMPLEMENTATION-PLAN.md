@@ -103,16 +103,16 @@ Coach can manage their CEO roster.
 **Estimated effort:** 3–4 days
 
 ### Tasks:
-- [ ] Create cycle form (label, optional period start/end)
-- [ ] Cycle list per CEO (most recent first, with status)
-- [ ] Cycle input form with auto-save on blur:
+- [x] Create cycle form (label, optional period start/end) — done in Phase 1
+- [x] Cycle list per CEO (most recent first, with status) — done in Phase 1
+- [x] Cycle input form with auto-save (800ms debounce):
   - Monthly goals / commitments (textarea)
-  - Weekly journals × 5 (expandable, labeled Week 1–5)
+  - Weekly journals × 5 (expandable accordion, labeled Week 1–5)
   - Monthly reflection (textarea)
   - Transcript (manual paste — placeholder until Zoom integration)
-- [ ] "Mark transcript as skipped" checkbox (sets `transcript_skipped = true`)
-- [ ] Input completeness indicator per field (green check / amber warning)
-- [ ] Cycle status computed from input completeness
+- [x] "Mark transcript as skipped" checkbox (sets `transcript_skipped = true`)
+- [x] Input completeness indicator per field (green check / empty circle)
+- [x] Cycle status computed from input completeness (badge in header + CEO list)
 
 ### Deliverable:
 Coach can create a cycle and fill in all inputs manually.

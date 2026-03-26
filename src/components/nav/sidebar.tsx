@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils';
 import {
   Users,
   LayoutDashboard,
-  BookOpen,
   Settings,
   ShieldCheck,
 } from 'lucide-react';
@@ -14,7 +13,6 @@ import { Separator } from '@/components/ui/separator';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/toolkit', label: 'Coach Toolkit', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 

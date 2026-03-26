@@ -25,7 +25,7 @@ function getCycleStatus(
 }
 
 const statusConfig: Record<CycleStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline'; className?: string }> = {
-  'no-cycle': { label: 'No cycle', variant: 'outline' },
+  'no-cycle': { label: 'No session', variant: 'outline' },
   'in-progress': { label: 'In progress', variant: 'secondary' },
   'ready': { label: 'Ready', variant: 'default', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20' },
   'generated': { label: 'Generated', variant: 'default', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' },
@@ -51,7 +51,7 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage your coachees and their coaching cycles.
+            Manage your coachees and their coaching sessions.
           </p>
         </div>
         <AddCeoDialog />
@@ -104,10 +104,10 @@ export default async function DashboardPage() {
             <div className="text-sm text-amber-800 dark:text-amber-300">
               <span className="font-medium">Needs attention: </span>
               {missingCycle.length > 0 && (
-                <span>{missingCycle.length} CEO{missingCycle.length !== 1 ? 's' : ''} without an active cycle. </span>
+                <span>{missingCycle.length} CEO{missingCycle.length !== 1 ? 's' : ''} without an active session. </span>
               )}
               {inProgress.length > 0 && (
-                <span>{inProgress.length} cycle{inProgress.length !== 1 ? 's' : ''} with missing inputs.</span>
+                <span>{inProgress.length} session{inProgress.length !== 1 ? 's' : ''} with missing inputs.</span>
               )}
             </div>
           </CardContent>

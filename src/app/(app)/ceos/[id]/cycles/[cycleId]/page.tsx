@@ -9,7 +9,6 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb';
 import { CycleInputForm } from '@/components/cycles/cycle-input-form';
-import { ActionItems } from '@/components/cycles/action-items';
 import { ReportView } from '@/components/cycles/report-view';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +35,6 @@ export default async function CyclePage({
 
   return (
     <div className="space-y-8">
-      {/* Non-sticky back link */}
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem>
@@ -53,7 +51,6 @@ export default async function CyclePage({
         </BreadcrumbList>
       </Breadcrumb>
 
-      {/* Sticky header with progress — rendered inside CycleInputForm as client component */}
       <CycleInputForm
         cycle={cycle}
         ceoId={ceoId}
@@ -61,13 +58,8 @@ export default async function CyclePage({
         cycleLabel={cycle.label}
         hasZoomEmail={!!coach.zoomUserEmail}
         hasTenXGoal={!!ceo.tenXGoal?.trim()}
-        previousActionItemsReviewed={cycle.previousActionItemsReviewed}
       />
 
-      {/* Action Items */}
-      <ActionItems cycleId={cycleId} />
-
-      {/* Report */}
       <ReportView cycleId={cycleId} />
     </div>
   );

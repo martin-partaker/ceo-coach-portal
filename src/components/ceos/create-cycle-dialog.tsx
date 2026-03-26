@@ -68,15 +68,15 @@ export function CreateCycleDialog({ ceoId }: CreateCycleDialogProps) {
       <DialogTrigger asChild>
         <Button size="sm">
           <Plus className="mr-1.5 h-4 w-4" />
-          New Cycle
+          New Session
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Create a coaching cycle</DialogTitle>
+            <DialogTitle>New coaching session</DialogTitle>
             <DialogDescription>
-              Start a new monthly coaching cycle. Dates are optional.
+              Start a new coaching session period. Dates are optional.
             </DialogDescription>
           </DialogHeader>
 
@@ -138,7 +138,7 @@ export function CreateCycleDialog({ ceoId }: CreateCycleDialogProps) {
             </Button>
             <Button type="submit" disabled={createCycle.isPending || !label.trim()}>
               {createCycle.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create cycle
+              Create session
             </Button>
           </DialogFooter>
         </form>

@@ -77,7 +77,7 @@ export default async function CeoProfilePage({
       {/* Cycles */}
       <div>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-medium">Coaching Cycles</h2>
+          <h2 className="text-lg font-medium">Sessions</h2>
           <CreateCycleDialog ceoId={ceo.id} />
         </div>
 
@@ -87,9 +87,9 @@ export default async function CeoProfilePage({
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
                 <Calendar className="h-6 w-6 text-muted-foreground" />
               </div>
-              <h3 className="mt-4 text-sm font-medium">No cycles yet</h3>
+              <h3 className="mt-4 text-sm font-medium">No sessions yet</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Create the first coaching cycle for {ceo.name}.
+                Start the first coaching session for {ceo.name}.
               </p>
             </CardContent>
           </Card>

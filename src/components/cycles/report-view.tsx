@@ -129,7 +129,7 @@ export function ReportView({ cycleId }: ReportViewProps) {
           </div>
           <h3 className="mt-4 text-sm font-medium">No report generated yet</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Use the &quot;Generate Report&quot; button above when ready.
+            Use the &quot;Generate Email&quot; button above when ready.
           </p>
         </CardContent>
       </Card>
@@ -256,7 +256,7 @@ export function GenerateReportButton({ cycleId, disabled }: { cycleId: string; d
       ) : (
         <Sparkles className="mr-1.5 h-4 w-4" />
       )}
-      {generate.isPending ? 'Generating...' : 'Generate Report'}
+      {generate.isPending ? 'Generating...' : 'Generate Email'}
     </Button>
   );
 }

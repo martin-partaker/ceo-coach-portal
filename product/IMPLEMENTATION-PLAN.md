@@ -240,14 +240,15 @@ Coach has in-app quick reference during sessions.
 **Estimated effort:** 1–2 days
 
 ### Tasks:
-- [ ] `is_super_admin` gate in middleware and all server actions
-- [ ] `/admin` route (gated to super admin only)
-- [ ] Admin dashboard:
-  - All coaches + CEO count + last active
-  - Create coach account (name, email → Neon Auth invite)
-  - Disable coach account (soft delete or flag)
-- [ ] View-as-coach — super admin navigates to `/admin/coaches/[id]` and sees their full dashboard
-- [ ] Super admin can edit any CEO/cycle/report on behalf of a coach
+- [x] `is_super_admin` gate via `adminProcedure` in tRPC
+- [x] `/admin` route (gated to super admin only, redirects non-admins)
+- [x] Admin dashboard:
+  - All coaches + CEO count
+  - Create coach account (name, email, optional admin flag)
+  - "Pending signup" badge for coaches who haven't signed up yet
+- [x] `/admin/coaches/[id]` — view coach detail with all their CEOs + cycle/report status
+- [x] Toggle admin status per coach (can't remove own admin)
+- [ ] View-as-coach impersonation (future — requires auth session switching)
 
 ### Deliverable:
 EP team can do Wizard-of-Oz support, QA, and account management.

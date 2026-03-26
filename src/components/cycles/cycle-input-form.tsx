@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   CheckCircle2,
   Circle,
@@ -16,6 +17,8 @@ import {
   ChevronRight,
   Loader2,
   Save,
+  Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Cycle } from '@/db/schema';
@@ -280,7 +283,84 @@ export function CycleInputForm({ cycle }: CycleInputFormProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Completion Summary */}
+      <CompletionSummary values={values} />
     </div>
+  );
+}
+
+function CompletionSummary({ values }: { values: { monthlyGoals: string; weeklyJournal1: string; weeklyJournal2: string; weeklyJournal3: string; weeklyJournal4: string; weeklyJournal5: string; monthlyReflection: string; zoomTranscript: string; transcriptSkipped: boolean } }) {
+  const isFilled = (val: string) => val.trim().length > 0;
+
+  const checks = [
+    { label: 'Monthly goals', done: isFilled(values.monthlyGoals), required: true },
+    { label: 'At least one weekly journal', done: [values.weeklyJournal1, values.weeklyJournal2, values.weeklyJournal3, values.weeklyJournal4, values.weeklyJournal5].some((j) => isFilled(j)), required: true },
+    { label: 'Monthly reflection', done: isFilled(values.monthlyReflection), required: false },
+    { label: 'Zoom transcript', done: isFilled(values.zoomTranscript) || values.transcriptSkipped, required: true },
+  ];
+
+  const requiredDone = checks.filter((c) => c.required && c.done).length;
+  const requiredTotal = checks.filter((c) => c.required).length;
+  const allRequiredDone = requiredDone === requiredTotal;
+  const allDone = checks.every((c) => c.done);
+
+  return (
+    <Card className={allRequiredDone ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}>
+      <CardContent className="py-6">
+        <div className="flex items-start gap-4">
+          <div className={cn(
+            'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+            allRequiredDone ? 'bg-emerald-500/10' : 'bg-amber-500/10'
+          )}>
+            {allRequiredDone ? (
+              <Sparkles className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            )}
+          </div>
+          <div className="flex-1">
+            <h3 className="text-sm font-medium">
+              {allRequiredDone
+                ? allDone
+                  ? 'All inputs complete'
+                  : 'Ready to generate (optional inputs missing)'
+                : 'Missing required inputs'}
+            </h3>
+            <div className="mt-3 space-y-1.5">
+              {checks.map(({ label, done, required }) => (
+                <div key={label} className="flex items-center gap-2">
+                  {done ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                  ) : (
+                    <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />
+                  )}
+                  <span className={cn('text-xs', done ? 'text-muted-foreground' : 'text-foreground')}>
+                    {label}
+                    {!required && <span className="text-muted-foreground"> (optional)</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4">
+              <Button
+                size="sm"
+                disabled={!allRequiredDone}
+                className={allRequiredDone ? '' : 'opacity-50'}
+              >
+                <Sparkles className="mr-1.5 h-4 w-4" />
+                Generate Report
+              </Button>
+              {!allRequiredDone && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Complete the required inputs above to generate.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -1,0 +1,8 @@
+client_id,coach_id,client_name,client_email,timezone,industry,company,notes
+client_nonprofit_ceo,coach_steve,Paul Robinson,paul.robinson@example.com,America/New_York,Nonprofit healthcare,Home of the Innocents,"10X goal framed around qualified referrals + centralized intake. COO hire is key constraint."
+client_eu_media_ceo,coach_steve,Ivan Sabo,ivan.sabo@example.com,Europe/Prague,Media distribution,Audioly Bricks International,"Pivoting to e-book distribution + AI text-to-speech. Needs CFO + VP Sales."
+client_manufacturing_ceo,coach_lauren,Dave Dieter,dave.dieter@example.com,America/Chicago,Manufacturing,WCS/DriveLock MergeCo,"Merger integration + build commercial engine. Distributor partnerships. Board milestone."
+client_cpg_founder,coach_lauren,Rashad Hossain,rashad.hossain@example.com,America/Chicago,CPG / beverages,Rise,"Retail expansion + RTD launch + leadership team upgrades. Finance leadership + VP Retail Sales."
+client_smart_parking_ceo,coach_mark,James O'Sullivan,james.osullivan@example.com,Asia/Riyadh,Smart mobility / parking,ParkFlow,"Very ambitious multi-year target; coaching focus is believability + business model changes + 30-day commitments."
+client_b2b_services_ceo,coach_grant,Jean-Pierre Dubois,jeanpierre.dubois@example.com,Europe/Paris,B2B services,NorthBridge Services,"Wants clarity on ICP + packaging + delivery model. Needs action item tracking and weekly momentum journaling."
+

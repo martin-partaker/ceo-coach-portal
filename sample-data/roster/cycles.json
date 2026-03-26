@@ -1,0 +1,31 @@
+[
+  {
+    "cycle_id": "cycle_nonprofit_2026_03",
+    "client_id": "client_nonprofit_ceo",
+    "label": "Cycle 1 — Mar 20 → Apr 20",
+    "period_start": "2026-03-20",
+    "period_end": "2026-04-20"
+  },
+  {
+    "cycle_id": "cycle_eu_media_2026_03",
+    "client_id": "client_eu_media_ceo",
+    "label": "Cycle 1 — Mar 24 → Apr 24",
+    "period_start": "2026-03-24",
+    "period_end": "2026-04-24"
+  },
+  {
+    "cycle_id": "cycle_mfg_2026_03",
+    "client_id": "client_manufacturing_ceo",
+    "label": "Cycle 1 — Mar 18 → Apr 22 (Board)",
+    "period_start": "2026-03-18",
+    "period_end": "2026-04-22"
+  },
+  {
+    "cycle_id": "cycle_cpg_2026_03",
+    "client_id": "client_cpg_founder",
+    "label": "Cycle 1 — Mar 16 → Apr 16",
+    "period_start": "2026-03-16",
+    "period_end": "2026-04-16"
+  }
+]
+

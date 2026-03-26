@@ -1,0 +1,38 @@
+[
+  {
+    "id": "coach_lauren",
+    "role": "coach",
+    "name": "Lauren Jawno",
+    "email": "lauren.jawno@example.com",
+    "timezone": "Europe/London"
+  },
+  {
+    "id": "coach_steve",
+    "role": "coach",
+    "name": "Steve Taylor",
+    "email": "steve.taylor@example.com",
+    "timezone": "America/New_York"
+  },
+  {
+    "id": "coach_mark",
+    "role": "coach",
+    "name": "Mark Roberts",
+    "email": "mark.roberts@example.com",
+    "timezone": "Europe/London"
+  },
+  {
+    "id": "coach_grant",
+    "role": "coach",
+    "name": "Grant Webster",
+    "email": "grant.webster@example.com",
+    "timezone": "Africa/Johannesburg"
+  },
+  {
+    "id": "admin_ep",
+    "role": "super_admin",
+    "name": "EP Super Admin",
+    "email": "admin@example.com",
+    "timezone": "Europe/London"
+  }
+]
+

@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth:*)",
+      "Bash(git -C /Users/martinvanderheijden/Documents/Development/ceo-coach-portal log --oneline -5 2>&1 && git -C /Users/martinvanderheijden/Documents/Development/ceo-coach-portal remote -v 2>&1)",
+      "Bash(gh api:*)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-pnpm --yes 2>&1)",
+      "Bash(pnpm init:*)",
+      "Bash(pnpm add:*)",
+      "Bash(mkdir -p /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app && cat > /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app/globals.css << 'EOF'\n@import \"tailwindcss\";\nEOF)",
+      "Bash(cat >> /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/.gitignore << 'EOF'\n\n# Next.js\n.next/\nnext-env.d.ts\n\n# pnpm\npnpm-debug.log*\nEOF)",
+      "Bash(pnpm build:*)",
+      "Bash(gh repo:*)",
+      "Bash(git remote:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(vercel --version 2>&1)",
+      "Bash(vercel whoami:*)",
+      "Bash(vercel --prod --yes 2>&1)",
+      "mcp__Neon__list_projects",
+      "mcp__Neon__provision_neon_auth",
+      "mcp__Neon__get_connection_string",
+      "mcp__Neon__run_sql",
+      "mcp__Neon__list_docs_resources",
+      "mcp__Neon__get_doc_resource",
+      "Bash(openssl rand:*)",
+      "mcp__Neon__describe_project",
+      "Bash(mkdir -p /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/lib/auth\nmkdir -p /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app/api/auth/\\\\[...path\\\\]\nmkdir -p /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app/auth/\\\\[path\\\\]\nmkdir -p /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/src/app/account/\\\\[path\\\\]\necho \"dirs created\")",
+      "Bash(cat >> /Users/martinvanderheijden/Documents/Development/ceo-coach-portal/.env << 'EOF'\n\n# Database\nDATABASE_URL=postgresql://neondb_owner:npg_rbdhntv0YWF6@ep-polished-salad-ab9mcjn8-pooler.eu-west-2.aws.neon.tech/neondb?channel_binding=require&sslmode=require\n\n# Neon Auth — verify this URL in Neon Console → Branch → Auth → Configuration\nNEON_AUTH_BASE_URL=https://ep-polished-salad-ab9mcjn8.neonauth.eu-west-2.aws.neon.tech/neondb/auth\nNEON_AUTH_COOKIE_SECRET=f9lJSelYhlcywsY0iDXEkghqoYnYFQ8UFvjVR7ac39k=\nEOF)",
+      "Bash(echo $NEON_API_KEY 2>/dev/null | head -c 20 && env | grep -i neon 2>/dev/null)",
+      "Bash(neonctl auth:*)",
+      "Bash(neonctl --output json api-call GET /projects/solitary-mountain-90536604/branches/br-lively-moon-abxl79ky/auth 2>&1)",
+      "Read(//Users/martinvanderheijden/.config/neonctl/**)",
+      "Read(//Users/martinvanderheijden/**)",
+      "WebSearch",
+      "WebFetch(domain:ericpartaker.com)",
+      "WebFetch(domain:eric-partaker.mykajabi.com)",
+      "WebFetch(domain:jakobgreenfeld.com)",
+      "WebFetch(domain:www.neurohackingly.com)"
+    ]
+  }
+}

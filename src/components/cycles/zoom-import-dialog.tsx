@@ -29,7 +29,7 @@ interface ZoomImportDialogProps {
 export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscript, onTranscriptImported }: ZoomImportDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [importSuccess, setImportSuccess] = useState(false);
 
@@ -40,11 +40,11 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
 
   const importTranscript = trpc.zoom.importTranscript.useMutation();
 
-  function toggleSelection(meetingId: number) {
+  function toggleSelection(uuid: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(meetingId)) next.delete(meetingId);
-      else next.add(meetingId);
+      if (next.has(uuid)) next.delete(uuid);
+      else next.add(uuid);
       return next;
     });
   }
@@ -55,11 +55,12 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
 
     const transcripts: string[] = [];
 
-    for (const meetingId of selected) {
-      const meeting = recordings.data?.find((m) => m.id === meetingId);
+    for (const uuid of selected) {
+      const meeting = recordings.data?.find((m) => m.uuid === uuid);
+      if (!meeting) continue;
       try {
-        const result = await importTranscript.mutateAsync({ cycleId, meetingId });
-        const header = `=== ${meeting?.topic ?? 'Meeting'} (${meeting ? new Date(meeting.startTime).toLocaleDateString() : ''}, ${meeting?.duration ?? 0} min) ===`;
+        const result = await importTranscript.mutateAsync({ cycleId, meetingId: meeting.id });
+        const header = `=== ${meeting.topic} (${new Date(meeting.startTime).toLocaleDateString()}, ${meeting.duration} min) ===`;
         transcripts.push(`${header}\n\n${result.cycle.zoomTranscript ?? ''}`);
       } catch {
         // Skip failed transcripts, continue with others
@@ -92,7 +93,6 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
     }
   }
 
-  // Check which meeting topics are already imported
   function isAlreadyImported(topic: string): boolean {
     if (!existingTranscript) return false;
     return existingTranscript.includes(`=== ${topic} (`);
@@ -158,13 +158,13 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
           ) : (
             <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
               {recordings.data.map((meeting) => {
-                const isSelected = selected.has(meeting.id);
+                const isSelected = selected.has(meeting.uuid);
                 const alreadyImported = isAlreadyImported(meeting.topic);
                 const canSelect = meeting.hasTranscript && !alreadyImported;
                 return (
                   <div
-                    key={meeting.id}
-                    onClick={() => canSelect && toggleSelection(meeting.id)}
+                    key={meeting.uuid}
+                    onClick={() => canSelect && toggleSelection(meeting.uuid)}
                     className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition-colors ${
                       isSelected ? 'border-primary/50 bg-primary/5' : 'hover:bg-muted/50'
                     } ${!canSelect ? 'opacity-50 cursor-not-allowed' : ''}`}

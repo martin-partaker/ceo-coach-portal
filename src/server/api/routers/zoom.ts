@@ -41,7 +41,7 @@ export const zoomRouter = createTRPCRouter({
     .input(
       z.object({
         cycleId: z.string().uuid(),
-        meetingId: z.number(),
+        meetingId: z.union([z.string(), z.number()]),
       })
     )
     .mutation(async ({ ctx, input }) => {

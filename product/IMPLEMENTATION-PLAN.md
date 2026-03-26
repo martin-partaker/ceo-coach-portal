@@ -179,8 +179,8 @@ Coach is guided through a completeness check before generating.
 
 ### Tasks:
 - [ ] Install Anthropic SDK: `pnpm add @anthropic-ai/sdk`
-- [ ] Add `ANTHROPIC_API_KEY` to env
-- [ ] Prompt builder: assemble system prompt (curriculum from DB) + user prompt (cycle inputs)
+- [x] Add `ANTHROPIC_API_KEY` to env
+- [ ] Prompt builder: assemble system prompt (curriculum from DB) + user prompt (cycle inputs) (directory sample-data - for now!)
 - [ ] Flag incomplete fields in the prompt explicitly
 - [ ] Include previous cycle's report summary if available (for pattern observations)
 - [ ] `/api/generate` route — call Claude Sonnet, stream response

@@ -58,7 +58,12 @@
       "Bash(find node_modules/@neondatabase/auth -name *.css -o -name tailwind*)",
       "Bash(find node_modules/@neondatabase/auth/dist -name *.css)",
       "Bash(grep -r AuthView node_modules/@neondatabase/auth/dist/ --include=*.mjs -l)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "WebFetch(domain:developers.zoom.us)",
+      "WebFetch(domain:marketplace.zoom.us)",
+      "WebFetch(domain:portal.apis.huit.harvard.edu)",
+      "WebFetch(domain:www.recall.ai)",
+      "WebFetch(domain:devforum.zoom.us)"
     ]
   }
 }

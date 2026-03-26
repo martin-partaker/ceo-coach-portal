@@ -5,6 +5,17 @@ import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import {
   Copy,
   Check,
@@ -162,15 +173,7 @@ export function ReportView({ cycleId }: ReportViewProps) {
               {copiedAll ? 'Copied!' : 'Copy email body'}
             </Button>
             <div className="flex-1" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => generate.mutate({ cycleId })}
-              disabled={generate.isPending}
-            >
-              {generate.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
-              Regenerate
-            </Button>
+            <RegenerateDialog cycleId={cycleId} isPending={generate.isPending} onRegenerate={(feedback) => generate.mutate({ cycleId, feedback })} />
           </div>
 
           {/* Subject line */}
@@ -234,6 +237,56 @@ export function ReportView({ cycleId }: ReportViewProps) {
         </Card>
       )}
     </div>
+  );
+}
+
+function RegenerateDialog({ cycleId, isPending, onRegenerate }: { cycleId: string; isPending: boolean; onRegenerate: (feedback?: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  function handleSubmit() {
+    onRegenerate(feedback.trim() || undefined);
+    setOpen(false);
+    setFeedback('');
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm" disabled={isPending}>
+          {isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+          {isPending ? 'Regenerating...' : 'Regenerate'}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Regenerate email</DialogTitle>
+          <DialogDescription>
+            Describe what you&apos;d like changed. The AI will revise the email based on your instructions.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="mt-2 space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="regen-feedback">What should be different?</Label>
+            <Textarea
+              id="regen-feedback"
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder='e.g. "Make the tone warmer", "Add more about the COO hire", "Shorten the commitments section"...'
+              rows={4}
+              autoFocus
+            />
+          </div>
+        </div>
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={handleSubmit}>
+            <Sparkles className="mr-1.5 h-4 w-4" />
+            Regenerate with feedback
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

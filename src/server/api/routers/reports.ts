@@ -59,7 +59,10 @@ export const reportsRouter = createTRPCRouter({
     }),
 
   generate: protectedProcedure
-    .input(z.object({ cycleId: z.string().uuid() }))
+    .input(z.object({
+      cycleId: z.string().uuid(),
+      feedback: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       // Verify ownership
       const [cycle] = await ctx.db
@@ -105,13 +108,37 @@ export const reportsRouter = createTRPCRouter({
         previousReport,
       });
 
+      // Get current report if regenerating with feedback
+      let currentReport = null;
+      if (input.feedback) {
+        const [existing] = await ctx.db
+          .select()
+          .from(reports)
+          .where(eq(reports.cycleId, input.cycleId))
+          .orderBy(desc(reports.generatedAt))
+          .limit(1);
+        currentReport = existing ?? null;
+      }
+
+      // Build messages — include feedback conversation if regenerating
+      const messages: { role: 'user' | 'assistant'; content: string }[] = [
+        { role: 'user', content: userPrompt },
+      ];
+
+      if (currentReport && input.feedback) {
+        messages.push(
+          { role: 'assistant', content: JSON.stringify(currentReport.contentJson) },
+          { role: 'user', content: `The coach wants changes to this email. Here is their feedback:\n\n${input.feedback}\n\nPlease regenerate the email incorporating this feedback. Return the same JSON format.` },
+        );
+      }
+
       // Call Claude
       const modelId = 'claude-sonnet-4-20250514';
       const message = await anthropic.messages.create({
         model: modelId,
         max_tokens: 4096,
         system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
+        messages,
       });
 
       // Extract text response

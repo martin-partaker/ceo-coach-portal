@@ -7,20 +7,44 @@ import { coaches } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import type { Coach } from '@/db/schema';
 
+export const IMPERSONATE_COOKIE = 'impersonate_coach_id';
+
 export const createTRPCContext = async (opts: { headers: Headers }) => {
   const { data: session } = await auth.getSession();
 
   let coach: Coach | null = null;
+  let realCoach: Coach | null = null;
+  let isImpersonating = false;
+
   if (session?.user) {
     const results = await db
       .select()
       .from(coaches)
       .where(eq(coaches.neonAuthUserId, session.user.id))
       .limit(1);
-    coach = results[0] ?? null;
+    realCoach = results[0] ?? null;
+    coach = realCoach;
+
+    // Check for impersonation cookie (super admin only)
+    if (realCoach?.isSuperAdmin) {
+      const cookieHeader = opts.headers.get('cookie') ?? '';
+      const match = cookieHeader.match(new RegExp(`${IMPERSONATE_COOKIE}=([^;]+)`));
+      if (match) {
+        const impersonateId = match[1];
+        const [impersonated] = await db
+          .select()
+          .from(coaches)
+          .where(eq(coaches.id, impersonateId))
+          .limit(1);
+        if (impersonated) {
+          coach = impersonated;
+          isImpersonating = true;
+        }
+      }
+    }
   }
 
-  return { db, session, coach };
+  return { db, session, coach, realCoach, isImpersonating };
 };
 
 type Context = Awaited<ReturnType<typeof createTRPCContext>>;
@@ -57,10 +81,11 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   });
 });
 
-/** Requires is_super_admin = true */
+/** Requires is_super_admin = true (checks REAL coach, not impersonated) */
 export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (!ctx.coach.isSuperAdmin) {
+  const real = ctx.realCoach ?? ctx.coach;
+  if (!real.isSuperAdmin) {
     throw new TRPCError({ code: 'FORBIDDEN' });
   }
-  return next({ ctx });
+  return next({ ctx: { ...ctx, coach: real } });
 });

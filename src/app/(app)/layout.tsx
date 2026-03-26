@@ -3,7 +3,13 @@ import { ensureCoach } from '@/lib/ensure-coach';
 import { Sidebar } from '@/components/nav/sidebar';
 import { Topbar } from '@/components/nav/topbar';
 import { TRPCProvider } from '@/lib/trpc/provider';
+import { ImpersonationBanner } from '@/components/admin/impersonation-banner';
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
+import { db } from '@/db';
+import { coaches } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { IMPERSONATE_COOKIE } from '@/server/api/trpc';
 
 export default async function AppLayout({
   children,
@@ -16,24 +22,46 @@ export default async function AppLayout({
     redirect('/auth/sign-in');
   }
 
-  let coach;
+  let realCoach;
   try {
-    coach = await ensureCoach({
+    realCoach = await ensureCoach({
       neonAuthUserId: session.user.id,
       name: session.user.name ?? '',
       email: session.user.email ?? '',
     });
   } catch {
-    // If coach creation fails (e.g., email conflict), redirect to sign-in
     redirect('/auth/sign-in');
+  }
+
+  // Check impersonation
+  let activeCoach = realCoach;
+  let isImpersonating = false;
+
+  if (realCoach.isSuperAdmin) {
+    const cookieStore = await cookies();
+    const impersonateId = cookieStore.get(IMPERSONATE_COOKIE)?.value;
+    if (impersonateId) {
+      const [target] = await db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, impersonateId))
+        .limit(1);
+      if (target) {
+        activeCoach = target;
+        isImpersonating = true;
+      }
+    }
   }
 
   return (
     <TRPCProvider>
       <div className="flex h-screen overflow-hidden bg-background">
-        <Sidebar isSuperAdmin={coach.isSuperAdmin} />
+        <Sidebar isSuperAdmin={realCoach.isSuperAdmin} />
         <div className="flex flex-1 flex-col overflow-hidden">
-          <Topbar coachName={coach.name} />
+          {isImpersonating && (
+            <ImpersonationBanner coachName={activeCoach.name} />
+          )}
+          <Topbar coachName={activeCoach.name} />
           <main className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
           </main>

@@ -93,11 +93,13 @@ export const adminRouter = createTRPCRouter({
       }
 
       // Create coach slot — neonAuthUserId is null until they sign up
+      // Default zoom email to their regular email
       const [created] = await ctx.db
         .insert(coaches)
         .values({
           name: input.name,
           email: input.email,
+          zoomUserEmail: input.email,
           isSuperAdmin: input.isSuperAdmin ?? false,
         })
         .returning();

@@ -43,13 +43,14 @@ export async function ensureCoach(params: {
     return updated;
   }
 
-  // Case 3: brand new coach
+  // Case 3: brand new coach — default zoom email to their regular email
   const [created] = await db
     .insert(coaches)
     .values({
       neonAuthUserId: params.neonAuthUserId,
       name: params.name || params.email,
       email: params.email,
+      zoomUserEmail: params.email,
     })
     .returning();
 

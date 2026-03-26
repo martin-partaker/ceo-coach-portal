@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { Button } from '@/components/ui/button';
-import { ArrowLeft, Users, CheckCircle2, Eye } from 'lucide-react';
+import { ArrowLeft, Users, CheckCircle2 } from 'lucide-react';
 import { AdminToggleButton } from '@/components/admin/admin-toggle-button';
+import { ImpersonateButton } from '@/components/admin/impersonate-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,14 +54,7 @@ export default async function AdminCoachDetailPage({
           </div>
           <div className="flex gap-2">
             <AdminToggleButton coachId={coach.id} isAdmin={coach.isSuperAdmin} isSelf={coach.id === me.id} />
-            {coach.neonAuthUserId && (
-              <Button variant="outline" size="sm" asChild>
-                <Link href={`/admin/coaches/${coach.id}/view-as`}>
-                  <Eye className="mr-1.5 h-3.5 w-3.5" />
-                  View as coach
-                </Link>
-              </Button>
-            )}
+            <ImpersonateButton coachId={coach.id} hasAuthAccount={!!coach.neonAuthUserId} />
           </div>
         </div>
       </div>

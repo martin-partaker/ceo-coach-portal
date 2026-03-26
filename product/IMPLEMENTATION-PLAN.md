@@ -178,19 +178,19 @@ Coach is guided through a completeness check before generating.
 **Estimated effort:** 3–4 days
 
 ### Tasks:
-- [ ] Install Anthropic SDK: `pnpm add @anthropic-ai/sdk`
+- [x] Install Anthropic SDK: `pnpm add @anthropic-ai/sdk`
 - [x] Add `ANTHROPIC_API_KEY` to env
-- [ ] Prompt builder: assemble system prompt (curriculum from DB) + user prompt (cycle inputs) (directory sample-data - for now!)
-- [ ] Flag incomplete fields in the prompt explicitly
-- [ ] Include previous cycle's report summary if available (for pattern observations)
-- [ ] `/api/generate` route — call Claude Sonnet, stream response
-- [ ] Store result in `reports` table: `content_json` (6 sections) + `raw_text` + `model_used` + `prompt_version`
-- [ ] Report view page: formatted section-by-section layout
-- [ ] Copy UX:
-  - "Copy full report" button at top (copies `raw_text` formatted for email)
+- [x] Prompt builder: system prompt (curriculum from DB) + user prompt (cycle inputs + CEO profile)
+- [x] Flag incomplete fields in the prompt explicitly (missing inputs listed in prompt)
+- [x] Include previous cycle's report summary if available (for pattern observations)
+- [x] tRPC reports router: generate (calls Claude Sonnet) + getForCycle
+- [x] Store result in `reports` table: `content_json` (6 sections) + `raw_text` + `model_used` + `prompt_version`
+- [x] Report view: section-by-section cards with individual content
+- [x] Copy UX:
+  - "Copy full report" button (copies `raw_text` formatted for email)
   - Per-section copy button next to each of the 6 sections
-- [ ] Incomplete-input warnings shown inline in the output header
-- [ ] Action item suggestions shown as proposals after generation
+- [x] Regenerate button on existing report
+- [ ] Action item suggestions shown as proposals after generation (future iteration)
 
 ### Report sections (stored in `content_json`):
 1. Progress Summary

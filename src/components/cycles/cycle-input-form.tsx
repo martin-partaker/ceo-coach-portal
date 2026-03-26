@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
+import { GenerateReportButton } from '@/components/cycles/report-view';
 import type { Cycle } from '@/db/schema';
 
 interface CycleInputFormProps {
@@ -335,12 +336,12 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail, hasTenXGoal, previo
         </CardContent>
       </Card>
 
-      <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} reviewed={reviewed} />
+      <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} reviewed={reviewed} cycleId={cycle.id} />
     </div>
   );
 }
 
-function CompletionSummary({ values, hasTenXGoal, reviewed }: { values: { monthlyGoals: string; weeklyJournal1: string; weeklyJournal2: string; weeklyJournal3: string; weeklyJournal4: string; weeklyJournal5: string; monthlyReflection: string; zoomTranscript: string; transcriptSkipped: boolean }; hasTenXGoal?: boolean; reviewed?: boolean }) {
+function CompletionSummary({ values, hasTenXGoal, reviewed, cycleId }: { values: { monthlyGoals: string; weeklyJournal1: string; weeklyJournal2: string; weeklyJournal3: string; weeklyJournal4: string; weeklyJournal5: string; monthlyReflection: string; zoomTranscript: string; transcriptSkipped: boolean }; hasTenXGoal?: boolean; reviewed?: boolean; cycleId: string }) {
   const isFilled = (val: string) => val.trim().length > 0;
 
   const checks = [
@@ -395,14 +396,7 @@ function CompletionSummary({ values, hasTenXGoal, reviewed }: { values: { monthl
               ))}
             </div>
             <div className="mt-4">
-              <Button
-                size="sm"
-                disabled={!allRequiredDone}
-                className={allRequiredDone ? '' : 'opacity-50'}
-              >
-                <Sparkles className="mr-1.5 h-4 w-4" />
-                Generate Report
-              </Button>
+              <GenerateReportButton cycleId={cycleId} disabled={!allRequiredDone} />
               {!allRequiredDone && (
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Complete the required inputs above to generate.

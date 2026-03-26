@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowLeft } from 'lucide-react';
 import { CycleInputForm } from '@/components/cycles/cycle-input-form';
 import { ActionItems } from '@/components/cycles/action-items';
+import { ReportView } from '@/components/cycles/report-view';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,6 +82,9 @@ export default async function CyclePage({
 
       {/* Action Items */}
       <ActionItems cycleId={cycleId} />
+
+      {/* Report */}
+      <ReportView cycleId={cycleId} />
     </div>
   );
 }

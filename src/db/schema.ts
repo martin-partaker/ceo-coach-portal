@@ -53,7 +53,8 @@ export const journalEntries = pgTable('journal_entries', {
     .notNull()
     .references(() => cycles.id, { onDelete: 'cascade' }),
   weekNumber: integer('week_number').notNull(),
-  content: text('content').notNull(),
+  title: text('title').notNull(),
+  content: text('content').notNull().default(''),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

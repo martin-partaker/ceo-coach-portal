@@ -46,7 +46,7 @@ export async function buildPrompt({
   const ceoFirstName = ceo.name.split(' ')[0];
 
   const journalText = journals.length > 0
-    ? journals.map((j) => `### Week ${j.weekNumber}\n${j.content}`).join('\n\n')
+    ? journals.map((j) => `### ${j.title}\n${j.content}`).join('\n\n')
     : '(no journals provided)';
 
   const transcriptText = cycleTranscripts.length > 0

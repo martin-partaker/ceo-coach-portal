@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Plus,
   Sparkles,
   AlertTriangle,
 } from 'lucide-react';
@@ -44,12 +45,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     transcriptSkipped: cycle.transcriptSkipped,
   });
 
-  // Journal entries keyed by week number
-  const [journals, setJournals] = useState<Record<number, string>>(() => {
-    const map: Record<number, string> = {};
-    initialJournals.forEach((j) => { map[j.weekNumber] = j.content; });
-    return map;
-  });
+  // Journal entries as list
+  const [journalList, setJournalList] = useState<JournalEntry[]>(initialJournals);
 
   // Transcripts list
   const [transcriptList, setTranscriptList] = useState<Transcript[]>(initialTranscripts);
@@ -100,14 +97,10 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   const transcriptReady = transcriptList.length > 0 || values.transcriptSkipped;
 
-  const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(() => {
-    const expanded = new Set<number>();
-    Object.keys(journals).forEach((k) => {
-      if (journals[Number(k)]?.trim()) expanded.add(Number(k));
-    });
-    if (expanded.size === 0) expanded.add(1);
-    return expanded;
-  });
+  const [expandedJournalId, setExpandedJournalId] = useState<string | null>(
+    journalList.length > 0 ? journalList[0].id : null
+  );
+  const [deletingJournalId, setDeletingJournalId] = useState<string | null>(null);
 
   const [saving, setSaving] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
@@ -146,12 +139,28 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     };
   }, []);
 
-  const upsertJournal = trpc.cycles.upsertJournal.useMutation({
+  const updateJournal = trpc.cycles.updateJournal.useMutation({
     onSuccess: () => {
       setLastSaved(new Date().toLocaleTimeString());
       setSaving(null);
     },
     onError: () => setSaving(null),
+  });
+
+  const addJournalMutation = trpc.cycles.addJournal.useMutation({
+    onSuccess: (created) => {
+      if (created) {
+        setJournalList((prev) => [...prev, created]);
+        setExpandedJournalId(created.id);
+      }
+    },
+  });
+
+  const deleteJournalMutation = trpc.cycles.deleteJournal.useMutation({
+    onSuccess: (_, variables) => {
+      setJournalList((prev) => prev.filter((j) => j.id !== variables.id));
+      setDeletingJournalId(null);
+    },
   });
 
   function handleCycleFieldChange(field: 'monthlyGoals' | 'monthlyReflection', value: string) {
@@ -160,13 +169,41 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     autoSave(field, value);
   }
 
-  function handleJournalChange(weekNumber: number, value: string) {
-    setJournals((prev) => ({ ...prev, [weekNumber]: value }));
+  function handleJournalContentChange(journalId: string, value: string) {
+    setJournalList((prev) => prev.map((j) => j.id === journalId ? { ...j, content: value } : j));
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
-      setSaving(`journal-${weekNumber}`);
-      upsertJournal.mutate({ cycleId: cycle.id, weekNumber, content: value });
+      setSaving(`journal-${journalId}`);
+      updateJournal.mutate({ id: journalId, content: value });
     }, 800);
+  }
+
+  function handleJournalTitleChange(journalId: string, title: string) {
+    setJournalList((prev) => prev.map((j) => j.id === journalId ? { ...j, title } : j));
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      setSaving(`journal-title-${journalId}`);
+      updateJournal.mutate({ id: journalId, title });
+    }, 800);
+  }
+
+  function generateWeekTitle(weekNum: number): string {
+    if (!cycle.periodStart) return `Week ${weekNum}`;
+    const start = new Date(cycle.periodStart);
+    const weekStart = new Date(start.getTime() + (weekNum - 1) * 7 * 24 * 60 * 60 * 1000);
+    const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `Week ${weekNum} — ${fmt(weekStart)} to ${fmt(weekEnd)}`;
+  }
+
+  function handleAddWeek() {
+    const nextWeek = journalList.length + 1;
+    if (nextWeek > 8) return;
+    addJournalMutation.mutate({
+      cycleId: cycle.id,
+      weekNumber: nextWeek,
+      title: generateWeekTitle(nextWeek),
+    });
   }
 
   function handleCheckboxChange(checked: boolean) {
@@ -178,18 +215,10 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     });
   }
 
-  function toggleWeek(week: number) {
-    setExpandedWeeks((prev) => {
-      const next = new Set(prev);
-      if (next.has(week)) next.delete(week);
-      else next.add(week);
-      return next;
-    });
-  }
 
   const isFilled = (val: string) => val.trim().length > 0;
 
-  const journalCount = Object.values(journals).filter((v) => isFilled(v)).length;
+  const journalCount = journalList.filter((j) => isFilled(j.content)).length;
   const inputsFilled = [
     isFilled(values.monthlyGoals),
     journalCount > 0,
@@ -339,52 +368,112 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
                 )}
                 <CardTitle className="text-base font-medium">Weekly Journals</CardTitle>
                 <Badge variant="secondary" className="ml-auto text-[11px]">
-                  {journalCount} entries
+                  {journalCount}/{journalList.length} filled
                 </Badge>
               </div>
             </CardHeader>
             <Separator />
             <CardContent className="space-y-2 pt-4">
-              {[1, 2, 3, 4, 5].map((week) => {
-                const value = journals[week] ?? '';
-                const expanded = expandedWeeks.has(week);
-                const filled = isFilled(value);
+              {journalList.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted-foreground">
+                  No journal entries yet. Add your first week below.
+                </p>
+              ) : (
+                journalList.map((journal) => {
+                  const isExpanded = expandedJournalId === journal.id;
+                  const filled = isFilled(journal.content);
+                  const isDeleting = deletingJournalId === journal.id;
 
-                return (
-                  <div key={week} className="rounded-lg border border-border">
-                    <button
-                      type="button"
-                      onClick={() => toggleWeek(week)}
-                      className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
-                    >
-                      <div className="flex items-center gap-3">
-                        {filled ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                        ) : (
-                          <Circle className="h-4 w-4 text-muted-foreground/40" />
-                        )}
-                        <span className="text-sm font-medium">Week {week}</span>
+                  return (
+                    <div key={journal.id} className="rounded-lg border border-border">
+                      <div className="flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedJournalId(isExpanded ? null : journal.id)}
+                          className="flex flex-1 items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                        >
+                          <div className="flex items-center gap-3">
+                            {filled ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                            ) : (
+                              <Circle className="h-4 w-4 text-muted-foreground/40" />
+                            )}
+                            <span className="text-sm font-medium">{journal.title}</span>
+                          </div>
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </button>
                       </div>
-                      {expanded ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      {isExpanded && (
+                        <div className="border-t border-border px-4 py-3 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-muted-foreground shrink-0">Title</Label>
+                            <input
+                              type="text"
+                              value={journal.title}
+                              onChange={(e) => handleJournalTitleChange(journal.id, e.target.value)}
+                              className="flex-1 bg-transparent text-sm border-b border-transparent hover:border-border focus:border-primary focus:outline-none py-0.5"
+                            />
+                          </div>
+                          <Textarea
+                            value={journal.content}
+                            onChange={(e) => handleJournalContentChange(journal.id, e.target.value)}
+                            placeholder="Journal entry for this week..."
+                            rows={4}
+                            className={cn(saving === `journal-${journal.id}` && 'border-primary/50')}
+                          />
+                          {isDeleting ? (
+                            <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-2">
+                              <span className="flex-1 text-xs text-destructive">Delete this journal entry?</span>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => deleteJournalMutation.mutate({ id: journal.id })}
+                                disabled={deleteJournalMutation.isPending}
+                              >
+                                {deleteJournalMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Delete'}
+                              </Button>
+                              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDeletingJournalId(null)}>
+                                Cancel
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs text-muted-foreground hover:text-destructive"
+                              onClick={() => setDeletingJournalId(journal.id)}
+                            >
+                              Remove week
+                            </Button>
+                          )}
+                        </div>
                       )}
-                    </button>
-                    {expanded && (
-                      <div className="border-t border-border px-4 py-3">
-                        <Textarea
-                          value={value}
-                          onChange={(e) => handleJournalChange(week, e.target.value)}
-                          placeholder={`Week ${week} journal entry...`}
-                          rows={4}
-                          className={cn(saving === `journal-${week}` && 'border-primary/50')}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                    </div>
+                  );
+                })
+              )}
+
+              {journalList.length < 8 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleAddWeek}
+                  disabled={addJournalMutation.isPending}
+                >
+                  {addJournalMutation.isPending ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Add week
+                </Button>
+              )}
             </CardContent>
           </Card>
 

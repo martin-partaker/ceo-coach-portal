@@ -129,67 +129,74 @@ export const cyclesRouter = createTRPCRouter({
     }),
 
   // Journal entries
-  upsertJournal: protectedProcedure
+  addJournal: protectedProcedure
     .input(
       z.object({
         cycleId: z.string().uuid(),
-        weekNumber: z.number().min(1),
-        content: z.string(),
+        weekNumber: z.number().min(1).max(8),
+        title: z.string().min(1),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const [cycle] = await ctx.db
-        .select()
-        .from(cycles)
-        .where(eq(cycles.id, input.cycleId))
-        .limit(1);
+        .select().from(cycles).where(eq(cycles.id, input.cycleId)).limit(1);
       if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
-
       const [ceo] = await ctx.db
-        .select()
-        .from(ceos)
-        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
-        .limit(1);
+        .select().from(ceos).where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id))).limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
-
-      // Check if journal entry exists for this week
-      const [existing] = await ctx.db
-        .select()
-        .from(journalEntries)
-        .where(
-          and(
-            eq(journalEntries.cycleId, input.cycleId),
-            eq(journalEntries.weekNumber, input.weekNumber)
-          )
-        )
-        .limit(1);
-
-      if (input.content.trim() === '' && existing) {
-        // Delete empty entries
-        await ctx.db.delete(journalEntries).where(eq(journalEntries.id, existing.id));
-        return null;
-      }
-
-      if (input.content.trim() === '') return null;
-
-      if (existing) {
-        const [updated] = await ctx.db
-          .update(journalEntries)
-          .set({ content: input.content })
-          .where(eq(journalEntries.id, existing.id))
-          .returning();
-        return updated;
-      }
 
       const [created] = await ctx.db
         .insert(journalEntries)
-        .values({
-          cycleId: input.cycleId,
-          weekNumber: input.weekNumber,
-          content: input.content,
-        })
+        .values({ cycleId: input.cycleId, weekNumber: input.weekNumber, title: input.title })
         .returning();
       return created;
+    }),
+
+  updateJournal: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        title: z.string().min(1).optional(),
+        content: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [journal] = await ctx.db
+        .select().from(journalEntries).where(eq(journalEntries.id, input.id)).limit(1);
+      if (!journal) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [cycle] = await ctx.db
+        .select().from(cycles).where(eq(cycles.id, journal.cycleId)).limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+      const [ceo] = await ctx.db
+        .select().from(ceos).where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id))).limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const updates: Record<string, unknown> = {};
+      if (input.title !== undefined) updates.title = input.title;
+      if (input.content !== undefined) updates.content = input.content;
+
+      const [updated] = await ctx.db
+        .update(journalEntries).set(updates).where(eq(journalEntries.id, input.id)).returning();
+      return updated;
+    }),
+
+  deleteJournal: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [journal] = await ctx.db
+        .select().from(journalEntries).where(eq(journalEntries.id, input.id)).limit(1);
+      if (!journal) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [cycle] = await ctx.db
+        .select().from(cycles).where(eq(cycles.id, journal.cycleId)).limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+      const [ceo] = await ctx.db
+        .select().from(ceos).where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id))).limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await ctx.db.delete(journalEntries).where(eq(journalEntries.id, input.id));
+      return { success: true };
     }),
 
   // Add transcript

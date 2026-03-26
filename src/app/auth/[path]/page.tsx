@@ -1,5 +1,4 @@
-import { AuthView } from '@neondatabase/auth/react';
-import { Users } from 'lucide-react';
+import { AuthForm } from '@/components/auth/auth-form';
 
 export const dynamicParams = false;
 
@@ -15,28 +14,29 @@ export default async function AuthPage({
   const { path } = await params;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+      <div className="w-full max-w-[400px]">
         {/* Brand */}
-        <div className="mb-8 flex flex-col items-center text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
-            <Users className="h-6 w-6 text-primary-foreground" />
+        <div className="mb-8 text-center">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-foreground">
+            <span className="text-lg font-bold text-background">C</span>
           </div>
-          <h1 className="mt-4 text-xl font-semibold tracking-tight text-foreground">
-            CEO Coach Portal
+          <h1 className="mt-5 text-2xl font-semibold tracking-tight">
+            {path === 'sign-up' ? 'Create an account' : 'Welcome back'}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Executive coaching platform
+          <p className="mt-2 text-sm text-muted-foreground">
+            {path === 'sign-up'
+              ? 'Enter your details to get started'
+              : 'Sign in to your account to continue'}
           </p>
         </div>
 
-        {/* Auth form — AuthView renders its own styled card */}
-        <AuthView path={path} />
+        <AuthForm mode={path === 'sign-up' ? 'sign-up' : 'sign-in'} />
 
-        <p className="mt-6 text-center text-xs text-muted-foreground">
-          Powered by Partaker Coaching
+        <p className="mt-8 text-center text-xs text-muted-foreground">
+          CEO Coach Portal by Partaker
         </p>
       </div>
-    </main>
+    </div>
   );
 }

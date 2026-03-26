@@ -1,8 +1,5 @@
 @import "tailwindcss";
 
-/* Scan Neon Auth components so Tailwind generates their utility classes */
-@source "../../node_modules/@neondatabase/auth/dist";
-@source "../../node_modules/@neondatabase/auth/dist/ui/.safelist.html";
 
 /* shadcn/ui CSS variables — Tailwind v4 compatible */
 @layer base {

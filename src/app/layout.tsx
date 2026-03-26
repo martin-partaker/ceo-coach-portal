@@ -1,5 +1,3 @@
-import { authClient } from '@/lib/auth/client';
-import { NeonAuthUIProvider } from '@neondatabase/auth/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { GeistSans } from 'geist/font/sans';
@@ -21,13 +19,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body className="font-sans antialiased">
         <ThemeProvider>
-          <NeonAuthUIProvider
-            authClient={authClient}
-            redirectTo="/dashboard"
-            credentials={{ forgotPassword: true }}
-          >
-            <TooltipProvider>{children}</TooltipProvider>
-          </NeonAuthUIProvider>
+          <TooltipProvider>{children}</TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

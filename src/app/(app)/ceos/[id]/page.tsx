@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { Calendar } from 'lucide-react';
+import { Calendar, CheckCircle2 } from 'lucide-react';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -108,7 +108,7 @@ export default async function CeoProfilePage({
                       Created {new Date(cycle.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <CycleStatusBadge cycle={cycle} />
+                  <CycleStatusBadge cycle={cycle} hasReport={cycle.hasReport} />
                 </Link>
               ))}
             </div>
@@ -119,10 +119,11 @@ export default async function CeoProfilePage({
   );
 }
 
-function CycleStatusBadge({ cycle }: { cycle: { monthlyGoals: string | null; transcriptSkipped: boolean } }) {
-  const hasGoals = !!cycle.monthlyGoals?.trim();
-
-  if (hasGoals) {
+function CycleStatusBadge({ cycle, hasReport }: { cycle: { monthlyGoals: string | null }; hasReport: boolean }) {
+  if (hasReport) {
+    return <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[11px]"><CheckCircle2 className="mr-1 h-3 w-3" />Email generated</Badge>;
+  }
+  if (cycle.monthlyGoals?.trim()) {
     return <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 text-[11px]">In progress</Badge>;
   }
   return <Badge variant="secondary" className="text-[11px]">New</Badge>;

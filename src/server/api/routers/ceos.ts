@@ -64,7 +64,19 @@ export const ceosRouter = createTRPCRouter({
         .where(eq(cycles.ceoId, ceo.id))
         .orderBy(desc(cycles.createdAt));
 
-      return { ceo, cycles: coachCycles };
+      // Check report status per cycle
+      const cyclesWithStatus = await Promise.all(
+        coachCycles.map(async (cycle) => {
+          const [report] = await ctx.db
+            .select({ id: reports.id })
+            .from(reports)
+            .where(eq(reports.cycleId, cycle.id))
+            .limit(1);
+          return { ...cycle, hasReport: !!report };
+        })
+      );
+
+      return { ceo, cycles: cyclesWithStatus };
     }),
 
   create: protectedProcedure

@@ -89,14 +89,15 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     prefillMutation.mutate({ cycleId: cycle.id });
   }
 
-  // Clear AI-suggested badge when user edits a field
+  // Clear AI-suggested badge and undo state when user manually edits
   function clearAiSuggested(field: string) {
-    if (aiSuggested.has(field)) {
+    if (aiSuggested.has(field) || undoValues[field] !== undefined) {
       setAiSuggested((prev) => {
         const next = new Set(prev);
         next.delete(field);
         return next;
       });
+      setUndoValues((u) => { const n = { ...u }; delete n[field]; return n; });
       // Persist the clear to DB
       updateCycle.mutate({
         id: cycle.id,
@@ -203,20 +204,29 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
   function generateWeekTitle(weekNum: number): string {
     if (!cycle.periodStart) return `Week ${weekNum}`;
     const start = new Date(cycle.periodStart);
+    const end = cycle.periodEnd ? new Date(cycle.periodEnd) : null;
     const weekStart = new Date(start.getTime() + (weekNum - 1) * 7 * 24 * 60 * 60 * 1000);
-    const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+    const weekEndRaw = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+    const weekEnd = end && weekEndRaw > end ? end : weekEndRaw;
     const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return `Week ${weekNum} — ${fmt(weekStart)} to ${fmt(weekEnd)}`;
   }
 
-  function undoField(field: 'monthlyGoals' | 'monthlyReflection') {
-    const prev = undoValues[field];
-    if (prev !== undefined) {
-      setValues((v) => ({ ...v, [field]: prev }));
-      autoSave(field, prev);
-      setAiSuggested((s) => { const n = new Set(s); n.delete(field); return n; });
-      setUndoValues((u) => { const n = { ...u }; delete n[field]; return n; });
-    }
+  // undoValues stores the "other" version — swap between AI and previous
+  function toggleUndoField(field: 'monthlyGoals' | 'monthlyReflection') {
+    const other = undoValues[field];
+    if (other === undefined) return;
+    const current = values[field];
+    // Swap: current becomes undo, undo becomes current
+    setUndoValues((u) => ({ ...u, [field]: current }));
+    setValues((v) => ({ ...v, [field]: other }));
+    autoSave(field, other);
+    // Toggle AI-suggested badge
+    setAiSuggested((s) => {
+      const n = new Set(s);
+      if (n.has(field)) n.delete(field); else n.add(field);
+      return n;
+    });
   }
 
   function handleAddWeek() {
@@ -300,8 +310,6 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
                 existingTranscripts={transcriptList}
                 onTranscriptsImported={(newTranscripts) => {
                   setTranscriptList((prev) => [...prev, ...newTranscripts]);
-                  // Auto-trigger prefill after import
-                  setTimeout(() => triggerPrefill(), 1000);
                 }}
               />
             )}
@@ -341,15 +349,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
         </CardContent>
       </Card>
 
-      {/* Prefill loading state */}
-      {prefilling && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardContent className="flex items-center gap-3 py-4">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            <span className="text-sm">Analyzing transcript and pre-filling fields...</span>
-          </CardContent>
-        </Card>
-      )}
+
 
       {/* Gated content — locked until transcript is ready */}
       {!transcriptReady ? (
@@ -382,6 +382,34 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
             />
           </InputSection>
 
+          {/* Pre-fill trigger */}
+          {!aiSuggested.has('monthlyGoals') && !isFilled(values.monthlyGoals) && transcriptReady && !values.transcriptSkipped && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="flex items-center justify-between py-4">
+                <div>
+                  <p className="text-sm font-medium">Ready to pre-fill</p>
+                  <p className="text-xs text-muted-foreground">
+                    AI will extract goals and reflections from the transcript and context above.
+                  </p>
+                </div>
+                <Button size="sm" onClick={triggerPrefill} disabled={prefilling}>
+                  {prefilling ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4" />}
+                  {prefilling ? 'Pre-filling...' : 'Pre-fill with AI'}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Prefill loading state */}
+          {prefilling && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="flex items-center gap-3 py-4">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <span className="text-sm">Analyzing transcript and pre-filling fields...</span>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Monthly Goals */}
           <InputSection
             title="Monthly Goals & Commitments"
@@ -389,7 +417,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
             description="What did the CEO commit to achieving this month?"
             aiSuggested={aiSuggested.has('monthlyGoals')}
             onReprefill={() => triggerPrefill()}
-            onUndo={undoValues.monthlyGoals !== undefined ? () => undoField('monthlyGoals') : undefined}
+            onToggleUndo={undoValues.monthlyGoals !== undefined ? () => toggleUndoField('monthlyGoals') : undefined}
+            isUndone={undoValues.monthlyGoals !== undefined && !aiSuggested.has('monthlyGoals')}
             reprefilling={prefilling}
           >
             <Textarea
@@ -528,7 +557,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
             description="CEO's reflection on the month — wins, struggles, learnings."
             aiSuggested={aiSuggested.has('monthlyReflection')}
             onReprefill={() => triggerPrefill()}
-            onUndo={undoValues.monthlyReflection !== undefined ? () => undoField('monthlyReflection') : undefined}
+            onToggleUndo={undoValues.monthlyReflection !== undefined ? () => toggleUndoField('monthlyReflection') : undefined}
+            isUndone={undoValues.monthlyReflection !== undefined && !aiSuggested.has('monthlyReflection')}
             reprefilling={prefilling}
           >
             <Textarea
@@ -661,7 +691,8 @@ function InputSection({
   description,
   aiSuggested,
   onReprefill,
-  onUndo,
+  onToggleUndo,
+  isUndone,
   reprefilling,
   children,
 }: {
@@ -670,7 +701,8 @@ function InputSection({
   description: string;
   aiSuggested?: boolean;
   onReprefill?: () => void;
-  onUndo?: () => void;
+  onToggleUndo?: () => void;
+  isUndone?: boolean;
   reprefilling?: boolean;
   children: React.ReactNode;
 }) {
@@ -691,10 +723,10 @@ function InputSection({
                 AI-suggested
               </Badge>
             )}
-            {onUndo && (
-              <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={onUndo}>
+            {onToggleUndo && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={onToggleUndo}>
                 <Undo2 className="mr-1 h-3 w-3" />
-                Undo
+                {isUndone ? 'Redo' : 'Undo'}
               </Button>
             )}
             {onReprefill && filled && (

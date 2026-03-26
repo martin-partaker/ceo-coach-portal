@@ -77,7 +77,8 @@ export const cyclesRouter = createTRPCRouter({
 
         for (let i = 0; i < weeks; i++) {
           const weekStart = new Date(start.getTime() + i * 7 * 24 * 60 * 60 * 1000);
-          const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+          const weekEndRaw = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+          const weekEnd = weekEndRaw > end ? end : weekEndRaw;
           await ctx.db.insert(journalEntries).values({
             cycleId: created.id,
             weekNumber: i + 1,

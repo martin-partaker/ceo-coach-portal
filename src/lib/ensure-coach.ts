@@ -1,6 +1,5 @@
 import { db } from '@/db';
 import { coaches } from '@/db/schema';
-import { eq } from 'drizzle-orm';
 import type { Coach } from '@/db/schema';
 
 /**
@@ -12,22 +11,23 @@ export async function ensureCoach(params: {
   name: string;
   email: string;
 }): Promise<Coach> {
-  const existing = await db
-    .select()
-    .from(coaches)
-    .where(eq(coaches.neonAuthUserId, params.neonAuthUserId))
-    .limit(1);
-
-  if (existing.length > 0) return existing[0];
-
-  const [created] = await db
+  // This function can be called concurrently during navigation/render.
+  // Use an upsert to avoid unique constraint races.
+  const [coach] = await db
     .insert(coaches)
     .values({
       neonAuthUserId: params.neonAuthUserId,
       name: params.name || params.email,
       email: params.email,
     })
+    .onConflictDoUpdate({
+      target: coaches.neonAuthUserId,
+      set: {
+        name: params.name || params.email,
+        email: params.email,
+      },
+    })
     .returning();
 
-  return created;
+  return coach;
 }

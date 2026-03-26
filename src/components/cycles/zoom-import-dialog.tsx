@@ -171,10 +171,8 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
                   >
                     <Checkbox
                       checked={isSelected}
-                      onCheckedChange={() => canSelect && toggleSelection(meeting.id)}
                       disabled={!canSelect}
-                      className="mt-0.5"
-                      onClick={(e) => e.stopPropagation()}
+                      className="mt-0.5 pointer-events-none"
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium leading-snug">{meeting.topic}</p>

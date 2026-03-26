@@ -37,6 +37,53 @@ const SECTION_LABELS: Record<string, string> = {
   closing: 'Closing',
 };
 
+/** Convert markdown-ish text to simple HTML for rich-text clipboard */
+function markdownToHtml(text: string): string {
+  return text
+    .split('\n\n')
+    .map((block) => {
+      // Convert **bold** to <strong>
+      let html = block.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      // Convert *italic* to <em>
+      html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // Convert lines starting with - or • to list items
+      const lines = html.split('\n');
+      const isList = lines.every((l) => /^[\s]*[-•]\s/.test(l) || l.trim() === '');
+      if (isList && lines.some((l) => l.trim())) {
+        const items = lines
+          .filter((l) => l.trim())
+          .map((l) => `<li>${l.replace(/^[\s]*[-•]\s*/, '')}</li>`)
+          .join('');
+        return `<ul>${items}</ul>`;
+      }
+      // Convert numbered lines to ordered list
+      const isNumbered = lines.every((l) => /^[\s]*\d+[.)]\s/.test(l) || l.trim() === '');
+      if (isNumbered && lines.some((l) => l.trim())) {
+        const items = lines
+          .filter((l) => l.trim())
+          .map((l) => `<li>${l.replace(/^[\s]*\d+[.)]\s*/, '')}</li>`)
+          .join('');
+        return `<ol>${items}</ol>`;
+      }
+      // Line breaks within a block
+      html = html.replace(/\n/g, '<br>');
+      return `<p>${html}</p>`;
+    })
+    .join('');
+}
+
+async function copyAsRichText(text: string) {
+  const html = markdownToHtml(text);
+  const blob = new Blob([html], { type: 'text/html' });
+  const plainBlob = new Blob([text], { type: 'text/plain' });
+  await navigator.clipboard.write([
+    new ClipboardItem({
+      'text/html': blob,
+      'text/plain': plainBlob,
+    }),
+  ]);
+}
+
 export function ReportView({ cycleId }: ReportViewProps) {
   const report = trpc.reports.getForCycle.useQuery({ cycleId });
   const generate = trpc.reports.generate.useMutation({
@@ -50,7 +97,7 @@ export function ReportView({ cycleId }: ReportViewProps) {
 
   async function handleCopyAll() {
     if (!report.data?.rawText) return;
-    await navigator.clipboard.writeText(report.data.rawText);
+    await copyAsRichText(report.data.rawText);
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   }
@@ -101,29 +148,19 @@ export function ReportView({ cycleId }: ReportViewProps) {
             Generated {new Date(report.data.generatedAt).toLocaleString()}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleCopyAll}>
-            {copiedAll ? (
-              <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" />
-            ) : (
-              <Copy className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            {copiedAll ? 'Copied!' : 'Copy email body'}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => generate.mutate({ cycleId })}
-            disabled={generate.isPending}
-          >
-            {generate.isPending ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            Regenerate
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => generate.mutate({ cycleId })}
+          disabled={generate.isPending}
+        >
+          {generate.isPending ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+          )}
+          Regenerate
+        </Button>
       </div>
 
       {/* Email preview */}
@@ -133,12 +170,12 @@ export function ReportView({ cycleId }: ReportViewProps) {
           {contentJson.subject_line && (
             <>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Mail className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">Subject:</span>
-                  <span className="text-sm font-medium">{contentJson.subject_line}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="text-xs shrink-0 text-muted-foreground">Subject:</span>
+                  <span className="text-sm font-medium truncate">{contentJson.subject_line}</span>
                 </div>
-                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleCopySubject}>
+                <Button variant="ghost" size="sm" className="h-7 shrink-0 text-xs" onClick={handleCopySubject}>
                   {copiedSubject ? (
                     <Check className="mr-1 h-3 w-3 text-emerald-500" />
                   ) : (
@@ -158,13 +195,24 @@ export function ReportView({ cycleId }: ReportViewProps) {
               if (!content) return null;
 
               return (
-                <div key={key}>
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {content}
-                  </div>
+                <div key={key} className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {content}
                 </div>
               );
             })}
+          </div>
+
+          {/* Copy button inside email card */}
+          <Separator className="my-4" />
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={handleCopyAll}>
+              {copiedAll ? (
+                <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <Copy className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {copiedAll ? 'Copied to clipboard!' : 'Copy email body'}
+            </Button>
           </div>
         </CardContent>
       </Card>

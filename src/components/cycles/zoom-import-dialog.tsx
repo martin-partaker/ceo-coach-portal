@@ -22,10 +22,11 @@ interface ZoomImportDialogProps {
   cycleId: string;
   ceoId: string;
   hasZoomEmail: boolean;
+  existingTranscript?: string;
   onTranscriptImported?: (transcript: string) => void;
 }
 
-export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, onTranscriptImported }: ZoomImportDialogProps) {
+export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscript, onTranscriptImported }: ZoomImportDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -66,7 +67,10 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, onTranscriptImp
     }
 
     if (transcripts.length > 0) {
-      const combined = transcripts.join('\n\n\n');
+      const newContent = transcripts.join('\n\n\n');
+      const combined = existingTranscript
+        ? `${existingTranscript.trimEnd()}\n\n\n${newContent}`
+        : newContent;
       onTranscriptImported?.(combined);
     }
 
@@ -86,6 +90,12 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, onTranscriptImp
       setImportSuccess(false);
       setSelected(new Set());
     }
+  }
+
+  // Check which meeting topics are already imported
+  function isAlreadyImported(topic: string): boolean {
+    if (!existingTranscript) return false;
+    return existingTranscript.includes(`=== ${topic} (`);
   }
 
   const meetingsWithTranscript = recordings.data?.filter((m) => m.hasTranscript) ?? [];
@@ -149,18 +159,22 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, onTranscriptImp
             <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
               {recordings.data.map((meeting) => {
                 const isSelected = selected.has(meeting.id);
+                const alreadyImported = isAlreadyImported(meeting.topic);
+                const canSelect = meeting.hasTranscript && !alreadyImported;
                 return (
-                  <label
+                  <div
                     key={meeting.id}
+                    onClick={() => canSelect && toggleSelection(meeting.id)}
                     className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition-colors ${
                       isSelected ? 'border-primary/50 bg-primary/5' : 'hover:bg-muted/50'
-                    } ${!meeting.hasTranscript ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    } ${!canSelect ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     <Checkbox
                       checked={isSelected}
-                      onCheckedChange={() => meeting.hasTranscript && toggleSelection(meeting.id)}
-                      disabled={!meeting.hasTranscript}
+                      onCheckedChange={() => canSelect && toggleSelection(meeting.id)}
+                      disabled={!canSelect}
                       className="mt-0.5"
+                      onClick={(e) => e.stopPropagation()}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium leading-snug">{meeting.topic}</p>
@@ -169,13 +183,15 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, onTranscriptImp
                       </p>
                     </div>
                     <div className="shrink-0 pt-0.5">
-                      {meeting.hasTranscript ? (
+                      {alreadyImported ? (
+                        <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px] whitespace-nowrap">Imported</Badge>
+                      ) : meeting.hasTranscript ? (
                         <Badge variant="secondary" className="text-[10px] whitespace-nowrap">Transcript</Badge>
                       ) : (
                         <Badge variant="outline" className="text-[10px] text-muted-foreground whitespace-nowrap">No transcript</Badge>
                       )}
                     </div>
-                  </label>
+                  </div>
                 );
               })}
             </div>

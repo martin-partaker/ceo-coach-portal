@@ -256,7 +256,11 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormPro
                 cycleId={cycle.id}
                 ceoId={ceoId}
                 hasZoomEmail={hasZoomEmail}
-                onTranscriptImported={(transcript) => setValues((prev) => ({ ...prev, zoomTranscript: transcript }))}
+                existingTranscript={values.zoomTranscript}
+                onTranscriptImported={(transcript) => {
+                  setValues((prev) => ({ ...prev, zoomTranscript: transcript }));
+                  autoSave('zoomTranscript', transcript);
+                }}
               />
             )}
           </div>

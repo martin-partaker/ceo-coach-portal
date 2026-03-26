@@ -105,7 +105,7 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail }: ZoomImportDia
               </p>
             </div>
           ) : (
-            <div className="max-h-80 space-y-1 overflow-y-auto">
+            <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
               {recordings.data.map((meeting) => (
                 <button
                   key={meeting.id}
@@ -113,28 +113,27 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail }: ZoomImportDia
                   disabled={importTranscript.isPending}
                   onClick={() => handleImport(meeting.id)}
                   className={cn(
-                    'flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left transition-colors',
+                    'w-full rounded-lg border px-4 py-3 text-left transition-colors',
                     selectedMeetingId === meeting.id && importTranscript.isPending
                       ? 'border-primary/50 bg-primary/5'
                       : 'hover:bg-muted/50'
                   )}
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{meeting.topic}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground font-mono">
-                      {new Date(meeting.startTime).toLocaleDateString()} &middot;{' '}
-                      {meeting.duration} min
-                    </p>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm font-medium leading-snug">{meeting.topic}</p>
+                    <div className="shrink-0 pt-0.5">
+                      {selectedMeetingId === meeting.id && importTranscript.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : meeting.hasTranscript ? (
+                        <Badge variant="secondary" className="text-[10px] whitespace-nowrap">Transcript</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground whitespace-nowrap">No transcript</Badge>
+                      )}
+                    </div>
                   </div>
-                  <div className="ml-3 shrink-0">
-                    {selectedMeetingId === meeting.id && importTranscript.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : meeting.hasTranscript ? (
-                      <Badge variant="secondary" className="text-[10px]">Has transcript</Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground">No transcript</Badge>
-                    )}
-                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground font-mono">
+                    {new Date(meeting.startTime).toLocaleDateString()} &middot; {meeting.duration} min
+                  </p>
                 </button>
               ))}
             </div>

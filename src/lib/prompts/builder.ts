@@ -105,7 +105,10 @@ ${cycle.monthlyReflection?.trim() || '(not provided)'}
 
 ### Zoom Session Transcript
 ${transcriptText}
-${previousReport ? `
+${cycle.additionalContext?.trim() ? `
+### Additional Context (coach notes, emails, etc.)
+${cycle.additionalContext}
+` : ''}${previousReport ? `
 ### Previous Session Email (for continuity)
 ${previousReport.rawText?.substring(0, 1500) ?? ''}
 ` : ''}${missingWarning}

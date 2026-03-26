@@ -41,6 +41,7 @@ export const cycles = pgTable('cycles', {
   periodEnd: date('period_end'),
   monthlyGoals: text('monthly_goals'),
   monthlyReflection: text('monthly_reflection'),
+  additionalContext: text('additional_context'),
   transcriptSkipped: boolean('transcript_skipped').notNull().default(false),
   monthlyGoalsAiSuggested: boolean('monthly_goals_ai_suggested').notNull().default(false),
   monthlyReflectionAiSuggested: boolean('monthly_reflection_ai_suggested').notNull().default(false),

@@ -97,6 +97,7 @@ export const cyclesRouter = createTRPCRouter({
         label: z.string().min(1).optional(),
         monthlyGoals: z.string().nullable().optional(),
         monthlyReflection: z.string().nullable().optional(),
+        additionalContext: z.string().nullable().optional(),
         transcriptSkipped: z.boolean().optional(),
         monthlyGoalsAiSuggested: z.boolean().optional(),
         monthlyReflectionAiSuggested: z.boolean().optional(),
@@ -325,6 +326,7 @@ export const cyclesRouter = createTRPCRouter({
         cycle,
         ceo,
         transcriptText,
+        additionalContext: cycle.additionalContext ?? undefined,
       });
 
       const message = await anthropic.messages.create({

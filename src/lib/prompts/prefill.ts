@@ -8,10 +8,12 @@ export async function buildPrefillPrompt({
   cycle,
   ceo,
   transcriptText,
+  additionalContext,
 }: {
   cycle: Cycle;
   ceo: Ceo;
   transcriptText: string;
+  additionalContext?: string;
 }) {
   // Get previous cycle's context
   const allCycles = await db
@@ -75,7 +77,10 @@ ${previousEmail}
 ` : ''}
 ## Current Session Transcript
 ${transcriptText || '(no transcript available)'}
-
+${additionalContext?.trim() ? `
+## Additional Context (notes, emails, etc.)
+${additionalContext}
+` : ''}
 Extract the monthly goals and reflection from this session now.`;
 
   return { systemPrompt, userPrompt };

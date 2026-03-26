@@ -19,6 +19,8 @@ import {
   Plus,
   Sparkles,
   AlertTriangle,
+  Undo2,
+  RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
@@ -42,8 +44,12 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
   const [values, setValues] = useState({
     monthlyGoals: cycle.monthlyGoals ?? '',
     monthlyReflection: cycle.monthlyReflection ?? '',
+    additionalContext: cycle.additionalContext ?? '',
     transcriptSkipped: cycle.transcriptSkipped,
   });
+
+  // Undo state for AI-prefilled fields
+  const [undoValues, setUndoValues] = useState<Record<string, string>>({});
 
   // Journal entries as list
   const [journalList, setJournalList] = useState<JournalEntry[]>(initialJournals);
@@ -61,6 +67,11 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   const prefillMutation = trpc.cycles.prefill.useMutation({
     onSuccess: (data) => {
+      // Save current values for undo
+      setUndoValues({
+        monthlyGoals: values.monthlyGoals,
+        monthlyReflection: values.monthlyReflection,
+      });
       setValues((prev) => ({
         ...prev,
         monthlyGoals: data.monthlyGoals,
@@ -196,6 +207,16 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
     const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return `Week ${weekNum} — ${fmt(weekStart)} to ${fmt(weekEnd)}`;
+  }
+
+  function undoField(field: 'monthlyGoals' | 'monthlyReflection') {
+    const prev = undoValues[field];
+    if (prev !== undefined) {
+      setValues((v) => ({ ...v, [field]: prev }));
+      autoSave(field, prev);
+      setAiSuggested((s) => { const n = new Set(s); n.delete(field); return n; });
+      setUndoValues((u) => { const n = { ...u }; delete n[field]; return n; });
+    }
   }
 
   function handleAddWeek() {
@@ -343,12 +364,33 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
         </Card>
       ) : (
         <>
+          {/* Additional Context */}
+          <InputSection
+            title="Extra Notes & Context"
+            filled={isFilled(values.additionalContext)}
+            description="Paste any additional context — emails, notes, meeting prep — that should inform this session."
+          >
+            <Textarea
+              value={values.additionalContext}
+              onChange={(e) => {
+                setValues((prev) => ({ ...prev, additionalContext: e.target.value }));
+                autoSave('additionalContext', e.target.value);
+              }}
+              placeholder="Paste emails, Slack messages, notes, or any other context here..."
+              rows={4}
+              className={cn(saving === 'additionalContext' && 'border-primary/50')}
+            />
+          </InputSection>
+
           {/* Monthly Goals */}
           <InputSection
             title="Monthly Goals & Commitments"
             filled={isFilled(values.monthlyGoals)}
             description="What did the CEO commit to achieving this month?"
             aiSuggested={aiSuggested.has('monthlyGoals')}
+            onReprefill={() => triggerPrefill()}
+            onUndo={undoValues.monthlyGoals !== undefined ? () => undoField('monthlyGoals') : undefined}
+            reprefilling={prefilling}
           >
             <Textarea
               value={values.monthlyGoals}
@@ -485,6 +527,9 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
             filled={isFilled(values.monthlyReflection)}
             description="CEO's reflection on the month — wins, struggles, learnings."
             aiSuggested={aiSuggested.has('monthlyReflection')}
+            onReprefill={() => triggerPrefill()}
+            onUndo={undoValues.monthlyReflection !== undefined ? () => undoField('monthlyReflection') : undefined}
+            reprefilling={prefilling}
           >
             <Textarea
               value={values.monthlyReflection}
@@ -615,12 +660,18 @@ function InputSection({
   filled,
   description,
   aiSuggested,
+  onReprefill,
+  onUndo,
+  reprefilling,
   children,
 }: {
   title: string;
   filled: boolean;
   description: string;
   aiSuggested?: boolean;
+  onReprefill?: () => void;
+  onUndo?: () => void;
+  reprefilling?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -633,12 +684,26 @@ function InputSection({
             <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
           )}
           <CardTitle className="text-base font-medium">{title}</CardTitle>
-          {aiSuggested && (
-            <Badge className="ml-auto bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20 text-[10px]">
-              <Sparkles className="mr-1 h-3 w-3" />
-              AI-suggested
-            </Badge>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {aiSuggested && (
+              <Badge className="bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20 text-[10px]">
+                <Sparkles className="mr-1 h-3 w-3" />
+                AI-suggested
+              </Badge>
+            )}
+            {onUndo && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={onUndo}>
+                <Undo2 className="mr-1 h-3 w-3" />
+                Undo
+              </Button>
+            )}
+            {onReprefill && filled && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={onReprefill} disabled={reprefilling}>
+                {reprefilling ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
+                Re-generate
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <Separator />

@@ -50,8 +50,8 @@ export function AuthForm({ mode }: AuthFormProps) {
           return;
         }
       }
-      router.push('/dashboard');
-      router.refresh();
+      // Full page navigation to ensure session cookie is sent on first request
+      window.location.href = '/dashboard';
     } catch {
       setError('Something went wrong. Please try again.');
       setLoading(false);

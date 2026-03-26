@@ -28,6 +28,8 @@ interface CycleInputFormProps {
   cycle: Cycle;
   ceoId: string;
   hasZoomEmail: boolean;
+  hasTenXGoal?: boolean;
+  previousActionItemsReviewed?: boolean;
 }
 
 type CycleField = keyof Pick<
@@ -43,7 +45,7 @@ type CycleField = keyof Pick<
   | 'transcriptSkipped'
 >;
 
-export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormProps) {
+export function CycleInputForm({ cycle, ceoId, hasZoomEmail, hasTenXGoal, previousActionItemsReviewed: initialReviewed }: CycleInputFormProps) {
   const router = useRouter();
 
   const [values, setValues] = useState({
@@ -57,6 +59,8 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormPro
     zoomTranscript: cycle.zoomTranscript ?? '',
     transcriptSkipped: cycle.transcriptSkipped,
   });
+
+  const [reviewed, setReviewed] = useState(initialReviewed ?? false);
 
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(() => {
     // Auto-expand weeks that have content
@@ -311,19 +315,41 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormPro
       </Card>
 
       {/* Completion Summary */}
-      <CompletionSummary values={values} />
+      {/* Previous action items reviewed */}
+      <Card>
+        <CardContent className="flex items-center gap-3 py-4">
+          <Checkbox
+            id="prev-reviewed"
+            checked={reviewed}
+            onCheckedChange={(checked) => {
+              const val = checked === true;
+              setReviewed(val);
+              setSaving('previousActionItemsReviewed');
+              updateCycle.mutate({ id: cycle.id, previousActionItemsReviewed: val });
+            }}
+          />
+          <Label htmlFor="prev-reviewed" className="text-sm font-normal cursor-pointer">
+            I have reviewed previous cycle&apos;s action items
+          </Label>
+          {reviewed && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+        </CardContent>
+      </Card>
+
+      <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} reviewed={reviewed} />
     </div>
   );
 }
 
-function CompletionSummary({ values }: { values: { monthlyGoals: string; weeklyJournal1: string; weeklyJournal2: string; weeklyJournal3: string; weeklyJournal4: string; weeklyJournal5: string; monthlyReflection: string; zoomTranscript: string; transcriptSkipped: boolean } }) {
+function CompletionSummary({ values, hasTenXGoal, reviewed }: { values: { monthlyGoals: string; weeklyJournal1: string; weeklyJournal2: string; weeklyJournal3: string; weeklyJournal4: string; weeklyJournal5: string; monthlyReflection: string; zoomTranscript: string; transcriptSkipped: boolean }; hasTenXGoal?: boolean; reviewed?: boolean }) {
   const isFilled = (val: string) => val.trim().length > 0;
 
   const checks = [
+    { label: '10x goal set', done: !!hasTenXGoal, required: true },
     { label: 'Monthly goals', done: isFilled(values.monthlyGoals), required: true },
     { label: 'At least one weekly journal', done: [values.weeklyJournal1, values.weeklyJournal2, values.weeklyJournal3, values.weeklyJournal4, values.weeklyJournal5].some((j) => isFilled(j)), required: true },
     { label: 'Monthly reflection', done: isFilled(values.monthlyReflection), required: false },
     { label: 'Zoom transcript', done: isFilled(values.zoomTranscript) || values.transcriptSkipped, required: true },
+    { label: 'Previous action items reviewed', done: !!reviewed, required: false },
   ];
 
   const requiredDone = checks.filter((c) => c.required && c.done).length;

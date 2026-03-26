@@ -153,19 +153,19 @@ Coach can pull a Zoom transcript with one click instead of pasting.
 
 ### Readiness Checklist:
 Show before generation trigger. Items:
-- [ ] 10x goal present (show date last updated)
-- [ ] Monthly goals entered
-- [ ] At least one weekly journal entered (or marked "not this cycle")
-- [ ] Transcript attached OR explicitly marked as skipped
-- [ ] Previous cycle action items reviewed (manual checkbox)
+- [x] 10x goal present
+- [x] Monthly goals entered
+- [x] At least one weekly journal entered
+- [x] Transcript attached OR explicitly marked as skipped
+- [x] Previous cycle action items reviewed (manual checkbox)
 
 Coach can still generate if incomplete — but items are flagged in prompt + output.
 
 ### Action Items Tracker:
-- [ ] Action items list per cycle
-- [ ] Add/edit action item: owner (CEO | Coach | Other), description, due date, status
-- [ ] Status: Open / Done / Dropped
-- [ ] Previous cycle's open items shown at top of new cycle for review + carry-forward
+- [x] Action items list per cycle
+- [x] Add action item: owner (CEO | Coach | Other), description, due date
+- [x] Status: Open / Done / Dropped — click status icon to cycle
+- [x] Previous cycle's open items shown at top for carry-forward
 - [ ] Post-generation: AI suggests new action items (shown as proposals, coach must confirm before saving)
 
 ### Deliverable:

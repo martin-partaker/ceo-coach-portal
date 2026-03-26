@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft } from 'lucide-react';
 import { CycleInputForm } from '@/components/cycles/cycle-input-form';
+import { ActionItems } from '@/components/cycles/action-items';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,7 +71,16 @@ export default async function CyclePage({
       </div>
 
       {/* Input form */}
-      <CycleInputForm cycle={cycle} ceoId={ceoId} hasZoomEmail={!!coach.zoomUserEmail} />
+      <CycleInputForm
+        cycle={cycle}
+        ceoId={ceoId}
+        hasZoomEmail={!!coach.zoomUserEmail}
+        hasTenXGoal={!!ceo.tenXGoal?.trim()}
+        previousActionItemsReviewed={cycle.previousActionItemsReviewed}
+      />
+
+      {/* Action Items */}
+      <ActionItems cycleId={cycleId} />
     </div>
   );
 }

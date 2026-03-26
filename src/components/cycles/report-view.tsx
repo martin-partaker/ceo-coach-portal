@@ -188,31 +188,30 @@ export function ReportView({ cycleId }: ReportViewProps) {
             </>
           )}
 
-          {/* Email body */}
-          <div className="space-y-4">
-            {SECTION_ORDER.map((key) => {
-              const content = contentJson[key];
-              if (!content) return null;
+          {/* Email body with copy button top-right */}
+          <div className="relative">
+            <div className="absolute right-0 top-0">
+              <Button variant="outline" size="sm" onClick={handleCopyAll}>
+                {copiedAll ? (
+                  <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {copiedAll ? 'Copied!' : 'Copy email body'}
+              </Button>
+            </div>
+            <div className="space-y-4 pr-36">
+              {SECTION_ORDER.map((key) => {
+                const content = contentJson[key];
+                if (!content) return null;
 
-              return (
-                <div key={key} className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {content}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Copy button inside email card */}
-          <Separator className="my-4" />
-          <div className="flex justify-end">
-            <Button variant="outline" size="sm" onClick={handleCopyAll}>
-              {copiedAll ? (
-                <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" />
-              ) : (
-                <Copy className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {copiedAll ? 'Copied to clipboard!' : 'Copy email body'}
-            </Button>
+                return (
+                  <div key={key} className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {content}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </CardContent>
       </Card>

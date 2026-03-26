@@ -198,9 +198,14 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
       {/* Weekly Journals */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {[1, 2, 3, 4, 5].some((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)) ? (
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+            ) : (
+              <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
+            )}
             <CardTitle className="text-base font-medium">Weekly Journals</CardTitle>
-            <Badge variant="secondary" className="text-[11px]">
+            <Badge variant="secondary" className="ml-auto text-[11px]">
               {[1, 2, 3, 4, 5].filter((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)).length}/5
             </Badge>
           </div>
@@ -271,12 +276,12 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <CardTitle className="text-base font-medium">Zoom Transcript</CardTitle>
               {(isFilled(values.zoomTranscript) || values.transcriptSkipped) ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
               ) : (
-                <Circle className="h-4 w-4 text-muted-foreground/40" />
+                <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
               )}
+              <CardTitle className="text-base font-medium">Zoom Transcript</CardTitle>
             </div>
             {!values.transcriptSkipped && (
               <ZoomImportDialog
@@ -524,13 +529,13 @@ function InputSection({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-medium">{title}</CardTitle>
+        <div className="flex items-center gap-3">
           {filled ? (
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
           ) : (
-            <Circle className="h-4 w-4 text-muted-foreground/40" />
+            <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
           )}
+          <CardTitle className="text-base font-medium">{title}</CardTitle>
         </div>
       </CardHeader>
       <Separator />

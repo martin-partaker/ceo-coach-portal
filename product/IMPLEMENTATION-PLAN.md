@@ -1,7 +1,7 @@
 # CEO Coach Portal — Implementation Plan
 
-> Last updated: 2026-03-18
-> Status: Ready to build — all decisions locked
+> Last updated: 2026-03-26
+> Status: Phase 0 complete — building Phase 1
 
 ---
 
@@ -16,9 +16,11 @@
 | Auth | Neon Auth (email/password) |
 | Coach onboarding | Super admin creates coach accounts |
 | Super Admin | `is_super_admin` boolean flag on coaches table |
-| AI | Direct Anthropic API key, Claude Sonnet (claude-sonnet-4-5 or latest) |
-| Zoom | Must work at launch — credentials already registered |
-| Zoom token storage | Stored on coaches table (Neon at-rest encryption sufficient) |
+| AI | OpenAI API key (GPT) |
+| API layer | tRPC v11 + React Query v5 (end-to-end type safety) |
+| Design system | shadcn/ui (New York) + Geist fonts + OKLCH tokens — see `project-docs/DESIGN.md` |
+| Zoom | Must work at launch — Server-to-Server OAuth (shared account, coaches identified by email) |
+| Zoom token storage | N/A — S2S OAuth uses app-level credentials, not per-coach tokens |
 | Curriculum | Seeded from `/product/curriculum-seed.md` — refine after first cohort |
 | Report output | 6-section JSON + raw_text. Copy-all for email + per-section copy. |
 | Timeline | No hard deadline — build it right |

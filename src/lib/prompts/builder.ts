@@ -6,10 +6,12 @@ import type { Cycle, Ceo, Report } from '@/db/schema';
 export async function buildPrompt({
   cycle,
   ceo,
+  coachName,
   previousReport,
 }: {
   cycle: Cycle;
   ceo: Ceo;
+  coachName: string;
   previousReport: Report | null;
 }) {
   // Fetch curriculum from DB
@@ -26,32 +28,40 @@ export async function buildPrompt({
   if (!cycle.zoomTranscript?.trim() && !cycle.transcriptSkipped) missing.push('zoom transcript');
 
   const missingWarning = missing.length > 0
-    ? `\n\n⚠️ MISSING INPUTS: The following inputs were not provided: ${missing.join(', ')}. Acknowledge this gap in your output and note which sections may be less specific as a result.`
+    ? `\n\n⚠️ MISSING INPUTS: The following inputs were not provided: ${missing.join(', ')}. Work with what you have — be transparent where you're working from limited information, but don't generate vague filler.`
     : '';
 
-  const systemPrompt = `You are a world-class executive coaching analyst working within the ScaleOS / 10x coaching framework developed by Eric Partaker. Your job is to produce a coaching cycle summary report for a coach to review and send to their CEO client.
+  const ceoFirstName = ceo.name.split(' ')[0];
 
-## Framework Reference
+  const systemPrompt = `You are writing a personalised coaching update email on behalf of a coach named ${coachName} to their CEO client named ${ceo.name}. This email is sent after each coaching cycle to make the CEO feel heard, understood, and motivated.
+
+## Your role
+You are ghostwriting this email AS the coach. Write in first person ("I noticed...", "What stood out to me..."). The tone should be warm but direct — like a trusted advisor who genuinely cares about this person's success. The CEO should read this and think: "My coach really gets me."
+
+## Framework Reference (use this to inform your language and framing)
 ${curriculumText}
 
-## Guardrails
-- Stay within the 10x coaching framework. Use Eric Partaker's language: "best self," "commitment," "constraint," "leverage," "champion proof," "say/do gap."
-- No diagnostic or therapeutic language.
-- No legal, medical, or mental health claims.
-- Professional, direct, and reflective tone.
-- Be specific and evidence-based — reference actual inputs, not generic advice.
-- If inputs are missing, acknowledge it explicitly rather than generating vague filler.
-- Every suggestion must be actionable with a clear next step and owner.
+## Writing guidelines
+- Address the CEO by first name (${ceoFirstName}).
+- Write as if the coach is speaking directly — warm, specific, no corporate jargon.
+- Reference SPECIFIC things the CEO said, did, or committed to. Quote their words when possible.
+- Celebrate wins concretely — not "great progress" but "you closed the COO hire in 3 weeks."
+- Be honest about gaps — if they avoided something, name it kindly but clearly.
+- Use Eric Partaker's language naturally: "best self," "say/do gap," "constraint," "champion proof," "momentum."
+- Keep the email scannable: short paragraphs, bold for emphasis, bullet points for action items.
+- End with clear next commitments and encouragement.
+- No diagnostic or therapeutic language. No legal, medical, or mental health claims.
 
 ## Output Format
-Return a JSON object with exactly these 6 keys:
+Return a JSON object with exactly these keys:
 {
-  "progress_summary": "2-3 paragraphs summarizing this cycle's progress",
-  "key_wins": "bullet points of concrete wins from the cycle",
-  "challenges_constraints": "key challenges and the primary constraint",
-  "pattern_observations": "patterns across cycles, behavioral trends",
-  "suggested_next_steps": "3-5 prioritized, actionable next steps",
-  "suggested_resources": "relevant framework concepts or templates"
+  "subject_line": "Email subject line — personal and specific, not generic",
+  "opening": "1-2 paragraphs — personal greeting + high-level reflection on the cycle. Make them feel seen.",
+  "wins_and_progress": "What went well this cycle. Be specific — reference their actual inputs. Use bullet points for clarity.",
+  "honest_feedback": "Where they got stuck, avoided, or fell short. Kind but clear. Name the pattern if there is one.",
+  "key_insight": "The ONE most important observation or pattern you want them to sit with. 2-3 sentences max.",
+  "commitments": "Clear numbered list of what they're committing to before next session. Include owners and deadlines where possible.",
+  "closing": "Encouraging sign-off. 1-2 sentences. End with the coach's name: ${coachName}"
 }
 
 Return ONLY the JSON object, no markdown fences, no extra text.`;
@@ -79,11 +89,11 @@ ${cycle.monthlyReflection?.trim() || '(not provided)'}
 ### Zoom Session Transcript
 ${cycle.zoomTranscript?.trim() || (cycle.transcriptSkipped ? '(transcript skipped for this cycle)' : '(not provided)')}
 ${previousReport ? `
-### Previous Cycle Report Summary
-${typeof previousReport.contentJson === 'object' && previousReport.contentJson !== null ? (previousReport.contentJson as Record<string, string>).progress_summary ?? '' : ''}
+### Previous Cycle Email (for continuity)
+${previousReport.rawText?.substring(0, 1500) ?? ''}
 ` : ''}${missingWarning}
 
-Generate the coaching cycle summary report now.`;
+Write the coaching update email now.`;
 
   return { systemPrompt, userPrompt, missing };
 }

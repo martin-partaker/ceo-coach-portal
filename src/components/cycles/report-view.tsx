@@ -3,9 +3,8 @@
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import {
   Copy,
   Check,
@@ -13,29 +12,29 @@ import {
   Loader2,
   FileText,
   AlertTriangle,
+  Mail,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 interface ReportViewProps {
   cycleId: string;
 }
 
 const SECTION_ORDER = [
-  'progress_summary',
-  'key_wins',
-  'challenges_constraints',
-  'pattern_observations',
-  'suggested_next_steps',
-  'suggested_resources',
+  'opening',
+  'wins_and_progress',
+  'honest_feedback',
+  'key_insight',
+  'commitments',
+  'closing',
 ] as const;
 
-const SECTION_TITLES: Record<string, string> = {
-  progress_summary: 'Progress Summary',
-  key_wins: 'Key Wins',
-  challenges_constraints: 'Challenges & Constraints',
-  pattern_observations: 'Pattern Observations',
-  suggested_next_steps: 'Suggested Next Steps',
-  suggested_resources: 'Suggested Resources',
+const SECTION_LABELS: Record<string, string> = {
+  opening: 'Opening',
+  wins_and_progress: 'Wins & Progress',
+  honest_feedback: 'Honest Feedback',
+  key_insight: 'Key Insight',
+  commitments: 'Commitments',
+  closing: 'Closing',
 };
 
 export function ReportView({ cycleId }: ReportViewProps) {
@@ -46,20 +45,22 @@ export function ReportView({ cycleId }: ReportViewProps) {
     },
   });
 
-  const [copiedSection, setCopiedSection] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
-
-  async function handleCopy(text: string, key: string) {
-    await navigator.clipboard.writeText(text);
-    setCopiedSection(key);
-    setTimeout(() => setCopiedSection(null), 2000);
-  }
+  const [copiedSubject, setCopiedSubject] = useState(false);
 
   async function handleCopyAll() {
     if (!report.data?.rawText) return;
     await navigator.clipboard.writeText(report.data.rawText);
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
+  }
+
+  async function handleCopySubject() {
+    const json = report.data?.contentJson as Record<string, string>;
+    if (!json?.subject_line) return;
+    await navigator.clipboard.writeText(json.subject_line);
+    setCopiedSubject(true);
+    setTimeout(() => setCopiedSubject(false), 2000);
   }
 
   if (report.isLoading) {
@@ -72,7 +73,6 @@ export function ReportView({ cycleId }: ReportViewProps) {
     );
   }
 
-  // No report yet — show generate prompt
   if (!report.data) {
     return (
       <Card>
@@ -93,12 +93,12 @@ export function ReportView({ cycleId }: ReportViewProps) {
 
   return (
     <div className="space-y-4">
-      {/* Report header */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-medium">Coaching Report</h2>
+          <h2 className="text-lg font-medium">Coaching Email</h2>
           <p className="text-xs text-muted-foreground font-mono">
-            Generated {new Date(report.data.generatedAt).toLocaleString()} &middot; {report.data.modelUsed}
+            Generated {new Date(report.data.generatedAt).toLocaleString()}
           </p>
         </div>
         <div className="flex gap-2">
@@ -108,7 +108,7 @@ export function ReportView({ cycleId }: ReportViewProps) {
             ) : (
               <Copy className="mr-1.5 h-3.5 w-3.5" />
             )}
-            {copiedAll ? 'Copied!' : 'Copy full report'}
+            {copiedAll ? 'Copied!' : 'Copy email body'}
           </Button>
           <Button
             variant="outline"
@@ -126,41 +126,69 @@ export function ReportView({ cycleId }: ReportViewProps) {
         </div>
       </div>
 
-      {/* Sections */}
-      {SECTION_ORDER.map((key) => {
-        const content = contentJson[key];
-        if (!content) return null;
-
-        return (
-          <Card key={key}>
-            <CardHeader className="pb-2">
+      {/* Email preview */}
+      <Card>
+        <CardContent className="pt-6">
+          {/* Subject line */}
+          {contentJson.subject_line && (
+            <>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {SECTION_TITLES[key]}
-                </CardTitle>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => handleCopy(content, key)}
-                >
-                  {copiedSection === key ? (
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">Subject:</span>
+                  <span className="text-sm font-medium">{contentJson.subject_line}</span>
+                </div>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleCopySubject}>
+                  {copiedSubject ? (
                     <Check className="mr-1 h-3 w-3 text-emerald-500" />
                   ) : (
                     <Copy className="mr-1 h-3 w-3" />
                   )}
-                  {copiedSection === key ? 'Copied' : 'Copy'}
+                  {copiedSubject ? 'Copied' : 'Copy'}
                 </Button>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap text-sm leading-relaxed">
-                {content}
+              <Separator className="my-4" />
+            </>
+          )}
+
+          {/* Email body */}
+          <div className="space-y-4">
+            {SECTION_ORDER.map((key) => {
+              const content = contentJson[key];
+              if (!content) return null;
+
+              return (
+                <div key={key}>
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {content}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Section labels for coach reference */}
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer hover:text-foreground">
+          View section breakdown (coach reference only)
+        </summary>
+        <div className="mt-3 space-y-3">
+          {SECTION_ORDER.map((key) => {
+            const content = contentJson[key];
+            if (!content) return null;
+            return (
+              <div key={key} className="rounded-lg border border-border p-3">
+                <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {SECTION_LABELS[key]}
+                </p>
+                <p className="whitespace-pre-wrap text-sm">{content}</p>
               </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+            );
+          })}
+        </div>
+      </details>
 
       {generate.error && (
         <Card className="border-destructive/20 bg-destructive/5">

@@ -8,28 +8,26 @@ import { buildPrompt } from '@/lib/prompts/builder';
 
 const anthropic = new Anthropic();
 
-const REPORT_SECTIONS = [
-  'progress_summary',
-  'key_wins',
-  'challenges_constraints',
-  'pattern_observations',
-  'suggested_next_steps',
-  'suggested_resources',
+const EMAIL_SECTIONS = [
+  'subject_line',
+  'opening',
+  'wins_and_progress',
+  'honest_feedback',
+  'key_insight',
+  'commitments',
+  'closing',
 ] as const;
 
-const SECTION_TITLES: Record<string, string> = {
-  progress_summary: 'Progress Summary',
-  key_wins: 'Key Wins',
-  challenges_constraints: 'Challenges & Constraints',
-  pattern_observations: 'Pattern Observations',
-  suggested_next_steps: 'Suggested Next Steps',
-  suggested_resources: 'Suggested Resources',
-};
-
 function contentJsonToRawText(json: Record<string, string>): string {
-  return REPORT_SECTIONS
-    .map((key) => `## ${SECTION_TITLES[key]}\n${json[key] ?? ''}`)
-    .join('\n\n');
+  // Build a copy-pasteable email
+  const parts: string[] = [];
+  if (json.opening) parts.push(json.opening);
+  if (json.wins_and_progress) parts.push(json.wins_and_progress);
+  if (json.honest_feedback) parts.push(json.honest_feedback);
+  if (json.key_insight) parts.push(json.key_insight);
+  if (json.commitments) parts.push(json.commitments);
+  if (json.closing) parts.push(json.closing);
+  return parts.join('\n\n');
 }
 
 export const reportsRouter = createTRPCRouter({
@@ -103,6 +101,7 @@ export const reportsRouter = createTRPCRouter({
       const { systemPrompt, userPrompt, missing } = await buildPrompt({
         cycle,
         ceo,
+        coachName: ctx.coach.name,
         previousReport,
       });
 

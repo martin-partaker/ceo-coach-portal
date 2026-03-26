@@ -62,6 +62,52 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     transcriptSkipped: cycle.transcriptSkipped,
   });
 
+  const [aiSuggested, setAiSuggested] = useState<Set<string>>(() => {
+    const set = new Set<string>();
+    if (cycle.monthlyGoalsAiSuggested) set.add('monthlyGoals');
+    if (cycle.monthlyReflectionAiSuggested) set.add('monthlyReflection');
+    return set;
+  });
+  const [prefilling, setPrefilling] = useState(false);
+
+  const prefillMutation = trpc.cycles.prefill.useMutation({
+    onSuccess: (data) => {
+      setValues((prev) => ({
+        ...prev,
+        monthlyGoals: data.monthlyGoals,
+        monthlyReflection: data.monthlyReflection,
+      }));
+      setAiSuggested(new Set(['monthlyGoals', 'monthlyReflection']));
+      setPrefilling(false);
+      router.refresh();
+    },
+    onError: () => setPrefilling(false),
+  });
+
+  function triggerPrefill() {
+    setPrefilling(true);
+    prefillMutation.mutate({ cycleId: cycle.id });
+  }
+
+  // Clear AI-suggested badge when user edits a field
+  function clearAiSuggested(field: string) {
+    if (aiSuggested.has(field)) {
+      setAiSuggested((prev) => {
+        const next = new Set(prev);
+        next.delete(field);
+        return next;
+      });
+      // Persist the clear to DB
+      updateCycle.mutate({
+        id: cycle.id,
+        ...(field === 'monthlyGoals' && { monthlyGoalsAiSuggested: false }),
+        ...(field === 'monthlyReflection' && { monthlyReflectionAiSuggested: false }),
+      });
+    }
+  }
+
+  const transcriptReady = !!(values.zoomTranscript.trim()) || values.transcriptSkipped;
+
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(() => {
     // Auto-expand weeks that have content
     const expanded = new Set<number>();
@@ -115,6 +161,7 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
 
   function handleTextChange(field: CycleField, value: string) {
     setValues((prev) => ({ ...prev, [field]: value }));
+    clearAiSuggested(field);
     autoSave(field, value);
   }
 
@@ -180,106 +227,15 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
       </div>
 
 
-      {/* Monthly Goals */}
-      <InputSection
-        title="Monthly Goals & Commitments"
-        filled={isFilled(values.monthlyGoals)}
-        description="What did the CEO commit to achieving this month?"
-      >
-        <Textarea
-          value={values.monthlyGoals}
-          onChange={(e) => handleTextChange('monthlyGoals', e.target.value)}
-          placeholder="Enter the CEO's monthly goals and commitments..."
-          rows={5}
-          className={cn(saving === 'monthlyGoals' && 'border-primary/50')}
-        />
-      </InputSection>
-
-      {/* Weekly Journals */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-3">
-            {[1, 2, 3, 4, 5].some((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)) ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-            ) : (
-              <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
-            )}
-            <CardTitle className="text-base font-medium">Weekly Journals</CardTitle>
-            <Badge variant="secondary" className="ml-auto text-[11px]">
-              {[1, 2, 3, 4, 5].filter((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)).length}/5
-            </Badge>
-          </div>
-        </CardHeader>
-        <Separator />
-        <CardContent className="space-y-2 pt-4">
-          {[1, 2, 3, 4, 5].map((week) => {
-            const field = `weeklyJournal${week}` as CycleField;
-            const value = values[field] as string;
-            const expanded = expandedWeeks.has(week);
-            const filled = isFilled(value);
-
-            return (
-              <div key={week} className="rounded-lg border border-border">
-                <button
-                  type="button"
-                  onClick={() => toggleWeek(week)}
-                  className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
-                >
-                  <div className="flex items-center gap-3">
-                    {filled ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                    ) : (
-                      <Circle className="h-4 w-4 text-muted-foreground/40" />
-                    )}
-                    <span className="text-sm font-medium">Week {week}</span>
-                  </div>
-                  {expanded ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </button>
-                {expanded && (
-                  <div className="border-t border-border px-4 py-3">
-                    <Textarea
-                      value={value}
-                      onChange={(e) => handleTextChange(field, e.target.value)}
-                      placeholder={`Week ${week} journal entry...`}
-                      rows={4}
-                      className={cn(saving === field && 'border-primary/50')}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-
-      {/* Monthly Reflection */}
-      <InputSection
-        title="Monthly Reflection"
-        filled={isFilled(values.monthlyReflection)}
-        description="CEO's reflection on the month — wins, struggles, learnings."
-      >
-        <Textarea
-          value={values.monthlyReflection}
-          onChange={(e) => handleTextChange('monthlyReflection', e.target.value)}
-          placeholder="Enter the CEO's monthly reflection..."
-          rows={5}
-          className={cn(saving === 'monthlyReflection' && 'border-primary/50')}
-        />
-      </InputSection>
-
-      {/* Zoom Transcript */}
+      {/* Step 1: Zoom Transcript (always first) */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {(isFilled(values.zoomTranscript) || values.transcriptSkipped) ? (
+              {transcriptReady ? (
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
               ) : (
-                <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
+                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">1</div>
               )}
               <CardTitle className="text-base font-medium">Zoom Transcript</CardTitle>
             </div>
@@ -292,6 +248,8 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
                 onTranscriptImported={(transcript) => {
                   setValues((prev) => ({ ...prev, zoomTranscript: transcript }));
                   autoSave('zoomTranscript', transcript);
+                  // Auto-trigger prefill after import
+                  setTimeout(() => triggerPrefill(), 1000);
                 }}
               />
             )}
@@ -342,8 +300,126 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
         </CardContent>
       </Card>
 
-      {/* Completion Summary */}
-      <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} cycleId={cycle.id} />
+      {/* Prefill loading state */}
+      {prefilling && (
+        <Card className="border-primary/20 bg-primary/5">
+          <CardContent className="flex items-center gap-3 py-4">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            <span className="text-sm">Analyzing transcript and pre-filling fields...</span>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Gated content — locked until transcript is ready */}
+      {!transcriptReady ? (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <Circle className="h-8 w-8 text-muted-foreground/20" />
+            <p className="mt-3 text-sm font-medium text-muted-foreground">Import a transcript to continue</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Session inputs will unlock after importing a Zoom transcript or marking as skipped.
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          {/* Monthly Goals */}
+          <InputSection
+            title="Monthly Goals & Commitments"
+            filled={isFilled(values.monthlyGoals)}
+            description="What did the CEO commit to achieving this month?"
+            aiSuggested={aiSuggested.has('monthlyGoals')}
+          >
+            <Textarea
+              value={values.monthlyGoals}
+              onChange={(e) => handleTextChange('monthlyGoals', e.target.value)}
+              placeholder="Enter the CEO's monthly goals and commitments..."
+              rows={5}
+              className={cn(saving === 'monthlyGoals' && 'border-primary/50')}
+            />
+          </InputSection>
+
+          {/* Weekly Journals */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                {[1, 2, 3, 4, 5].some((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)) ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                ) : (
+                  <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
+                )}
+                <CardTitle className="text-base font-medium">Weekly Journals</CardTitle>
+                <Badge variant="secondary" className="ml-auto text-[11px]">
+                  {[1, 2, 3, 4, 5].filter((w) => isFilled(values[`weeklyJournal${w}` as keyof typeof values] as string)).length}/5
+                </Badge>
+              </div>
+            </CardHeader>
+            <Separator />
+            <CardContent className="space-y-2 pt-4">
+              {[1, 2, 3, 4, 5].map((week) => {
+                const field = `weeklyJournal${week}` as CycleField;
+                const value = values[field] as string;
+                const expanded = expandedWeeks.has(week);
+                const filled = isFilled(value);
+
+                return (
+                  <div key={week} className="rounded-lg border border-border">
+                    <button
+                      type="button"
+                      onClick={() => toggleWeek(week)}
+                      className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                    >
+                      <div className="flex items-center gap-3">
+                        {filled ? (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                        ) : (
+                          <Circle className="h-4 w-4 text-muted-foreground/40" />
+                        )}
+                        <span className="text-sm font-medium">Week {week}</span>
+                      </div>
+                      {expanded ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </button>
+                    {expanded && (
+                      <div className="border-t border-border px-4 py-3">
+                        <Textarea
+                          value={value}
+                          onChange={(e) => handleTextChange(field, e.target.value)}
+                          placeholder={`Week ${week} journal entry...`}
+                          rows={4}
+                          className={cn(saving === field && 'border-primary/50')}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          {/* Monthly Reflection */}
+          <InputSection
+            title="Monthly Reflection"
+            filled={isFilled(values.monthlyReflection)}
+            description="CEO's reflection on the month — wins, struggles, learnings."
+            aiSuggested={aiSuggested.has('monthlyReflection')}
+          >
+            <Textarea
+              value={values.monthlyReflection}
+              onChange={(e) => handleTextChange('monthlyReflection', e.target.value)}
+              placeholder="Enter the CEO's monthly reflection..."
+              rows={5}
+              className={cn(saving === 'monthlyReflection' && 'border-primary/50')}
+            />
+          </InputSection>
+
+          {/* Completion Summary */}
+          <CompletionSummary values={values} hasTenXGoal={hasTenXGoal} cycleId={cycle.id} />
+        </>
+      )}
     </div>
   );
 }
@@ -519,11 +595,13 @@ function InputSection({
   title,
   filled,
   description,
+  aiSuggested,
   children,
 }: {
   title: string;
   filled: boolean;
   description: string;
+  aiSuggested?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -536,6 +614,12 @@ function InputSection({
             <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
           )}
           <CardTitle className="text-base font-medium">{title}</CardTitle>
+          {aiSuggested && (
+            <Badge className="ml-auto bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20 text-[10px]">
+              <Sparkles className="mr-1 h-3 w-3" />
+              AI-suggested
+            </Badge>
+          )}
         </div>
       </CardHeader>
       <Separator />

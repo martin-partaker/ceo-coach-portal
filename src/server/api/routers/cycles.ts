@@ -1,8 +1,12 @@
 import { z } from 'zod';
 import { eq, desc, and } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
+import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { ceos, cycles, actionItems } from '@/db/schema';
+import { buildPrefillPrompt } from '@/lib/prompts/prefill';
+
+const anthropic = new Anthropic();
 
 export const cyclesRouter = createTRPCRouter({
   get: protectedProcedure
@@ -78,6 +82,8 @@ export const cyclesRouter = createTRPCRouter({
         zoomMeetingId: z.string().nullable().optional(),
         transcriptSkipped: z.boolean().optional(),
         previousActionItemsReviewed: z.boolean().optional(),
+        monthlyGoalsAiSuggested: z.boolean().optional(),
+        monthlyReflectionAiSuggested: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -125,5 +131,68 @@ export const cyclesRouter = createTRPCRouter({
         .from(cycles)
         .where(eq(cycles.ceoId, input.ceoId))
         .orderBy(desc(cycles.createdAt));
+    }),
+
+  prefill: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (!cycle.zoomTranscript?.trim()) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Import a transcript first before pre-filling.',
+        });
+      }
+
+      const { systemPrompt, userPrompt } = await buildPrefillPrompt({ cycle, ceo });
+
+      const message = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      });
+
+      const textBlock = message.content.find((b) => b.type === 'text');
+      if (!textBlock || textBlock.type !== 'text') {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'No AI response' });
+      }
+
+      let parsed: { monthlyGoals: string; monthlyReflection: string };
+      try {
+        parsed = JSON.parse(textBlock.text);
+      } catch {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to parse AI response' });
+      }
+
+      // Save to DB and mark as AI-suggested
+      const [updated] = await ctx.db
+        .update(cycles)
+        .set({
+          monthlyGoals: parsed.monthlyGoals,
+          monthlyReflection: parsed.monthlyReflection,
+          monthlyGoalsAiSuggested: true,
+          monthlyReflectionAiSuggested: true,
+        })
+        .where(eq(cycles.id, input.cycleId))
+        .returning();
+
+      return {
+        monthlyGoals: parsed.monthlyGoals,
+        monthlyReflection: parsed.monthlyReflection,
+      };
     }),
 });

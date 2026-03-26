@@ -52,6 +52,8 @@ export const cycles = pgTable('cycles', {
   previousActionItemsReviewed: boolean('previous_action_items_reviewed')
     .notNull()
     .default(false),
+  monthlyGoalsAiSuggested: boolean('monthly_goals_ai_suggested').notNull().default(false),
+  monthlyReflectionAiSuggested: boolean('monthly_reflection_ai_suggested').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

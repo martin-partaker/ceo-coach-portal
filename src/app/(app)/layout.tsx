@@ -16,11 +16,17 @@ export default async function AppLayout({
     redirect('/auth/sign-in');
   }
 
-  const coach = await ensureCoach({
-    neonAuthUserId: session.user.id,
-    name: session.user.name ?? '',
-    email: session.user.email ?? '',
-  });
+  let coach;
+  try {
+    coach = await ensureCoach({
+      neonAuthUserId: session.user.id,
+      name: session.user.name ?? '',
+      email: session.user.email ?? '',
+    });
+  } catch {
+    // If coach creation fails (e.g., email conflict), redirect to sign-in
+    redirect('/auth/sign-in');
+  }
 
   return (
     <TRPCProvider>

@@ -125,12 +125,9 @@ export default async function DashboardPage() {
             <p className="mt-1 text-sm text-muted-foreground">
               Add your first coachee to get started.
             </p>
-            <Button asChild className="mt-6" size="sm">
-              <Link href="/ceos/new">
-                <Plus className="mr-1.5 h-4 w-4" />
-                Add CEO
-              </Link>
-            </Button>
+            <div className="mt-6">
+              <AddCeoDialog />
+            </div>
           </CardContent>
         </Card>
       ) : (

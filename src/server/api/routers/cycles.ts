@@ -67,6 +67,26 @@ export const cyclesRouter = createTRPCRouter({
           periodEnd: input.periodEnd ?? null,
         })
         .returning();
+
+      // Auto-seed journal entries based on session dates
+      if (input.periodStart && input.periodEnd) {
+        const start = new Date(input.periodStart);
+        const end = new Date(input.periodEnd);
+        const weeks = Math.min(Math.ceil((end.getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000)), 8);
+        const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+        for (let i = 0; i < weeks; i++) {
+          const weekStart = new Date(start.getTime() + i * 7 * 24 * 60 * 60 * 1000);
+          const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+          await ctx.db.insert(journalEntries).values({
+            cycleId: created.id,
+            weekNumber: i + 1,
+            title: `Week ${i + 1} — ${fmt(weekStart)} to ${fmt(weekEnd)}`,
+            content: '',
+          });
+        }
+      }
+
       return created;
     }),
 

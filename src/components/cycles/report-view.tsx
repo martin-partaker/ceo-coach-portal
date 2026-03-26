@@ -141,26 +141,11 @@ export function ReportView({ cycleId }: ReportViewProps) {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-medium">Coaching Email</h2>
-          <p className="text-xs text-muted-foreground font-mono">
-            Generated {new Date(report.data.generatedAt).toLocaleString()}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => generate.mutate({ cycleId })}
-          disabled={generate.isPending}
-        >
-          {generate.isPending ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          Regenerate
-        </Button>
+      <div>
+        <h2 className="text-lg font-medium">Coaching Email</h2>
+        <p className="text-xs text-muted-foreground font-mono">
+          Generated {new Date(report.data.generatedAt).toLocaleString()}
+        </p>
       </div>
 
       {/* Email preview */}
@@ -168,50 +153,48 @@ export function ReportView({ cycleId }: ReportViewProps) {
         <CardContent className="pt-6">
           {/* Subject line */}
           {contentJson.subject_line && (
-            <>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="text-xs shrink-0 text-muted-foreground">Subject:</span>
-                  <span className="text-sm font-medium truncate">{contentJson.subject_line}</span>
-                </div>
-                <Button variant="ghost" size="sm" className="h-7 shrink-0 text-xs" onClick={handleCopySubject}>
-                  {copiedSubject ? (
-                    <Check className="mr-1 h-3 w-3 text-emerald-500" />
-                  ) : (
-                    <Copy className="mr-1 h-3 w-3" />
-                  )}
-                  {copiedSubject ? 'Copied' : 'Copy'}
-                </Button>
-              </div>
-              <Separator className="my-4" />
-            </>
+            <div className="flex items-center gap-2 min-w-0">
+              <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="text-xs shrink-0 text-muted-foreground">Subject:</span>
+              <span className="text-sm font-medium truncate">{contentJson.subject_line}</span>
+            </div>
           )}
 
-          {/* Email body with copy button top-right */}
-          <div className="relative">
-            <div className="absolute right-0 top-0">
-              <Button variant="outline" size="sm" onClick={handleCopyAll}>
-                {copiedAll ? (
-                  <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" />
-                ) : (
-                  <Copy className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                {copiedAll ? 'Copied!' : 'Copy email body'}
-              </Button>
-            </div>
-            <div className="space-y-4 pr-36">
-              {SECTION_ORDER.map((key) => {
-                const content = contentJson[key];
-                if (!content) return null;
+          {/* Action bar */}
+          <Separator className="my-4" />
+          <div className="mb-4 flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={handleCopySubject}>
+              {copiedSubject ? <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
+              {copiedSubject ? 'Copied!' : 'Copy subject'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleCopyAll}>
+              {copiedAll ? <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
+              {copiedAll ? 'Copied!' : 'Copy email body'}
+            </Button>
+            <div className="flex-1" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => generate.mutate({ cycleId })}
+              disabled={generate.isPending}
+            >
+              {generate.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+              Regenerate
+            </Button>
+          </div>
+          <Separator className="mb-6" />
 
-                return (
-                  <div key={key} className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {content}
-                  </div>
-                );
-              })}
-            </div>
+          {/* Email body */}
+          <div className="space-y-4">
+            {SECTION_ORDER.map((key) => {
+              const content = contentJson[key];
+              if (!content) return null;
+              return (
+                <div key={key} className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {content}
+                </div>
+              );
+            })}
           </div>
         </CardContent>
       </Card>

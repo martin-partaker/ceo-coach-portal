@@ -151,17 +151,7 @@ export function ReportView({ cycleId }: ReportViewProps) {
       {/* Email preview */}
       <Card>
         <CardContent className="pt-6">
-          {/* Subject line */}
-          {contentJson.subject_line && (
-            <div className="flex items-center gap-2 min-w-0">
-              <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="text-xs shrink-0 text-muted-foreground">Subject:</span>
-              <span className="text-sm font-medium truncate">{contentJson.subject_line}</span>
-            </div>
-          )}
-
           {/* Action bar */}
-          <Separator className="my-4" />
           <div className="mb-4 flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={handleCopySubject}>
               {copiedSubject ? <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
@@ -182,6 +172,18 @@ export function ReportView({ cycleId }: ReportViewProps) {
               Regenerate
             </Button>
           </div>
+
+          {/* Subject line */}
+          {contentJson.subject_line && (
+            <>
+              <Separator className="mb-4" />
+              <div className="mb-4 flex items-center gap-2 min-w-0">
+                <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="text-xs shrink-0 text-muted-foreground">Subject:</span>
+                <span className="text-sm font-medium truncate">{contentJson.subject_line}</span>
+              </div>
+            </>
+          )}
           <Separator className="mb-6" />
 
           {/* Email body */}

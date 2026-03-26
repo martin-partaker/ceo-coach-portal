@@ -28,6 +28,8 @@ import type { Cycle } from '@/db/schema';
 interface CycleInputFormProps {
   cycle: Cycle;
   ceoId: string;
+  ceoName: string;
+  cycleLabel: string;
   hasZoomEmail: boolean;
   hasTenXGoal?: boolean;
   previousActionItemsReviewed?: boolean;
@@ -46,7 +48,7 @@ type CycleField = keyof Pick<
   | 'transcriptSkipped'
 >;
 
-export function CycleInputForm({ cycle, ceoId, hasZoomEmail, hasTenXGoal, previousActionItemsReviewed: initialReviewed }: CycleInputFormProps) {
+export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail, hasTenXGoal, previousActionItemsReviewed: initialReviewed }: CycleInputFormProps) {
   const router = useRouter();
 
   const [values, setValues] = useState({
@@ -139,24 +141,47 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail, hasTenXGoal, previo
 
   const isFilled = (val: string) => val.trim().length > 0;
 
+  const inputsFilled = [
+    isFilled(values.monthlyGoals),
+    isFilled(values.weeklyJournal1),
+    isFilled(values.weeklyJournal2),
+    isFilled(values.weeklyJournal3),
+    isFilled(values.weeklyJournal4),
+    isFilled(values.weeklyJournal5),
+    isFilled(values.monthlyReflection),
+    isFilled(values.zoomTranscript) || values.transcriptSkipped,
+  ];
+  const filledCount = inputsFilled.filter(Boolean).length;
+  const totalInputs = inputsFilled.length;
+
   return (
     <div className="space-y-6">
-      {/* Save indicator */}
-      <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
-        {saving ? (
-          <>
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span>Saving...</span>
-          </>
-        ) : lastSaved ? (
-          <>
-            <Save className="h-3 w-3" />
-            <span>Saved at {lastSaved}</span>
-          </>
-        ) : (
-          <span>Auto-saves on edit</span>
-        )}
+      {/* Sticky header with live progress */}
+      <div className="sticky top-0 z-10 -mx-6 border-b border-border bg-background/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight">{cycleLabel}</h1>
+            <p className="text-xs text-muted-foreground">Coaching cycle for {ceoName}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Save status */}
+            <span className="text-[11px] text-muted-foreground">
+              {saving ? 'Saving...' : lastSaved ? `Saved ${lastSaved}` : ''}
+            </span>
+            {/* Progress badge */}
+            <Badge
+              variant="secondary"
+              className={cn(
+                'text-xs',
+                filledCount === totalInputs && 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+              )}
+            >
+              {filledCount}/{totalInputs} inputs
+            </Badge>
+          </div>
+        </div>
       </div>
+
 
       {/* Monthly Goals */}
       <InputSection

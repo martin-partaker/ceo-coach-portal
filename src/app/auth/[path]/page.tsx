@@ -1,4 +1,6 @@
 import { AuthView } from '@neondatabase/auth/react';
+import { Users } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
 
 export const dynamicParams = false;
 
@@ -14,12 +16,32 @@ export default async function AuthPage({
   const { path } = await params;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-gray-50 p-4">
-      <div className="mb-8 text-center">
-        <h1 className="text-2xl font-bold text-gray-900">CEO Coach Portal</h1>
-        <p className="mt-1 text-sm text-gray-500">Executive coaching platform</p>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+      <div className="w-full max-w-sm">
+        {/* Brand */}
+        <div className="mb-8 flex flex-col items-center text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
+            <Users className="h-6 w-6 text-primary-foreground" />
+          </div>
+          <h1 className="mt-4 text-xl font-semibold tracking-tight text-foreground">
+            CEO Coach Portal
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Executive coaching platform
+          </p>
+        </div>
+
+        {/* Auth form */}
+        <Card>
+          <CardContent className="pt-6">
+            <AuthView path={path} />
+          </CardContent>
+        </Card>
+
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          Powered by Partaker Coaching
+        </p>
       </div>
-      <AuthView path={path} />
     </main>
   );
 }

@@ -51,10 +51,10 @@ export function CreateCycleDialog({ ceoId }: CreateCycleDialogProps) {
 
   // Generate a default label like "Mar 26 → Apr 26"
   function generateDefaults() {
-    const start = periodStart ? new Date(periodStart) : new Date();
-    const end = periodEnd
-      ? new Date(periodEnd)
-      : new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const end = periodEnd ? new Date(periodEnd) : new Date();
+    const start = periodStart
+      ? new Date(periodStart)
+      : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
     const fmt = (d: Date) =>
       d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const toIso = (d: Date) => d.toISOString().split('T')[0];

@@ -168,6 +168,12 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
     onError: () => setSaving(null),
   });
 
+  const deleteTranscriptMutation = trpc.cycles.deleteTranscript.useMutation({
+    onSuccess: (_, variables) => {
+      setTranscriptList((prev) => prev.filter((t) => t.id !== variables.id));
+    },
+  });
+
   const addJournalMutation = trpc.cycles.addJournal.useMutation({
     onSuccess: (created) => {
       if (created) {
@@ -343,7 +349,9 @@ export function CycleInputForm({ cycle, ceoId, ceoName, cycleLabel, hasZoomEmail
               {transcriptList.length > 0 ? (
                 <div className="space-y-2">
                   {transcriptList.map((t) => (
-                    <TranscriptCard key={t.id} transcript={t} />
+                    <TranscriptCard key={t.id} transcript={t} onDelete={(id) => {
+                      deleteTranscriptMutation.mutate({ id });
+                    }} />
                   ))}
                 </div>
               ) : (
@@ -690,8 +698,9 @@ function CompletionSummary({ values, hasTenXGoal, cycleId, journalCount, transcr
   );
 }
 
-function TranscriptCard({ transcript }: { transcript: Transcript }) {
+function TranscriptCard({ transcript, onDelete }: { transcript: Transcript; onDelete?: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <div className="rounded-lg border border-border">
@@ -719,10 +728,27 @@ function TranscriptCard({ transcript }: { transcript: Transcript }) {
         )}
       </button>
       {expanded && (
-        <div className="border-t border-border px-4 py-3">
+        <div className="border-t border-border px-4 py-3 space-y-3">
           <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground font-mono leading-relaxed">
             {transcript.content}
           </pre>
+          {onDelete && (
+            confirmDelete ? (
+              <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-2">
+                <span className="flex-1 text-xs text-destructive">Remove this transcript?</span>
+                <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => onDelete(transcript.id)}>
+                  Remove
+                </Button>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setConfirmDelete(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-destructive" onClick={() => setConfirmDelete(true)}>
+                Remove transcript
+              </Button>
+            )
+          )}
         </div>
       )}
     </div>

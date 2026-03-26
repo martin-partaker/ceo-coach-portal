@@ -133,6 +133,30 @@ export const adminRouter = createTRPCRouter({
       return updated;
     }),
 
+  updateCoachZoomEmail: adminProcedure
+    .input(
+      z.object({
+        coachId: z.string().uuid(),
+        zoomUserEmail: z.string().email().nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [coach] = await ctx.db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, input.coachId))
+        .limit(1);
+      if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [updated] = await ctx.db
+        .update(coaches)
+        .set({ zoomUserEmail: input.zoomUserEmail })
+        .where(eq(coaches.id, input.coachId))
+        .returning();
+
+      return updated;
+    }),
+
   // View-as: get a coach's dashboard data (CEOs with status)
   viewAsCoach: adminProcedure
     .input(z.object({ coachId: z.string().uuid() }))

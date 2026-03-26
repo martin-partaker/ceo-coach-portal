@@ -12,7 +12,6 @@ export const coachesRouter = createTRPCRouter({
     .input(
       z.object({
         name: z.string().min(1).optional(),
-        zoomUserEmail: z.string().email().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -20,9 +19,6 @@ export const coachesRouter = createTRPCRouter({
         .update(coaches)
         .set({
           ...(input.name !== undefined && { name: input.name }),
-          ...(input.zoomUserEmail !== undefined && {
-            zoomUserEmail: input.zoomUserEmail,
-          }),
         })
         .where(eq(coaches.id, ctx.coach.id))
         .returning();

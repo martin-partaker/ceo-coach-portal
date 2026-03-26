@@ -1,7 +1,7 @@
 import { createServerCaller } from '@/lib/trpc/server';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { ZoomEmailSetting } from '@/components/settings/zoom-email-setting';
+import { Badge } from '@/components/ui/badge';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,24 +14,9 @@ export default async function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Manage your account and integrations.
+          Your account and integration settings.
         </p>
       </div>
-
-      {/* Zoom Integration */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-medium">Zoom Integration</CardTitle>
-        </CardHeader>
-        <Separator />
-        <CardContent className="pt-4">
-          <p className="mb-4 text-sm text-muted-foreground">
-            Enter the email address associated with your Zoom account.
-            This is used to find your cloud-recorded meetings and pull transcripts.
-          </p>
-          <ZoomEmailSetting currentEmail={coach.zoomUserEmail} />
-        </CardContent>
-      </Card>
 
       {/* Profile */}
       <Card>
@@ -40,7 +25,7 @@ export default async function SettingsPage() {
         </CardHeader>
         <Separator />
         <CardContent className="pt-4">
-          <div className="space-y-2 text-sm">
+          <div className="space-y-3 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Name</span>
               <span>{coach.name}</span>
@@ -49,6 +34,28 @@ export default async function SettingsPage() {
               <span className="text-muted-foreground">Email</span>
               <span className="font-mono text-xs">{coach.email}</span>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Zoom Integration */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-medium">Zoom Integration</CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Zoom email</span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs">{coach.zoomUserEmail ?? 'Not set'}</span>
+                <Badge variant="outline" className="text-[10px]">Admin managed</Badge>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Your Zoom email is managed by your admin. Contact them if it needs updating.
+            </p>
           </div>
         </CardContent>
       </Card>

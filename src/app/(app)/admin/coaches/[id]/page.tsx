@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/breadcrumb';
 import { AdminToggleButton } from '@/components/admin/admin-toggle-button';
 import { ImpersonateButton } from '@/components/admin/impersonate-button';
+import { ZoomEmailAdmin } from '@/components/admin/zoom-email-admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,9 +84,11 @@ export default async function AdminCoachDetailPage({
               <span className="text-muted-foreground">Status</span>
               <span>{!coach.neonAuthUserId ? 'Pending signup' : 'Active'}</span>
             </div>
-            <div className="flex justify-between">
+            <div>
               <span className="text-muted-foreground">Zoom email</span>
-              <span className="font-mono text-xs">{coach.zoomUserEmail ?? 'Not set'}</span>
+              <div className="mt-1">
+                <ZoomEmailAdmin coachId={coach.id} currentEmail={coach.zoomUserEmail} />
+              </div>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Joined</span>

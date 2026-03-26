@@ -252,7 +252,12 @@ export function CycleInputForm({ cycle, ceoId, hasZoomEmail }: CycleInputFormPro
               )}
             </div>
             {!values.transcriptSkipped && (
-              <ZoomImportDialog cycleId={cycle.id} ceoId={ceoId} hasZoomEmail={hasZoomEmail} />
+              <ZoomImportDialog
+                cycleId={cycle.id}
+                ceoId={ceoId}
+                hasZoomEmail={hasZoomEmail}
+                onTranscriptImported={(transcript) => setValues((prev) => ({ ...prev, zoomTranscript: transcript }))}
+              />
             )}
           </div>
         </CardHeader>

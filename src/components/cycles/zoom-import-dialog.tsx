@@ -21,9 +21,10 @@ interface ZoomImportDialogProps {
   cycleId: string;
   ceoId: string;
   hasZoomEmail: boolean;
+  onTranscriptImported?: (transcript: string) => void;
 }
 
-export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail }: ZoomImportDialogProps) {
+export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, onTranscriptImported }: ZoomImportDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [selectedMeetingId, setSelectedMeetingId] = useState<number | null>(null);
@@ -35,8 +36,9 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail }: ZoomImportDia
   );
 
   const importTranscript = trpc.zoom.importTranscript.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       setImportSuccess(true);
+      onTranscriptImported?.(data.cycle.zoomTranscript ?? '');
       setTimeout(() => {
         setOpen(false);
         setImportSuccess(false);

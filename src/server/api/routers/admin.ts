@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { eq, desc, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
-import { coaches, ceos, cycles, reports } from '@/db/schema';
+import { coaches, ceos, cycles, reports, ceoEmailAliases } from '@/db/schema';
 
 export const adminRouter = createTRPCRouter({
   listCoaches: adminProcedure.query(async ({ ctx }) => {
@@ -156,6 +156,60 @@ export const adminRouter = createTRPCRouter({
 
       return updated;
     }),
+
+  // Flat list of every CEO across all coaches — for /admin/ceos
+  listAllCeos: adminProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        ceo: ceos,
+        coach: coaches,
+      })
+      .from(ceos)
+      .innerJoin(coaches, eq(ceos.coachId, coaches.id))
+      .orderBy(desc(ceos.createdAt));
+
+    const enriched = await Promise.all(
+      rows.map(async ({ ceo, coach }) => {
+        const [cycleCountRow] = await ctx.db
+          .select({ count: sql<number>`count(*)` })
+          .from(cycles)
+          .where(eq(cycles.ceoId, ceo.id));
+
+        const [latestCycle] = await ctx.db
+          .select({ id: cycles.id, label: cycles.label, periodEnd: cycles.periodEnd })
+          .from(cycles)
+          .where(eq(cycles.ceoId, ceo.id))
+          .orderBy(desc(cycles.periodStart))
+          .limit(1);
+
+        let hasReport = false;
+        if (latestCycle) {
+          const [r] = await ctx.db
+            .select({ id: reports.id })
+            .from(reports)
+            .where(eq(reports.cycleId, latestCycle.id))
+            .limit(1);
+          hasReport = !!r;
+        }
+
+        const aliases = await ctx.db
+          .select({ email: ceoEmailAliases.email })
+          .from(ceoEmailAliases)
+          .where(eq(ceoEmailAliases.ceoId, ceo.id));
+
+        return {
+          ceo,
+          coach,
+          cycleCount: Number(cycleCountRow?.count ?? 0),
+          latestCycle: latestCycle ?? null,
+          hasReport,
+          aliasEmails: aliases.map((a) => a.email),
+        };
+      })
+    );
+
+    return enriched;
+  }),
 
   // View-as: get a coach's dashboard data (CEOs with status)
   viewAsCoach: adminProcedure

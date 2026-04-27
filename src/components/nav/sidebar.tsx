@@ -18,7 +18,8 @@ const navItems = [
 ];
 
 const adminItems = [
-  { href: '/admin', label: 'Admin', icon: ShieldCheck },
+  { href: '/admin', label: 'Coaches', icon: ShieldCheck },
+  { href: '/admin/ceos', label: 'All CEOs', icon: Users },
   { href: '/admin/inbox', label: 'Inbox', icon: Inbox },
 ];
 
@@ -77,7 +78,13 @@ export function Sidebar({ isSuperAdmin }: SidebarProps) {
             </p>
             <div className="space-y-1">
               {adminItems.map(({ href, label, icon: Icon }) => {
-                const active = pathname === href || pathname.startsWith(href + '/');
+                // Longest prefix wins — prevents '/admin' from highlighting
+                // while on '/admin/ceos' or '/admin/inbox'.
+                const winningHref = [...adminItems]
+                  .map((i) => i.href)
+                  .sort((a, b) => b.length - a.length)
+                  .find((h) => pathname === h || pathname.startsWith(h + '/'));
+                const active = winningHref === href;
                 return (
                   <Link
                     key={href}

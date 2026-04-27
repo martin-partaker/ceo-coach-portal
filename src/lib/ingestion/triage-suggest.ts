@@ -88,14 +88,25 @@ function tokenSetRatio(a: string, b: string): number {
 }
 
 function scoreNameMatch(candidate: string, ceoName: string): number {
-  const tsr = tokenSetRatio(candidate, ceoName);
   const candTokens = tokens(candidate);
   const ceoTokens = tokens(ceoName);
-  const firstCand = candTokens[0] ?? '';
-  const firstCeo = ceoTokens[0] ?? '';
-  const firstNameRatio = firstCand && firstCeo ? levenshteinRatio(firstCand, firstCeo) : 0;
-  if (candTokens.length === 1) return Math.max(tsr, firstNameRatio * 0.95);
-  return Math.max(tsr, firstNameRatio * 0.9);
+  if (candTokens.length === 0 || ceoTokens.length === 0) return 0;
+
+  const firstCand = candTokens[0];
+  const firstCeo = ceoTokens[0];
+  const lastCand = candTokens[candTokens.length - 1];
+  const lastCeo = ceoTokens[ceoTokens.length - 1];
+
+  const firstRatio = levenshteinRatio(firstCand, firstCeo);
+  const tsr = tokenSetRatio(candidate, ceoName);
+
+  if (candTokens.length === 1) return Math.max(firstRatio * 0.95, tsr);
+  if (ceoTokens.length === 1) return Math.max(firstRatio, tsr);
+
+  const lastRatio = levenshteinRatio(lastCand, lastCeo);
+  if (firstCand === firstCeo && lastCand === lastCeo) return 1;
+  const combined = (firstRatio + lastRatio) / 2;
+  return Math.max(combined, tsr);
 }
 
 interface CeoWithAliases {
@@ -280,7 +291,45 @@ export async function suggestForPendingRow(
 
   const candidates = rawInput.matchCandidates;
 
-  // Zoom path: matchCandidates is an array of fuzzy entries with topMatches.
+  // Zoom path: re-compute fuzzy scores fresh at triage time using the
+  // current matcher logic, so improvements to scoreNameMatch immediately
+  // affect what the operator sees (without re-ingesting).
+  if (rawInput.source === 'zoom' && rawInput.coachId) {
+    const payload = rawInput.payloadJson as {
+      participants?: Array<{ name?: string; internal_user?: boolean; user_email?: string }>;
+    } | null;
+    const externals = (payload?.participants ?? []).filter(
+      (p) => !p.internal_user && p.name?.trim()
+    );
+    if (externals.length > 0) {
+      const candidateName = externals[0].name!;
+      const idx = ceoIndex ?? (await loadCeoIndex());
+      // Scope to the meeting host's roster (coachId is set at ingest)
+      const roster = idx.filter((c) => c.coachId === rawInput.coachId);
+      const scored = roster
+        .map((ceo) => ({ ceo, score: scoreNameMatch(candidateName, ceo.name) }))
+        .filter((s) => s.score >= 0.3)
+        .sort((a, b) => b.score - a.score);
+
+      if (scored.length > 0) {
+        const mapped: TriageSuggestion[] = scored.slice(0, 4).map((s) => ({
+          ceoId: s.ceo.id,
+          ceoName: s.ceo.name,
+          ceoEmail: s.ceo.email,
+          ceoAvatarUrl: s.ceo.avatarUrl,
+          coachId: s.ceo.coachId,
+          coachName: s.ceo.coachName,
+          confidence: Math.round(s.score * 100),
+          reasoning: `name match: "${candidateName}" ↔ "${s.ceo.name}"`,
+        }));
+        return { topSuggestion: mapped[0], alternatives: mapped.slice(1, 4) };
+      }
+    }
+  }
+
+  // Legacy fallback for older Zoom rows whose matchCandidates is an array
+  // (kept for safety; the live recompute path above should cover all cases
+  // where coachId + payload are present).
   if (Array.isArray(candidates)) {
     const fuzzy = candidates as unknown as FuzzyEntry[];
     const top = fuzzy[0]?.topMatches ?? [];

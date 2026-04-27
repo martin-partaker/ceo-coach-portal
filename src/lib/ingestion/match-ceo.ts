@@ -63,26 +63,47 @@ function tokenSetRatio(a: string, b: string): number {
 }
 
 /**
- * Score a candidate name against a CEO record.
- * Combines token-set ratio (handles "Dave Snyder" vs "David Snyder") with
- * a first-name Levenshtein boost (handles single-token candidates like "Chris").
+ * Score a candidate name against a CEO record. Combines first + last name
+ * Levenshtein ratios so that:
+ *   "Dave Dieter" ↔ "David Dieter"  (shared last name, nickname first) → high
+ *   "Dave Dieter" ↔ "Dave Snyder"   (only shared first name)            → medium
+ * Falls back to token-set ratio for unusual structures.
  */
 function scoreNameMatch(candidateName: string, ceoName: string): number {
-  const tsr = tokenSetRatio(candidateName, ceoName);
-
   const candTokens = tokens(candidateName);
   const ceoTokens = tokens(ceoName);
-  const firstCand = candTokens[0] ?? '';
-  const firstCeo = ceoTokens[0] ?? '';
-  const firstNameRatio = firstCand && firstCeo ? levenshteinRatio(firstCand, firstCeo) : 0;
+  if (candTokens.length === 0 || ceoTokens.length === 0) return 0;
 
-  // Single-token candidate: lean heavily on first-name match.
+  const firstCand = candTokens[0];
+  const firstCeo = ceoTokens[0];
+  const lastCand = candTokens[candTokens.length - 1];
+  const lastCeo = ceoTokens[ceoTokens.length - 1];
+
+  const firstRatio = levenshteinRatio(firstCand, firstCeo);
+  const tsr = tokenSetRatio(candidateName, ceoName);
+
+  // Single-token candidate (e.g. "Chris" or "Milos") — match against CEO's
+  // first name only, since there's nothing else to compare.
   if (candTokens.length === 1) {
-    return Math.max(tsr, firstNameRatio * 0.95);
+    return Math.max(firstRatio * 0.95, tsr);
   }
 
-  // Multi-token: token-set is the primary signal, slight boost from first-name agreement.
-  return Math.max(tsr, firstNameRatio * 0.9);
+  // Multi-token candidate, single-token CEO record — match against the CEO's
+  // first name OR token-set, whichever is higher.
+  if (ceoTokens.length === 1) {
+    return Math.max(firstRatio, tsr);
+  }
+
+  // Both have first + last. Combine evenly so that exact last-name + fuzzy
+  // first-name beats exact first-name + unrelated last-name.
+  const lastRatio = levenshteinRatio(lastCand, lastCeo);
+  const combined = (firstRatio + lastRatio) / 2;
+
+  // Bonus when BOTH parts agree strongly — exact matches on both dominate.
+  const bothExact = firstCand === firstCeo && lastCand === lastCeo;
+  if (bothExact) return 1;
+
+  return Math.max(combined, tsr);
 }
 
 /**

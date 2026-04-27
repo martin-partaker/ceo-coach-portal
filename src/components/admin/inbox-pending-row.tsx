@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Loader2, Plus } from 'lucide-react';
+import { MatchToExistingButton } from './match-to-existing-button';
 
 interface PendingCandidate {
   ceoId: string;
@@ -174,6 +175,10 @@ export function InboxPendingRow({ row }: { row: InboxRow }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <MatchToExistingButton
+            rawInputId={row.rawInput.id}
+            submissionEmail={submissionEmail ?? fuzzyEntries[0]?.candidateEmail ?? null}
+          />
           <CreateCeoButton
             rawInputId={row.rawInput.id}
             defaultName={

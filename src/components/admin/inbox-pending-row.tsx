@@ -80,9 +80,12 @@ export function InboxPendingRow({ row }: { row: InboxRow }) {
       : null;
 
   const assignToCeo = trpc.inbox.assignToCeo.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       utils.inbox.listPending.invalidate();
       utils.inbox.pendingCounts.invalidate();
+      if (data?.autoResolved && data.autoResolved > 0) {
+        console.info(`Auto-resolved ${data.autoResolved} more pending rows.`);
+      }
     },
   });
   const discard = trpc.inbox.discard.useMutation({
@@ -171,22 +174,16 @@ export function InboxPendingRow({ row }: { row: InboxRow }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {submissionEmail && submissionName && row.coach && (
-            <CreateCeoButton
-              rawInputId={row.rawInput.id}
-              defaultName={submissionName}
-              defaultEmail={submissionEmail}
-              defaultCoachId={row.coach.id}
-            />
-          )}
-          {!row.coach && submissionEmail && submissionName && (
-            <CreateCeoButton
-              rawInputId={row.rawInput.id}
-              defaultName={submissionName}
-              defaultEmail={submissionEmail}
-              defaultCoachId={null}
-            />
-          )}
+          <CreateCeoButton
+            rawInputId={row.rawInput.id}
+            defaultName={
+              submissionName ?? fuzzyEntries[0]?.candidateName ?? ''
+            }
+            defaultEmail={
+              submissionEmail ?? fuzzyEntries[0]?.candidateEmail ?? ''
+            }
+            defaultCoachId={row.coach?.id ?? null}
+          />
           <Button
             size="sm"
             variant="outline"
@@ -225,9 +222,14 @@ function CreateCeoButton({
 
   const { data: coachesList } = trpc.admin.listCoaches.useQuery();
   const create = trpc.inbox.createCeoFromInput.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       utils.inbox.listPending.invalidate();
       utils.inbox.pendingCounts.invalidate();
+      if (data?.autoResolved && data.autoResolved > 0) {
+        console.info(
+          `Created ${data.ceo.name}; auto-resolved ${data.autoResolved} more pending row(s).`
+        );
+      }
       setOpen(false);
     },
   });

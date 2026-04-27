@@ -12,6 +12,7 @@ import {
 } from '@/db/schema';
 import { ensureAlias, normalizeEmail } from '@/lib/ingestion/identity';
 import { projectRawInput } from '@/lib/ingestion/project';
+import { rematchPendingRows } from '@/lib/ingestion/rematch';
 
 const STATUS_VALUES = [
   'matched',
@@ -160,7 +161,9 @@ export const inboxRouter = createTRPCRouter({
       // Trigger projection
       await projectRawInput(input.rawInputId);
 
-      return { ok: true };
+      // Sweep other pending rows — the new alias may unlock more matches
+      const { resolved } = await rematchPendingRows({ coachId: ceo.coachId });
+      return { ok: true, autoResolved: resolved };
     }),
 
   createCeoFromInput: adminProcedure
@@ -213,7 +216,11 @@ export const inboxRouter = createTRPCRouter({
 
       await projectRawInput(input.rawInputId);
 
-      return createdCeo;
+      // Sweep other pending rows — they may now match by email or by name
+      // under this coach's roster.
+      const { resolved } = await rematchPendingRows({ coachId: input.coachId });
+
+      return { ceo: createdCeo, autoResolved: resolved };
     }),
 
   discard: adminProcedure

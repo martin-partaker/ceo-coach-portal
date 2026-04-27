@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { rawInputs, rawInputCeos, transcripts } from '@/db/schema';
+import { rawInputs, rawInputCeos } from '@/db/schema';
 import {
   fetchParticipants,
   fetchTranscript,
@@ -11,6 +11,7 @@ import { classifyTranscript, type TranscriptClassification } from './classify';
 import { fuzzyMatchCeoForCoach } from './match-ceo';
 import { findCycleForOccurredAt } from './match-cycle';
 import { isInternalEmail } from './identity';
+import { projectRawInput } from './project';
 import { INGESTION_CONFIG } from './config';
 
 export type ZoomIngestOutcome = 'matched' | 'pending_ceo' | 'discarded' | 'duplicate';
@@ -196,21 +197,8 @@ export async function ingestZoomMeeting(args: {
     }
   }
 
-  if (
-    matchStatus === 'matched' &&
-    cycleId &&
-    classification.includeInMonthlySummary &&
-    inserted
-  ) {
-    await db.insert(transcripts).values({
-      cycleId,
-      title: meeting.topic ?? 'Untitled meeting',
-      content: transcriptText,
-      zoomMeetingId: String(meeting.id),
-      duration: meeting.duration,
-      recordedAt: occurredAt,
-      sourceRawInputId: inserted.id,
-    });
+  if (matchStatus === 'matched' && cycleId && inserted) {
+    await projectRawInput(inserted.id);
   }
 
   return matchStatus;

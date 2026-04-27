@@ -3,6 +3,7 @@ import { projectWeeklyJournal } from './weekly-journal';
 import { projectMonthlyJournal } from './monthly-journal';
 import { projectGoalWorksheet } from './goal-worksheet';
 import { projectIntake } from './intake';
+import { projectTranscript } from './transcript';
 
 export type { Projector, ProjectionContext } from './types';
 
@@ -17,4 +18,5 @@ export const PROJECTORS: Record<string, Projector | undefined> = {
   monthly_journal: projectMonthlyJournal,
   goal_worksheet: projectGoalWorksheet,
   intake: projectIntake,
+  transcript: projectTranscript,
 };

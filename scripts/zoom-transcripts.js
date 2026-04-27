@@ -63,31 +63,74 @@ async function getAccessToken() {
 }
 
 // --- Step 2: Fetch All Cloud Recordings (paginated) ---
+function formatDateYYYYMMDD(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+function minDate(a, b) {
+  return a < b ? a : b;
+}
+
 async function getAllRecordings(token) {
-  const recordings = [];
-  let nextPageToken = "";
-  const from = "2023-01-01"; // adjust your date range
-  const to = new Date().toISOString().split("T")[0];
+  // Zoom requires a from/to range and enforces a max date window size.
+  // We iterate through time windows to approximate "all available recordings".
+  // You can override the start date with ZOOM_RECORDINGS_FROM=YYYY-MM-DD.
+  const recordingsByKey = new Map();
 
-  do {
-    const params = new URLSearchParams({
-      from,
-      to,
-      page_size: "300",
-      ...(nextPageToken && { next_page_token: nextPageToken }),
-    });
+  const earliest = new Date(process.env.ZOOM_RECORDINGS_FROM || "2010-01-01T00:00:00.000Z");
+  const today = new Date();
+  const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
 
-    // Account-level recordings list (works for account-wide access)
-    const res = await fetch(`https://api.zoom.us/v2/accounts/me/recordings?${params}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+  // Use a conservative window size to stay within Zoom limits.
+  const WINDOW_DAYS = 180;
 
-    const data = await res.json();
-    if (data.meetings) recordings.push(...data.meetings);
-    nextPageToken = data.next_page_token || "";
-  } while (nextPageToken);
+  let windowStart = earliest;
+  while (windowStart <= end) {
+    const windowEnd = minDate(addDays(windowStart, WINDOW_DAYS - 1), end);
+    const from = formatDateYYYYMMDD(windowStart);
+    const to = formatDateYYYYMMDD(windowEnd);
 
-  return recordings;
+    let nextPageToken = "";
+    do {
+      const params = new URLSearchParams({
+        from,
+        to,
+        page_size: "300",
+        ...(nextPageToken && { next_page_token: nextPageToken }),
+      });
+
+      // Account-level recordings list (works for account-wide access)
+      const res = await fetch(`https://api.zoom.us/v2/accounts/me/recordings?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          `List recordings failed (${from}..${to}): ${res.status} — ${JSON.stringify(data)}`
+        );
+      }
+
+      if (Array.isArray(data.meetings)) {
+        for (const m of data.meetings) {
+          const key = `${m.id}:${m.start_time || ""}`;
+          if (!recordingsByKey.has(key)) recordingsByKey.set(key, m);
+        }
+      }
+
+      nextPageToken = data.next_page_token || "";
+    } while (nextPageToken);
+
+    windowStart = addDays(windowEnd, 1);
+  }
+
+  return Array.from(recordingsByKey.values());
 }
 
 async function getMeetingRecordings(token, meetingId) {

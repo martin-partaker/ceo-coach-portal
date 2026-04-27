@@ -7,6 +7,9 @@ import {
   jsonb,
   integer,
   uuid,
+  uniqueIndex,
+  index,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 
 export const coaches = pgTable('coaches', {
@@ -28,6 +31,7 @@ export const ceos = pgTable('ceos', {
   email: text('email'),
   tenXGoal: text('ten_x_goal'),
   tenXGoalUpdatedAt: timestamp('ten_x_goal_updated_at'),
+  profileJson: jsonb('profile_json'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -105,6 +109,84 @@ export const curriculum = pgTable('curriculum', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
+// =====================================================================
+// Ingestion layer
+// =====================================================================
+
+export const rawInputs = pgTable(
+  'raw_inputs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ceoId: uuid('ceo_id').references(() => ceos.id, { onDelete: 'cascade' }),
+    cycleId: uuid('cycle_id').references(() => cycles.id, { onDelete: 'set null' }),
+    coachId: uuid('coach_id').references(() => coaches.id, { onDelete: 'set null' }),
+    source: text('source').notNull(),
+    contentType: text('content_type').notNull(),
+    externalId: text('external_id').notNull(),
+    occurredAt: timestamp('occurred_at').notNull(),
+    payloadJson: jsonb('payload_json').notNull(),
+    textContent: text('text_content'),
+    matchStatus: text('match_status').notNull().default('matched'),
+    matchConfidence: integer('match_confidence'),
+    matchCandidates: jsonb('match_candidates'),
+    classification: jsonb('classification'),
+    ingestedAt: timestamp('ingested_at').notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at'),
+    resolvedBy: uuid('resolved_by').references(() => coaches.id),
+  },
+  (t) => ({
+    uniqExternal: uniqueIndex('raw_inputs_source_extid_idx').on(t.source, t.externalId),
+    byStatus: index('raw_inputs_status_idx').on(t.matchStatus),
+    byCeoOccurred: index('raw_inputs_ceo_occurred_idx').on(t.ceoId, t.occurredAt),
+  })
+);
+
+export const ceoEmailAliases = pgTable('ceo_email_aliases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ceoId: uuid('ceo_id')
+    .notNull()
+    .references(() => ceos.id, { onDelete: 'cascade' }),
+  email: text('email').notNull().unique(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const ingestionCursors = pgTable('ingestion_cursors', {
+  source: text('source').primaryKey(),
+  cursor: text('cursor').notNull(),
+  lastRunAt: timestamp('last_run_at').notNull().defaultNow(),
+  lastSuccessAt: timestamp('last_success_at'),
+  lastError: text('last_error'),
+});
+
+export const rawInputCeos = pgTable(
+  'raw_input_ceos',
+  {
+    rawInputId: uuid('raw_input_id')
+      .notNull()
+      .references(() => rawInputs.id, { onDelete: 'cascade' }),
+    ceoId: uuid('ceo_id')
+      .notNull()
+      .references(() => ceos.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.rawInputId, t.ceoId] }),
+  })
+);
+
+export const tallyForms = pgTable('tally_forms', {
+  formId: text('form_id').primaryKey(),
+  name: text('name').notNull(),
+  status: text('status').notNull().default('pending_review'),
+  contentType: text('content_type').notNull().default('unknown'),
+  emailQuestionId: text('email_question_id'),
+  nameQuestionId: text('name_question_id'),
+  projectionEnabled: boolean('projection_enabled').notNull().default(false),
+  questionsSnapshot: jsonb('questions_snapshot'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
 // Type exports
 export type Coach = typeof coaches.$inferSelect;
 export type NewCoach = typeof coaches.$inferInsert;
@@ -115,3 +197,8 @@ export type Transcript = typeof transcripts.$inferSelect;
 export type ActionItem = typeof actionItems.$inferSelect;
 export type Report = typeof reports.$inferSelect;
 export type Curriculum = typeof curriculum.$inferSelect;
+export type RawInput = typeof rawInputs.$inferSelect;
+export type NewRawInput = typeof rawInputs.$inferInsert;
+export type CeoEmailAlias = typeof ceoEmailAliases.$inferSelect;
+export type IngestionCursor = typeof ingestionCursors.$inferSelect;
+export type TallyForm = typeof tallyForms.$inferSelect;

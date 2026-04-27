@@ -66,33 +66,27 @@ export async function ingestTallySubmission(args: {
     }
   }
 
-  let insertedId: string | null = null;
-  try {
-    const [inserted] = await db
-      .insert(rawInputs)
-      .values({
-        ceoId,
-        cycleId,
-        coachId,
-        source: 'tally',
-        contentType: formRow.contentType,
-        externalId: submission.id,
-        occurredAt,
-        payloadJson: submission as unknown as object,
-        textContent,
-        matchStatus,
-        matchConfidence,
-        matchCandidates: matchCandidates as object | null,
-      })
-      .returning({ id: rawInputs.id });
-    insertedId = inserted?.id ?? null;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '';
-    if (msg.includes('raw_inputs_source_extid_idx') || msg.includes('duplicate key')) {
-      return 'duplicate';
-    }
-    throw err;
-  }
+  const [inserted] = await db
+    .insert(rawInputs)
+    .values({
+      ceoId,
+      cycleId,
+      coachId,
+      source: 'tally',
+      contentType: formRow.contentType,
+      externalId: submission.id,
+      occurredAt,
+      payloadJson: submission as unknown as object,
+      textContent,
+      matchStatus,
+      matchConfidence,
+      matchCandidates: matchCandidates as object | null,
+    })
+    .onConflictDoNothing({ target: [rawInputs.source, rawInputs.externalId] })
+    .returning({ id: rawInputs.id });
+
+  if (!inserted) return 'duplicate';
+  const insertedId = inserted.id;
 
   if (insertedId && matchStatus === 'matched') {
     if (cycleId || formRow.contentType === 'intake' || formRow.contentType === 'goal_worksheet') {

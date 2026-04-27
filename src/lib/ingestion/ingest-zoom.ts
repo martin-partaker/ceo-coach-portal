@@ -181,7 +181,10 @@ export async function ingestZoomMeeting(args: {
       matchCandidates: candidates as object | null,
       classification: classification as unknown as object,
     })
+    .onConflictDoNothing({ target: [rawInputs.source, rawInputs.externalId] })
     .returning({ id: rawInputs.id });
+
+  if (!inserted) return 'duplicate';
 
   if (isGroup && allMatched && inserted) {
     for (const m of matches) {
@@ -222,7 +225,9 @@ async function insertDiscarded(args: {
   transcriptText: string;
   classification?: TranscriptClassification;
 }) {
-  await db.insert(rawInputs).values({
+  await db
+    .insert(rawInputs)
+    .values({
     coachId: args.coachId,
     source: 'zoom',
     contentType: 'transcript',
@@ -243,5 +248,6 @@ async function insertDiscarded(args: {
     textContent: args.transcriptText || null,
     matchStatus: 'discarded',
     classification: (args.classification ?? null) as unknown as object | null,
-  });
+  })
+  .onConflictDoNothing({ target: [rawInputs.source, rawInputs.externalId] });
 }

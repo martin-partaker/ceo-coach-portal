@@ -79,7 +79,12 @@ async function replayLocal(formRow: typeof tallyForms.$inferSelect) {
       else if (outcome === 'discarded') counts.discarded++;
     } catch (err) {
       counts.errors++;
-      console.error(`    ✗ ${sub.id}:`, err instanceof Error ? err.message : err);
+      const cause = err instanceof Error && 'cause' in err ? (err as { cause?: unknown }).cause : null;
+      console.error(
+        `    ✗ ${sub.id}:`,
+        err instanceof Error ? err.message.split('\n')[0] : err,
+        cause ? `(cause: ${cause instanceof Error ? cause.message : JSON.stringify(cause)})` : ''
+      );
     }
   }
   return counts;
@@ -113,7 +118,12 @@ async function replayLive(formRow: typeof tallyForms.$inferSelect) {
       else if (outcome === 'discarded') counts.discarded++;
     } catch (err) {
       counts.errors++;
-      console.error(`    ✗ ${sub.id}:`, err instanceof Error ? err.message : err);
+      const cause = err instanceof Error && 'cause' in err ? (err as { cause?: unknown }).cause : null;
+      console.error(
+        `    ✗ ${sub.id}:`,
+        err instanceof Error ? err.message.split('\n')[0] : err,
+        cause ? `(cause: ${cause instanceof Error ? cause.message : JSON.stringify(cause)})` : ''
+      );
     }
   }
   return counts;

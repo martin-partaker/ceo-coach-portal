@@ -12,7 +12,12 @@
     "seed:curriculum": "tsx --env-file=.env scripts/seed-curriculum.ts",
     "backfill:aliases": "tsx --env-file=.env scripts/backfill-aliases.ts",
     "backfill:tally": "tsx --env-file=.env scripts/backfill-tally.ts",
-    "backfill:zoom": "tsx --env-file=.env scripts/backfill-zoom.ts"
+    "backfill:zoom": "tsx --env-file=.env scripts/backfill-zoom.ts",
+    "seed:test-data": "tsx --env-file=.env scripts/seed-test-data.ts",
+    "inspect:state": "tsx --env-file=.env scripts/inspect-state.ts",
+    "reset:ingestion": "tsx --env-file=.env scripts/reset-ingestion.ts",
+    "activate:forms": "tsx --env-file=.env scripts/activate-forms.ts",
+    "inspect:projection": "tsx --env-file=.env scripts/inspect-projection.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

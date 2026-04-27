@@ -25,11 +25,25 @@ interface Props {
   submissionEmail?: string | null;
   /** Called after a successful match — useful for parent state updates. */
   onMatched?: () => void;
+  /**
+   * Pick mode: if provided, clicking a CEO row calls this instead of running
+   * the assignToCeo mutation. Used by the triage walkthrough to stage a
+   * "manual pick" the operator must Confirm in a separate step.
+   */
+  onPick?: (ceo: {
+    id: string;
+    name: string;
+    email: string | null;
+    avatarUrl: string | null;
+    coachName: string;
+  }) => void;
   /** Optional controlled-open state. When provided, the parent owns the dialog. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   /** Hide the trigger button (useful when the parent supplies its own trigger). */
   hideTrigger?: boolean;
+  /** Custom trigger label (e.g. "Change" instead of "Match"). */
+  triggerLabel?: string;
 }
 
 interface CeoRow {
@@ -108,9 +122,11 @@ export function MatchToExistingButton({
   rawInputId,
   submissionEmail,
   onMatched,
+  onPick,
   open: controlledOpen,
   onOpenChange,
   hideTrigger,
+  triggerLabel,
 }: Props) {
   const utils = trpc.useUtils();
   const [internalOpen, setInternalOpen] = useState(false);
@@ -164,6 +180,25 @@ export function MatchToExistingButton({
     },
   });
 
+  const handleRowClick = (row: CeoRow) => {
+    if (onPick) {
+      onPick({
+        id: row.ceo.id,
+        name: row.ceo.name,
+        email: row.ceo.email,
+        avatarUrl: row.ceo.avatarUrl ?? null,
+        coachName: row.coach.name,
+      });
+      setOpen(false);
+      return;
+    }
+    assign.mutate({
+      rawInputId,
+      ceoId: row.ceo.id,
+      addAliasFromSubmission: !!submissionEmail && addAlias,
+    });
+  };
+
   const renderRow = (row: CeoRow, isSuggested = false) => (
     <button
       key={`${isSuggested ? 'sug' : 'all'}-${row.ceo.id}`}
@@ -172,13 +207,7 @@ export function MatchToExistingButton({
         'hover:bg-muted/60 disabled:opacity-50',
         isSuggested && 'bg-amber-500/[0.04]'
       )}
-      onClick={() =>
-        assign.mutate({
-          rawInputId,
-          ceoId: row.ceo.id,
-          addAliasFromSubmission: !!submissionEmail && addAlias,
-        })
-      }
+      onClick={() => handleRowClick(row)}
       disabled={assign.isPending}
     >
       <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -216,7 +245,7 @@ export function MatchToExistingButton({
         <DialogTrigger asChild>
           <Button size="sm" variant="outline">
             <Link2 className="mr-1.5 h-3.5 w-3.5" />
-            Match
+            {triggerLabel ?? 'Match'}
           </Button>
         </DialogTrigger>
       )}

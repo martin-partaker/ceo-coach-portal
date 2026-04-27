@@ -1,6 +1,6 @@
 'use client';
 
-import { Mail, FileText, Video, Users, Check, X, AlertCircle, FileQuestion, MousePointerClick } from 'lucide-react';
+import { Mail, FileText, Video, Users, Check, X, AlertCircle, FileQuestion, MousePointerClick, Pencil, Undo2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import { cn } from '@/lib/utils';
@@ -270,20 +270,32 @@ function pillClasses(tone: 'ok' | 'warn' | 'fail'): string {
 
 export interface TriageCardProps {
   data: TriageCardData;
-  /**
-   * Called when an alternative is clicked. Triage walkthrough wires this to
-   * assignToCeo so the operator can pick a non-default suggestion in one tap.
-   */
+  /** Called when an alternative is clicked. */
   onPickAlternative?: (ceoId: string, ceoName: string) => void;
-  /**
-   * Called when the operator clicks the empty-state "pick a CEO" CTA, or the
-   * "pick another" CTA in any state. Walkthrough wires this to opening the
-   * Match dialog.
-   */
+  /** Called when the operator clicks the empty-state "pick a CEO" CTA. */
   onPickCeoClick?: () => void;
+  /** Called when the operator clicks the always-visible "Change" affordance. */
+  onChangeClick?: () => void;
+  /** Override the section header label (e.g. "You picked" instead of "AI proposes"). */
+  proposalLabel?: string;
+  /** Visual tone override — 'manual' renders in amber to distinguish operator picks. */
+  proposalToneOverride?: 'manual';
+  /** When in manual-pick mode, the AI's original suggestion to allow reverting. */
+  previousAiSuggestion?: TriageSuggestionView | null;
+  /** Called when the operator clicks "Revert to AI suggestion". */
+  onRevertToAi?: () => void;
 }
 
-export function TriageCard({ data, onPickAlternative, onPickCeoClick }: TriageCardProps) {
+export function TriageCard({
+  data,
+  onPickAlternative,
+  onPickCeoClick,
+  onChangeClick,
+  proposalLabel,
+  proposalToneOverride,
+  previousAiSuggestion,
+  onRevertToAi,
+}: TriageCardProps) {
   const SourceIcon = sourceIcon(data.source);
   const occurred = new Date(data.occurredAt);
   const dateStr = occurred.toLocaleDateString(undefined, {
@@ -293,8 +305,15 @@ export function TriageCard({ data, onPickAlternative, onPickCeoClick }: TriageCa
   });
 
   const top = data.topSuggestion;
+  const isManual = proposalToneOverride === 'manual';
   const tier = top ? confidenceTier(top.confidence) : 'low';
-  const tc = tierClasses(tier);
+  const tc = isManual
+    ? {
+        bar: 'bg-amber-500',
+        label: 'text-amber-700 dark:text-amber-400',
+        box: 'border-amber-500/40 bg-amber-500/[0.05] ring-1 ring-amber-500/20',
+      }
+    : tierClasses(tier);
 
   const evidencePills = buildEvidencePills({
     submitterEmail: data.submitterEmail,
@@ -384,10 +403,27 @@ export function TriageCard({ data, onPickAlternative, onPickCeoClick }: TriageCa
       {/* AI proposal */}
       <div className="px-5 py-4">
         <div className="mb-2 flex items-center justify-between">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            AI proposes
-          </p>
-          {top && (
+          <div className="flex items-center gap-2">
+            <p
+              className={cn(
+                'text-[10px] font-medium uppercase tracking-wider',
+                isManual ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+              )}
+            >
+              {proposalLabel ?? 'AI proposes'}
+            </p>
+            {onChangeClick && (
+              <button
+                type="button"
+                onClick={onChangeClick}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+              >
+                <Pencil className="h-2.5 w-2.5" />
+                {isManual ? 'change pick' : 'pick another'}
+              </button>
+            )}
+          </div>
+          {top && !isManual && (
             <div className="flex items-center gap-2">
               <span className={cn('text-xs font-medium', tc.label)}>{tierLabel(tier)}</span>
               <div className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
@@ -400,6 +436,11 @@ export function TriageCard({ data, onPickAlternative, onPickCeoClick }: TriageCa
                 {top.confidence}%
               </span>
             </div>
+          )}
+          {isManual && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+              Manual override
+            </span>
           )}
         </div>
 
@@ -465,6 +506,19 @@ export function TriageCard({ data, onPickAlternative, onPickCeoClick }: TriageCa
                 Tab
               </kbd>
             </span>
+          </button>
+        )}
+
+        {/* Revert-to-AI affordance — only shown when in manual override mode */}
+        {isManual && previousAiSuggestion && onRevertToAi && (
+          <button
+            type="button"
+            onClick={onRevertToAi}
+            className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <Undo2 className="h-3 w-3" />
+            Revert to AI suggestion: {previousAiSuggestion.ceoName}
+            <span className="text-muted-foreground/70">({previousAiSuggestion.confidence}%)</span>
           </button>
         )}
 

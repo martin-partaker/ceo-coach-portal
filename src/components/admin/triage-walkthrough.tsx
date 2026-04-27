@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Loader2, Check, ListChecks, RotateCcw, Trash2, Undo2 } from 'lucide-react';
+import { Loader2, Check, ListChecks, RotateCcw, Trash2, Undo2, Archive, Pencil, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TriageCard, type TriageCardData } from './triage-card';
 import { MatchToExistingButton } from './match-to-existing-button';
@@ -28,10 +28,19 @@ interface SessionStats {
   confirmed: number;
   overridden: number;
   discarded: number;
+  archived: number;
   skipped: number;
 }
 
-type Action = 'confirmed' | 'overridden' | 'discarded' | 'skipped';
+type Action = 'confirmed' | 'overridden' | 'discarded' | 'archived' | 'skipped';
+
+interface ManualPick {
+  ceoId: string;
+  ceoName: string;
+  ceoEmail: string | null;
+  ceoAvatarUrl: string | null;
+  coachName: string;
+}
 
 interface HistoryEntry {
   rawInputId: string;
@@ -57,6 +66,7 @@ export function TriageWalkthrough() {
     confirmed: 0,
     overridden: 0,
     discarded: 0,
+    archived: 0,
     skipped: 0,
   });
   const [totalAtStart, setTotalAtStart] = useState<number | null>(null);
@@ -64,6 +74,14 @@ export function TriageWalkthrough() {
   const [historyOffset, setHistoryOffset] = useState(0); // 0 = current item, 1 = last actioned, ...
   const [discardOpen, setDiscardOpen] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
+  // Manual pick — set when the operator clicks an alternative or picks via
+  // the dialog. Replaces the displayed "AI proposes" with their selection
+  // until they Confirm or revert.
+  const [manualPick, setManualPick] = useState<ManualPick | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Reset manual pick when the current row changes (advance / back)
+  // — implemented via effect at the bottom.
 
   // Cache every card data we've seen so Back can render historical items even
   // after they leave the live `data` (because they got resolved server-side).
@@ -107,7 +125,20 @@ export function TriageWalkthrough() {
   const assignMutation = trpc.inbox.assignToCeo.useMutation();
   const assignCycleMutation = trpc.inbox.assignCycle.useMutation();
   const discardMutation = trpc.inbox.discard.useMutation();
+  const archiveMutation = trpc.inbox.archive.useMutation();
   const restoreMutation = trpc.inbox.restore.useMutation();
+
+  // Auto-clear toast after 4s
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // Reset manualPick when current row changes
+  useEffect(() => {
+    setManualPick(null);
+  }, [currentLive?.rawInputId]);
 
   const recordAction = useCallback(
     (entry: HistoryEntry) => {
@@ -135,9 +166,36 @@ export function TriageWalkthrough() {
   });
 
   const onConfirm = useCallback(async () => {
-    if (inHistoryView) return; // Don't confirm while viewing history
-    if (!currentCardData?.topSuggestion) return;
+    if (inHistoryView) return;
+    if (!currentCardData) return;
     const id = currentCardData.rawInputId;
+
+    // If the operator manually picked a CEO (via alternative or picker),
+    // assign that one. Otherwise fall back to AI's top suggestion (or cycle
+    // assignment for pending_cycle rows).
+    if (manualPick) {
+      setStats((s) => ({ ...s, overridden: s.overridden + 1 }));
+      markActed(id);
+      recordAction({
+        rawInputId: id,
+        action: 'overridden',
+        prevState: snapshotPrev(currentCardData),
+      });
+      try {
+        await assignMutation.mutateAsync({
+          rawInputId: id,
+          ceoId: manualPick.ceoId,
+          addAliasFromSubmission: !!currentCardData.submitterEmail,
+        });
+        utils.inbox.pendingCounts.invalidate();
+        utils.inbox.triageQueue.invalidate();
+      } catch (err) {
+        console.error('confirm manual pick failed', err);
+      }
+      return;
+    }
+
+    if (!currentCardData.topSuggestion) return;
     setStats((s) => ({ ...s, confirmed: s.confirmed + 1 }));
     markActed(id);
     recordAction({ rawInputId: id, action: 'confirmed', prevState: snapshotPrev(currentCardData) });
@@ -165,6 +223,7 @@ export function TriageWalkthrough() {
   }, [
     inHistoryView,
     currentCardData,
+    manualPick,
     markActed,
     recordAction,
     assignMutation,
@@ -173,30 +232,56 @@ export function TriageWalkthrough() {
   ]);
 
   const onPickAlternative = useCallback(
-    async (ceoId: string) => {
+    (ceoId: string, ceoName: string) => {
       if (inHistoryView || !currentCardData) return;
-      const id = currentCardData.rawInputId;
-      setStats((s) => ({ ...s, overridden: s.overridden + 1 }));
-      markActed(id);
-      recordAction({
-        rawInputId: id,
-        action: 'overridden',
-        prevState: snapshotPrev(currentCardData),
+      // Find the alternative's full data from the current card
+      const alt = currentCardData.alternatives.find((a) => a.ceoId === ceoId);
+      if (!alt) return;
+      setManualPick({
+        ceoId: alt.ceoId,
+        ceoName: alt.ceoName,
+        ceoEmail: alt.ceoEmail,
+        ceoAvatarUrl: alt.ceoAvatarUrl,
+        coachName: alt.coachName,
       });
-      try {
-        await assignMutation.mutateAsync({
-          rawInputId: id,
-          ceoId,
-          addAliasFromSubmission: !!currentCardData.submitterEmail,
-        });
-        utils.inbox.pendingCounts.invalidate();
-        utils.inbox.triageQueue.invalidate();
-      } catch (err) {
-        console.error('pick alternative failed', err);
-      }
+      // Visually surface that this was a manual choice. No mutation yet —
+      // operator must press Confirm.
+      void ceoName;
     },
-    [inHistoryView, currentCardData, markActed, recordAction, assignMutation, utils]
+    [inHistoryView, currentCardData]
   );
+
+  const onPickFromDialog = useCallback(
+    (ceo: { id: string; name: string; email: string | null; avatarUrl: string | null; coachName: string }) => {
+      setManualPick({
+        ceoId: ceo.id,
+        ceoName: ceo.name,
+        ceoEmail: ceo.email,
+        ceoAvatarUrl: ceo.avatarUrl,
+        coachName: ceo.coachName,
+      });
+    },
+    []
+  );
+
+  const onRevertToAi = useCallback(() => {
+    setManualPick(null);
+  }, []);
+
+  const onArchive = useCallback(async () => {
+    if (inHistoryView || !currentCardData) return;
+    const id = currentCardData.rawInputId;
+    setStats((s) => ({ ...s, archived: s.archived + 1 }));
+    markActed(id);
+    recordAction({ rawInputId: id, action: 'archived', prevState: snapshotPrev(currentCardData) });
+    try {
+      await archiveMutation.mutateAsync({ rawInputId: id });
+      utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
+    } catch (err) {
+      console.error('archive failed', err);
+    }
+  }, [inHistoryView, currentCardData, markActed, recordAction, archiveMutation, utils]);
 
   const onDiscard = useCallback(async () => {
     if (inHistoryView || !currentCardData) return;
@@ -216,11 +301,21 @@ export function TriageWalkthrough() {
 
   const onSkip = useCallback(() => {
     if (inHistoryView || !currentCardData) return;
+    // If this is the only item remaining (after filtering already-skipped),
+    // skipping is a no-op cycle. Tell the operator they need to act.
+    const liveUnskipped = forwardQueue.filter((d) => !skippedIds.has(d.rawInputId));
+    if (liveUnskipped.length <= 1 && !skippedIds.has(currentCardData.rawInputId)) {
+      // Last unskipped item — refuse to skip
+      setToast(
+        "Last item — you can't skip past it. Confirm, change, archive, or delete."
+      );
+      return;
+    }
     const id = currentCardData.rawInputId;
     setStats((s) => ({ ...s, skipped: s.skipped + 1 }));
     setSkippedIds((s) => new Set([...s, id]));
     recordAction({ rawInputId: id, action: 'skipped', prevState: snapshotPrev(currentCardData) });
-  }, [inHistoryView, currentCardData, recordAction]);
+  }, [inHistoryView, currentCardData, recordAction, forwardQueue, skippedIds]);
 
   const onBack = useCallback(() => {
     if (history.length === 0) return;
@@ -299,6 +394,9 @@ export function TriageWalkthrough() {
       } else if (e.key.toLowerCase() === 'd') {
         e.preventDefault();
         if (!inHistoryView) setDiscardOpen(true);
+      } else if (e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        if (!inHistoryView) onArchive();
       } else if (e.key.toLowerCase() === 's') {
         e.preventDefault();
         onSkip();
@@ -315,7 +413,7 @@ export function TriageWalkthrough() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [currentCardData, confirmDisabled, inHistoryView, onConfirm, onSkip, onBack, onUndo]);
+  }, [currentCardData, confirmDisabled, inHistoryView, onConfirm, onSkip, onBack, onUndo, onArchive]);
 
   // ── Render ──
   if (isLoading) {
@@ -346,6 +444,7 @@ export function TriageWalkthrough() {
             Reviewed {total} ·{' '}
             <span className="text-foreground">{stats.confirmed}</span> confirmed ·{' '}
             <span className="text-foreground">{stats.overridden}</span> overridden ·{' '}
+            <span className="text-foreground">{stats.archived}</span> archived ·{' '}
             <span className="text-foreground">{stats.discarded}</span> discarded ·{' '}
             <span className="text-foreground">{stats.skipped}</span> skipped
           </p>
@@ -356,7 +455,7 @@ export function TriageWalkthrough() {
               onClick={() => {
                 setActedIds(new Set());
                 setSkippedIds(new Set());
-                setStats({ confirmed: 0, overridden: 0, discarded: 0, skipped: 0 });
+                setStats({ confirmed: 0, overridden: 0, discarded: 0, archived: 0, skipped: 0 });
                 setHistory([]);
                 setHistoryOffset(0);
                 setTotalAtStart(null);
@@ -423,9 +522,30 @@ export function TriageWalkthrough() {
       )}
 
       <TriageCard
-        data={currentCardData}
+        data={
+          manualPick
+            ? {
+                ...currentCardData,
+                topSuggestion: {
+                  ceoId: manualPick.ceoId,
+                  ceoName: manualPick.ceoName,
+                  ceoEmail: manualPick.ceoEmail,
+                  ceoAvatarUrl: manualPick.ceoAvatarUrl,
+                  coachName: manualPick.coachName,
+                  confidence: 100,
+                  reasoning: 'manual override',
+                },
+                alternatives: [],
+              }
+            : currentCardData
+        }
+        proposalLabel={manualPick ? 'You picked' : undefined}
+        proposalToneOverride={manualPick ? 'manual' : undefined}
+        previousAiSuggestion={manualPick ? currentCardData.topSuggestion : null}
+        onRevertToAi={manualPick ? onRevertToAi : undefined}
         onPickAlternative={inHistoryView ? undefined : onPickAlternative}
         onPickCeoClick={inHistoryView ? undefined : () => setMatchOpen(true)}
+        onChangeClick={inHistoryView ? undefined : () => setMatchOpen(true)}
       />
 
       {/* Action bar */}
@@ -453,22 +573,36 @@ export function TriageWalkthrough() {
             <Kbd>↵</Kbd>
           </Button>
           {!inHistoryView && currentLive && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setMatchOpen(true)}
+            >
+              {manualPick ? 'Change pick' : 'Match'}
+              <Kbd>Tab</Kbd>
+            </Button>
+          )}
+          {!inHistoryView && currentLive && (
             <MatchToExistingButton
               rawInputId={currentLive.rawInputId}
               submissionEmail={currentLive.submitterEmail}
               open={matchOpen}
               onOpenChange={setMatchOpen}
-              onMatched={() => {
-                setStats((s) => ({ ...s, overridden: s.overridden + 1 }));
-                markActed(currentLive.rawInputId);
-                recordAction({
-                  rawInputId: currentLive.rawInputId,
-                  action: 'overridden',
-                  prevState: snapshotPrev(currentLive as TriageCardData),
-                });
-              }}
+              hideTrigger
+              onPick={onPickFromDialog}
             />
           )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onArchive}
+            disabled={inHistoryView || archiveMutation.isPending}
+            aria-label="Archive"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Archive className="h-4 w-4" />
+            <Kbd>A</Kbd>
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -498,6 +632,20 @@ export function TriageWalkthrough() {
           Low-confidence match — Enter is disabled. Use{' '}
           <Kbd>Tab</Kbd> to pick a CEO yourself.
         </p>
+      )}
+
+      {/* Toast / inline message */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 shadow-lg backdrop-blur dark:text-amber-300">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {toast}
+          <button
+            className="ml-2 text-xs underline-offset-2 hover:underline"
+            onClick={() => setToast(null)}
+          >
+            dismiss
+          </button>
+        </div>
       )}
 
       {/* Discard confirm dialog */}

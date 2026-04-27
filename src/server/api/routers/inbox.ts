@@ -50,6 +50,7 @@ const STATUS_VALUES = [
   'pending_cycle',
   'pending_classification',
   'discarded',
+  'archived',
 ] as const;
 
 const CONTENT_TYPES = [
@@ -329,6 +330,27 @@ export const inboxRouter = createTRPCRouter({
       const { resolved } = await rematchPendingRows({ coachId: input.coachId });
 
       return { ceo: createdCeo, autoResolved: resolved };
+    }),
+
+  archive: adminProcedure
+    .input(z.object({ rawInputId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          matchStatus: 'archived',
+          resolvedAt: new Date(),
+          resolvedBy: ctx.coach.id,
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+      return { ok: true };
     }),
 
   discard: adminProcedure

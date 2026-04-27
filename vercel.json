@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/cron/tally", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/tally-discover", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/zoom", "schedule": "0 * * * *" }
+  ]
+}

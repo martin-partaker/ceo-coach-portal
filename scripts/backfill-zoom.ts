@@ -120,8 +120,14 @@ async function replayLocal(coachList: CoachLite[]) {
       const vtt = fs.readFileSync(vttPath, 'utf8');
       const transcriptText = cleanVtt(vtt);
 
+      // Local backfill quirk: transcripts/ sometimes have the same UUID
+      // across different instances of a recurring meeting (the original
+      // download script didn't track per-instance UUIDs cleanly). Synthesize
+      // a unique external_id by combining UUID + start_time so each .vtt
+      // file gets its own raw_input row.
+      const syntheticUuid = `${sidecar.meeting.uuid}:${sidecar.meeting.start_time}`;
       const meeting: ZoomRecording = {
-        uuid: sidecar.meeting.uuid,
+        uuid: syntheticUuid,
         id: sidecar.meeting.id,
         topic: sidecar.meeting.topic,
         start_time: sidecar.meeting.start_time,

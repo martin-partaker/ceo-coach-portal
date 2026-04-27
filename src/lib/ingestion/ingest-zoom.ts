@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { rawInputs, rawInputCeos } from '@/db/schema';
+import { rawInputs } from '@/db/schema';
 import {
   fetchParticipants,
   fetchTranscript,
@@ -9,9 +9,7 @@ import {
 } from '@/lib/zoom/client';
 import { classifyTranscript, type TranscriptClassification } from './classify';
 import { fuzzyMatchCeoForCoach } from './match-ceo';
-import { ensureCycleForCeoAndDate } from './match-cycle';
 import { isInternalEmail } from './identity';
-import { projectRawInput } from './project';
 import { INGESTION_CONFIG } from './config';
 
 export type ZoomIngestOutcome = 'matched' | 'pending_ceo' | 'discarded' | 'duplicate';
@@ -122,37 +120,21 @@ export async function ingestZoomMeeting(args: {
     }))
   );
 
-  const allMatched = matches.length > 0 && matches.every((m) => m.result.bestMatch !== null);
+  // Zoom transcripts ALWAYS require human verification — names from Zoom
+  // guests are inherently fuzzy (no email), and the cost of misattribution
+  // (cross-CEO contamination in the monthly summary) is high. The fuzzy
+  // matcher still runs to produce candidates for the triage suggester, but
+  // we never auto-accept.
+  const matchStatus: ZoomIngestOutcome = 'pending_ceo';
+  const candidates: unknown = matches.map((m) => ({
+    candidateName: m.participant.name,
+    candidateEmail: m.participant.user_email ?? null,
+    topMatches: m.result.topCandidates,
+  }));
   const isGroup = classification.meetingType === 'coaching_group';
-
-  let primaryCeoId: string | null = null;
-  let matchStatus: ZoomIngestOutcome = 'pending_ceo';
-  let confidence: number | null = null;
-  let candidates: unknown = null;
-
-  if (allMatched && matches.length > 0) {
-    matchStatus = 'matched';
-    primaryCeoId = matches[0].result.bestMatch!.ceoId;
-    confidence = Math.round(
-      Math.min(...matches.map((m) => m.result.bestMatch!.score)) * 100
-    );
-  } else {
-    candidates = matches.map((m) => ({
-      candidateName: m.participant.name,
-      candidateEmail: m.participant.user_email ?? null,
-      topMatches: m.result.topCandidates,
-    }));
-  }
-
-  let cycleId: string | null = null;
-  if (matchStatus === 'matched' && primaryCeoId) {
-    const cycleMatch = await ensureCycleForCeoAndDate({
-      ceoId: primaryCeoId,
-      occurredAt,
-    });
-    cycleId = cycleMatch.cycleId;
-    if (!cycleMatch.confident) confidence = Math.min(confidence ?? 100, 75);
-  }
+  const primaryCeoId: string | null = null;
+  const confidence: number | null = null;
+  const cycleId: string | null = null;
 
   const payloadJson = {
     meeting: {
@@ -188,19 +170,10 @@ export async function ingestZoomMeeting(args: {
 
   if (!inserted) return 'duplicate';
 
-  if (isGroup && allMatched && inserted) {
-    for (const m of matches) {
-      const ceoId = m.result.bestMatch!.ceoId;
-      await db
-        .insert(rawInputCeos)
-        .values({ rawInputId: inserted.id, ceoId })
-        .onConflictDoNothing();
-    }
-  }
-
-  if (matchStatus === 'matched' && cycleId && inserted) {
-    await projectRawInput(inserted.id);
-  }
+  // Group sessions: defer rawInputCeos linkage until the operator confirms
+  // each CEO via triage. (Was auto-linked when matched; now always pending.)
+  void isGroup;
+  void inserted;
 
   return matchStatus;
 }

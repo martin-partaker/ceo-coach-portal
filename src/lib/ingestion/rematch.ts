@@ -40,11 +40,10 @@ export async function rematchPendingRows(opts?: {
   for (const r of pending) {
     if (r.source === 'tally') {
       if (await tryResolveTally(r)) resolved++;
-    } else if (r.source === 'zoom') {
-      // Skip rows whose coach doesn't match the scope (cheap filter)
-      if (opts?.coachId && r.coachId && r.coachId !== opts.coachId) continue;
-      if (await tryResolveZoom(r)) resolved++;
     }
+    // Zoom rows are intentionally NOT auto-resolved by the rematch sweep —
+    // every Zoom transcript requires a human triage step regardless of fuzzy
+    // confidence (names from Zoom guests are inherently unreliable).
   }
 
   return { scanned: pending.length, resolved };

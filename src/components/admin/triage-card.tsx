@@ -29,6 +29,7 @@ export interface TriageCardData {
   coachName: string | null;
   submitterEmail: string | null;
   submitterName: string | null;
+  submittedByCoach: { email: string; name: string | null } | null;
   textSnippet: string;
   meetingTopic: string | null;
   participantsSummary: string | null;
@@ -369,12 +370,42 @@ export function TriageCard({
           </div>
         )}
 
-        {(data.submitterEmail || data.submitterName || data.participantsSummary) && (
+        {(data.submitterEmail ||
+          data.submitterName ||
+          data.participantsSummary ||
+          data.submittedByCoach) && (
           <div className="rounded-lg border border-border/80 bg-background px-3 py-2.5 text-xs">
+            {/* Coach-submitted framing — when @partaker.com filled the form on
+                behalf of a CEO, surface that as the headline so the operator
+                knows the actual subject is the client name field. */}
+            {data.submittedByCoach && (
+              <div className="mb-2 flex items-center gap-2 rounded-md border border-purple-500/30 bg-purple-500/[0.06] px-2 py-1.5 text-[11px]">
+                <span className="rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-purple-700 dark:text-purple-300">
+                  coach-authored
+                </span>
+                <span>
+                  Submitted by{' '}
+                  <span className="font-medium">
+                    {data.submittedByCoach.name ?? data.submittedByCoach.email}
+                  </span>
+                  {data.submitterName && (
+                    <>
+                      {' '}about{' '}
+                      <span className="font-medium">{data.submitterName}</span>
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
+
             <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {data.source === 'zoom' ? 'Participants · as recorded' : 'From submitter · as recorded'}
+              {data.source === 'zoom'
+                ? 'Participants · as recorded'
+                : data.submittedByCoach
+                  ? 'Client (as named on the form)'
+                  : 'From submitter · as recorded'}
             </p>
-            {data.submitterEmail && (
+            {data.submitterEmail && !data.submittedByCoach && (
               <div className="flex gap-3">
                 <span className="w-12 shrink-0 font-mono text-muted-foreground">EMAIL</span>
                 <DiffEmail
@@ -388,6 +419,12 @@ export function TriageCard({
               <div className="flex gap-3">
                 <span className="w-12 shrink-0 font-mono text-muted-foreground">NAME</span>
                 <span>{data.submitterName}</span>
+              </div>
+            )}
+            {data.submittedByCoach && (
+              <div className="mt-1 flex gap-3 text-muted-foreground">
+                <span className="w-12 shrink-0 font-mono">COACH</span>
+                <span className="font-mono">{data.submittedByCoach.email}</span>
               </div>
             )}
             {data.participantsSummary && (

@@ -19,6 +19,11 @@ export interface TriageCycleSuggestion {
   confident: boolean;
 }
 
+export interface SubmittedByCoach {
+  email: string;
+  name: string | null;
+}
+
 export interface PendingRowSuggestions {
   rawInputId: string;
   source: string;
@@ -28,6 +33,8 @@ export interface PendingRowSuggestions {
   coachName: string | null;
   submitterEmail: string | null;
   submitterName: string | null;
+  /** Set when an @partaker.com email submitted the form on behalf of a CEO. */
+  submittedByCoach: SubmittedByCoach | null;
   textSnippet: string;
   meetingTopic: string | null;
   participantsSummary: string | null;

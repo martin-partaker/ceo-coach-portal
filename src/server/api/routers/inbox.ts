@@ -128,6 +128,9 @@ export const inboxRouter = createTRPCRouter({
         candidates?.email ?? fuzzyArr?.[0]?.candidateEmail ?? payloadFallback.email ?? null;
       const submitterName =
         candidates?.name ?? fuzzyArr?.[0]?.candidateName ?? payloadFallback.name ?? null;
+      const submittedByCoach =
+        (candidates as { submittedByCoach?: { email: string; name: string | null } } | null)
+          ?.submittedByCoach ?? null;
 
       const classification = (r.classification ?? null) as {
         participantsSummary?: string;
@@ -155,6 +158,7 @@ export const inboxRouter = createTRPCRouter({
         coachName: r.coachId ? coachById.get(r.coachId) ?? null : null,
         submitterEmail,
         submitterName,
+        submittedByCoach,
         textSnippet: (r.textContent ?? '').slice(0, 8000),
         meetingTopic: payload?.meeting?.topic ?? null,
         participantsSummary: classification?.participantsSummary ?? null,

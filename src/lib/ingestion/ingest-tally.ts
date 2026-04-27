@@ -1,7 +1,11 @@
 import { db } from '@/db';
 import { rawInputs, type TallyForm } from '@/db/schema';
 import type { TallySubmission, TallyQuestion } from '@/lib/tally/client';
-import { findResponseAnswer, answerToString } from '@/lib/tally/heuristics';
+import {
+  findResponseAnswer,
+  answerToString,
+  findClientNameQuestionId,
+} from '@/lib/tally/heuristics';
 import { renderSubmissionAsText } from '@/lib/tally/render';
 import { findCeoByEmail, isInternalEmail, normalizeEmail } from './identity';
 import { ensureCycleForCeoAndDate } from './match-cycle';
@@ -28,39 +32,84 @@ export async function ingestTallySubmission(args: {
   const occurredAt = new Date(submission.submittedAt);
   const textContent = renderSubmissionAsText(questions, submission);
 
+  // Detect coach-authored submissions: any @partaker.com submitter is a coach
+  // filling in a form ABOUT a client. The actual subject is in a
+  // "Client's name" / "CEO's name" field on the form.
+  const submitterIsCoach = !!(rawEmail && isInternalEmail(rawEmail));
+  const clientQid = submitterIsCoach ? findClientNameQuestionId(questions) : null;
+  const clientName = clientQid
+    ? answerToString(findResponseAnswer(submission.responses, clientQid))
+    : null;
+  const coachInfo = submitterIsCoach
+    ? { email: rawEmail, name: rawName ?? null }
+    : null;
+
+  // For matching purposes:
+  //  - Coach submissions match by the *client* name, ignoring submitter email
+  //  - Regular submissions match by the submitter's email + name as before
+  const effectiveEmail = submitterIsCoach ? null : rawEmail;
+  const effectiveName = submitterIsCoach ? clientName : rawName;
+
   let matchStatus: TallyIngestOutcome = 'matched';
   let ceoId: string | null = null;
   let cycleId: string | null = null;
   let coachId: string | null = null;
   let matchConfidence: number | null = 100;
   // Always retain submitter identity in matchCandidates so the triage UI can
-  // show "what we received" later even after the match resolved. The trade-off:
-  // matchCandidates becomes a dual-purpose blob (submitter info always +
-  // pending-reason metadata when applicable) but the schema doesn't change.
-  let matchCandidates: unknown = rawEmail || rawName ? { email: rawEmail ?? null, name: rawName ?? null } : null;
+  // show "what we received" later. For coach-authored rows we add a
+  // submittedByCoach marker so the UI can frame "Submitted by [coach] about
+  // [client]".
+  let matchCandidates: unknown =
+    effectiveEmail || effectiveName || coachInfo
+      ? {
+          email: effectiveEmail ?? null,
+          name: effectiveName ?? null,
+          submittedByCoach: coachInfo,
+        }
+      : null;
 
-  const looksLikeTest =
-    rawName?.toLowerCase().includes('test') || (rawEmail && isInternalEmail(rawEmail));
+  // Only treat as test data if the NAME literally contains "test"
+  // (e.g. "Megan test"). @partaker.com alone is no longer auto-discard.
+  const looksLikeTest = rawName?.toLowerCase().includes('test');
 
   if (looksLikeTest) {
     matchStatus = 'discarded';
     matchConfidence = null;
-  } else if (!rawEmail) {
+  } else if (submitterIsCoach && !clientName) {
+    // Coach submitted but we couldn't find a client name — operator must triage.
     matchStatus = 'pending_ceo';
     matchConfidence = null;
-    matchCandidates = { reason: 'no_email_in_submission', name: rawName };
+    matchCandidates = {
+      reason: 'coach_submitted_no_client',
+      email: null,
+      name: null,
+      submittedByCoach: coachInfo,
+    };
+  } else if (submitterIsCoach && clientName) {
+    // Coach submission with a client name → match by name only.
+    // Name match is still ambiguous, so this lands in pending_ceo for the
+    // operator to confirm via the triage suggester (which scores by name).
+    matchStatus = 'pending_ceo';
+    matchConfidence = null;
+    matchCandidates = {
+      reason: 'coach_submitted',
+      email: null,
+      name: clientName,
+      submittedByCoach: coachInfo,
+    };
+  } else if (!effectiveEmail) {
+    matchStatus = 'pending_ceo';
+    matchConfidence = null;
+    matchCandidates = { reason: 'no_email_in_submission', name: effectiveName };
   } else {
-    const normalizedEmail = normalizeEmail(rawEmail);
+    const normalizedEmail = normalizeEmail(effectiveEmail);
     const ceo = await findCeoByEmail(normalizedEmail);
     if (!ceo) {
       matchStatus = 'pending_ceo';
       matchConfidence = null;
-      matchCandidates = { reason: 'unknown_email', email: normalizedEmail, name: rawName };
+      matchCandidates = { reason: 'unknown_email', email: normalizedEmail, name: effectiveName };
     } else {
-      // Email exact match → identity is 100% certain. Auto-resolve cycle
-      // (creating a monthly default if the CEO has no cycles yet) so the row
-      // never appears in manual triage. The submitter has already told us
-      // who they are.
+      // Email exact match → identity 100% certain. Auto-resolve cycle.
       ceoId = ceo.id;
       coachId = ceo.coachId;
       const cycleMatch = await ensureCycleForCeoAndDate({ ceoId: ceo.id, occurredAt });

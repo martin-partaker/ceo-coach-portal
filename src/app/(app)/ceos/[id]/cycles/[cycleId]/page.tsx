@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/breadcrumb';
 import { CycleInputForm } from '@/components/cycles/cycle-input-form';
 import { ReportView } from '@/components/cycles/report-view';
+import { UnconfirmedAttachmentsBanner } from '@/components/cycles/unconfirmed-attachments-banner';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +51,8 @@ export default async function CyclePage({
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
+
+      <UnconfirmedAttachmentsBanner cycleId={cycleId} />
 
       <CycleInputForm
         cycle={cycle}

@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { eq, desc, and, asc } from 'drizzle-orm';
+import { eq, desc, and, asc, lt, or, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { ceos, cycles, journalEntries, transcripts } from '@/db/schema';
+import { ceos, cycles, journalEntries, transcripts, rawInputs } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
 
 const anthropic = new Anthropic();
@@ -364,5 +364,98 @@ export const cyclesRouter = createTRPCRouter({
         monthlyGoals: parsed.monthlyGoals,
         monthlyReflection: parsed.monthlyReflection,
       };
+    }),
+
+  unconfirmedAttachments: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Verify ownership
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const rows = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(
+          and(
+            eq(rawInputs.cycleId, input.cycleId),
+            eq(rawInputs.matchStatus, 'matched'),
+            or(
+              lt(rawInputs.matchConfidence, 100),
+              sql`${rawInputs.classification} ->> 'meetingType' = 'coaching_group'`
+            )
+          )
+        )
+        .orderBy(desc(rawInputs.occurredAt));
+
+      return rows;
+    }),
+
+  confirmAttachment: protectedProcedure
+    .input(z.object({ rawInputId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw || !raw.ceoId) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Verify the CEO belongs to this coach
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, raw.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'FORBIDDEN' });
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          matchConfidence: 100,
+          resolvedAt: new Date(),
+          resolvedBy: ctx.coach.id,
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+
+      return { ok: true };
+    }),
+
+  detachAttachment: protectedProcedure
+    .input(z.object({ rawInputId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw || !raw.ceoId) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(and(eq(ceos.id, raw.ceoId), eq(ceos.coachId, ctx.coach.id)))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'FORBIDDEN' });
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          cycleId: null,
+          matchStatus: 'pending_cycle',
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+
+      return { ok: true };
     }),
 });

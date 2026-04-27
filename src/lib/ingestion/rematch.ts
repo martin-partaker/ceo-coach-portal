@@ -3,7 +3,7 @@ import { db } from '@/db';
 import { rawInputs, rawInputCeos, type RawInput } from '@/db/schema';
 import { findCeoByEmail } from './identity';
 import { fuzzyMatchCeoForCoach } from './match-ceo';
-import { findCycleForOccurredAt } from './match-cycle';
+import { ensureCycleForCeoAndDate } from './match-cycle';
 import { projectRawInput } from './project';
 
 interface ZoomPayload {
@@ -58,7 +58,8 @@ async function tryResolveTally(r: RawInput): Promise<boolean> {
   const ceo = await findCeoByEmail(email);
   if (!ceo) return false;
 
-  const cycleMatch = await findCycleForOccurredAt({
+  // Email match → auto-resolve cycle (creating monthly default if needed).
+  const cycleMatch = await ensureCycleForCeoAndDate({
     ceoId: ceo.id,
     occurredAt: r.occurredAt,
   });
@@ -68,16 +69,14 @@ async function tryResolveTally(r: RawInput): Promise<boolean> {
     .set({
       ceoId: ceo.id,
       coachId: ceo.coachId,
-      cycleId: cycleMatch?.cycleId ?? null,
-      matchStatus: cycleMatch ? 'matched' : 'pending_cycle',
-      matchConfidence: cycleMatch?.confident ? 100 : 75,
-      matchCandidates: null,
+      cycleId: cycleMatch.cycleId,
+      matchStatus: 'matched',
+      matchConfidence: cycleMatch.confident ? 100 : 75,
+      matchCandidates: { email, name: r.matchCandidates && typeof r.matchCandidates === 'object' ? (r.matchCandidates as { name?: string }).name ?? null : null },
     })
     .where(eq(rawInputs.id, r.id));
 
-  if (cycleMatch) {
-    await projectRawInput(r.id);
-  }
+  await projectRawInput(r.id);
   return true;
 }
 
@@ -108,7 +107,7 @@ async function tryResolveZoom(r: RawInput): Promise<boolean> {
   const confidence = Math.round(
     Math.min(...matches.map((m) => m.result.bestMatch!.score)) * 100
   );
-  const cycleMatch = await findCycleForOccurredAt({
+  const cycleMatch = await ensureCycleForCeoAndDate({
     ceoId: primaryCeoId,
     occurredAt: r.occurredAt,
   });
@@ -117,11 +116,9 @@ async function tryResolveZoom(r: RawInput): Promise<boolean> {
     .update(rawInputs)
     .set({
       ceoId: primaryCeoId,
-      cycleId: cycleMatch?.cycleId ?? null,
-      matchStatus: cycleMatch ? 'matched' : 'pending_cycle',
-      matchConfidence: cycleMatch?.confident
-        ? confidence
-        : Math.min(confidence, 75),
+      cycleId: cycleMatch.cycleId,
+      matchStatus: 'matched',
+      matchConfidence: cycleMatch.confident ? confidence : Math.min(confidence, 75),
       matchCandidates: null,
     })
     .where(eq(rawInputs.id, r.id));
@@ -139,9 +136,7 @@ async function tryResolveZoom(r: RawInput): Promise<boolean> {
     }
   }
 
-  if (cycleMatch) {
-    await projectRawInput(r.id);
-  }
+  await projectRawInput(r.id);
   return true;
 }
 

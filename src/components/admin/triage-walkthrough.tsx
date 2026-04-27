@@ -63,6 +63,7 @@ export function TriageWalkthrough() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyOffset, setHistoryOffset] = useState(0); // 0 = current item, 1 = last actioned, ...
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [matchOpen, setMatchOpen] = useState(false);
 
   // Cache every card data we've seen so Back can render historical items even
   // after they leave the live `data` (because they got resolved server-side).
@@ -301,6 +302,9 @@ export function TriageWalkthrough() {
       } else if (e.key.toLowerCase() === 's') {
         e.preventDefault();
         onSkip();
+      } else if (e.key === 'Tab' && !inHistoryView && currentLive) {
+        e.preventDefault();
+        setMatchOpen(true);
       } else if (e.key.toLowerCase() === 'b') {
         e.preventDefault();
         onBack();
@@ -421,6 +425,7 @@ export function TriageWalkthrough() {
       <TriageCard
         data={currentCardData}
         onPickAlternative={inHistoryView ? undefined : onPickAlternative}
+        onPickCeoClick={inHistoryView ? undefined : () => setMatchOpen(true)}
       />
 
       {/* Action bar */}
@@ -451,6 +456,8 @@ export function TriageWalkthrough() {
             <MatchToExistingButton
               rawInputId={currentLive.rawInputId}
               submissionEmail={currentLive.submitterEmail}
+              open={matchOpen}
+              onOpenChange={setMatchOpen}
               onMatched={() => {
                 setStats((s) => ({ ...s, overridden: s.overridden + 1 }));
                 markActed(currentLive.rawInputId);

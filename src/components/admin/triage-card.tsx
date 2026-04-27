@@ -1,13 +1,15 @@
 'use client';
 
-import { Mail, FileText, Video, Users, Check, X, AlertCircle, FileQuestion } from 'lucide-react';
+import { Mail, FileText, Video, Users, Check, X, AlertCircle, FileQuestion, MousePointerClick } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import { cn } from '@/lib/utils';
 
 export interface TriageSuggestionView {
   ceoId: string;
   ceoName: string;
   ceoEmail: string | null;
+  ceoAvatarUrl: string | null;
   coachName: string;
   confidence: number;
   reasoning: string;
@@ -144,13 +146,21 @@ function normalizeForMatch(s: string): string {
     .trim();
 }
 
-function scoreNamePair(a: string, b: string): number {
-  const ta = new Set(normalizeForMatch(a).split(' ').filter(Boolean));
-  const tb = new Set(normalizeForMatch(b).split(' ').filter(Boolean));
-  if (ta.size === 0 || tb.size === 0) return 0;
-  const intersection = new Set([...ta].filter((x) => tb.has(x)));
-  const union = new Set([...ta, ...tb]);
-  return intersection.size / union.size;
+function levRatio(a: string, b: string): number {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+  const prev = new Array<number>(b.length + 1);
+  const curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return 1 - prev[b.length] / Math.max(a.length, b.length);
 }
 
 /**
@@ -193,29 +203,53 @@ function buildEvidencePills(args: {
     }
   }
 
-  // Name evidence — show whenever both sides have a name to compare.
+  // Name evidence — granular: separate first-name and last-name pills so the
+  // operator sees "first name matches · last name typo" instead of an opaque
+  // "name similar" verdict.
   if (submitterName && suggestionName) {
-    const score = scoreNamePair(submitterName, suggestionName);
-    if (score >= 0.95) {
+    const subTokens = normalizeForMatch(submitterName).split(' ').filter(Boolean);
+    const sugTokens = normalizeForMatch(suggestionName).split(' ').filter(Boolean);
+    const subFirst = subTokens[0] ?? '';
+    const sugFirst = sugTokens[0] ?? '';
+    const subLast = subTokens[subTokens.length - 1] ?? '';
+    const sugLast = sugTokens[sugTokens.length - 1] ?? '';
+
+    if (subTokens.join(' ') === sugTokens.join(' ')) {
       out.push({ label: 'Names match', tone: 'ok' });
-    } else if (score >= 0.6) {
-      out.push({
-        label: `Name similar: "${submitterName}" ↔ "${suggestionName}"`,
-        tone: 'warn',
-      });
+    } else {
+      // First name
+      if (subFirst && sugFirst) {
+        if (subFirst === sugFirst) {
+          out.push({ label: 'First name matches', tone: 'ok' });
+        } else {
+          const r = levRatio(subFirst, sugFirst);
+          if (r >= 0.7) {
+            out.push({ label: `First name typo: ${subFirst} → ${sugFirst}`, tone: 'warn' });
+          }
+        }
+      }
+
+      // Last name (only if both have ≥2 tokens)
+      if (subTokens.length >= 2 && sugTokens.length >= 2 && subLast && sugLast) {
+        if (subLast === sugLast) {
+          out.push({ label: 'Last name matches', tone: 'ok' });
+        } else {
+          const r = levRatio(subLast, sugLast);
+          if (r >= 0.7) {
+            out.push({ label: `Last name typo: ${subLast} → ${sugLast}`, tone: 'warn' });
+          } else if (r >= 0.4) {
+            out.push({ label: `Different last name: "${subLast}" vs "${sugLast}"`, tone: 'warn' });
+          }
+        }
+      } else if (subTokens.length === 1 || sugTokens.length === 1) {
+        // Only first names available on one side
+        out.push({ label: 'Single name only — partial info', tone: 'warn' });
+      }
     }
   }
 
-  // Cycle evidence
-  if (args.matchStatus === 'pending_cycle') {
-    if (args.cycleSuggestion?.confident) {
-      out.push({ label: `Cycle covers ${args.occurredAt.toISOString().slice(0, 10)}`, tone: 'ok' });
-    } else if (args.cycleSuggestion) {
-      out.push({ label: 'No cycle covers this date', tone: 'fail' });
-    } else {
-      out.push({ label: 'No cycles for this CEO', tone: 'fail' });
-    }
-  }
+  // Cycle evidence intentionally omitted — handled by the dedicated
+  // "Suggested cycle" panel below, and not actionable from these pills anyway.
 
   return out;
 }
@@ -241,9 +275,15 @@ export interface TriageCardProps {
    * assignToCeo so the operator can pick a non-default suggestion in one tap.
    */
   onPickAlternative?: (ceoId: string, ceoName: string) => void;
+  /**
+   * Called when the operator clicks the empty-state "pick a CEO" CTA, or the
+   * "pick another" CTA in any state. Walkthrough wires this to opening the
+   * Match dialog.
+   */
+  onPickCeoClick?: () => void;
 }
 
-export function TriageCard({ data, onPickAlternative }: TriageCardProps) {
+export function TriageCard({ data, onPickAlternative, onPickCeoClick }: TriageCardProps) {
   const SourceIcon = sourceIcon(data.source);
   const occurred = new Date(data.occurredAt);
   const dateStr = occurred.toLocaleDateString(undefined, {
@@ -255,15 +295,6 @@ export function TriageCard({ data, onPickAlternative }: TriageCardProps) {
   const top = data.topSuggestion;
   const tier = top ? confidenceTier(top.confidence) : 'low';
   const tc = tierClasses(tier);
-
-  const initials = top
-    ? top.ceoName
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((p) => p[0]?.toUpperCase() ?? '')
-        .join('')
-    : '';
 
   const evidencePills = buildEvidencePills({
     submitterEmail: data.submitterEmail,
@@ -312,12 +343,11 @@ export function TriageCard({ data, onPickAlternative }: TriageCardProps) {
         )}
 
         {data.textSnippet && (
-          <p className="line-clamp-4 text-sm leading-relaxed text-foreground/90">
-            {data.textSnippet}
-            {data.textSnippet.length >= 590 && (
-              <span className="text-muted-foreground"> …</span>
-            )}
-          </p>
+          <div className="max-h-56 overflow-y-auto rounded-lg border border-border/40 bg-background/60 px-3 py-2.5">
+            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground/90">
+              {data.textSnippet}
+            </pre>
+          </div>
         )}
 
         {(data.submitterEmail || data.submitterName || data.participantsSummary) && (
@@ -376,9 +406,7 @@ export function TriageCard({ data, onPickAlternative }: TriageCardProps) {
         {top ? (
           <div className={cn('rounded-lg border p-3', tc.box)}>
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-200/40 text-sm font-semibold text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">
-                {initials}
-              </div>
+              <CeoAvatar name={top.ceoName} avatarUrl={top.ceoAvatarUrl} size="md" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <p className="text-sm font-semibold">{top.ceoName}</p>
@@ -417,16 +445,27 @@ export function TriageCard({ data, onPickAlternative }: TriageCardProps) {
             )}
           </div>
         ) : (
-          <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-5">
+          <button
+            type="button"
+            onClick={onPickCeoClick}
+            disabled={!onPickCeoClick}
+            className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-5 transition-colors hover:border-foreground/40 hover:bg-muted/40 disabled:cursor-default disabled:hover:border-border disabled:hover:bg-muted/20"
+          >
             <FileQuestion className="h-4 w-4 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              No clear suggestion. Use{' '}
+            <span className="text-sm text-muted-foreground">
+              No clear suggestion —{' '}
+              <span className="text-foreground underline-offset-4 group-hover:underline">
+                pick a CEO
+              </span>
+            </span>
+            <MousePointerClick className="h-3.5 w-3.5 text-muted-foreground/70" />
+            <span className="ml-1 text-[10px] text-muted-foreground/70">
+              or press{' '}
               <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
                 Tab
-              </kbd>{' '}
-              to pick a CEO.
-            </p>
-          </div>
+              </kbd>
+            </span>
+          </button>
         )}
 
         {/* Cycle suggestion */}

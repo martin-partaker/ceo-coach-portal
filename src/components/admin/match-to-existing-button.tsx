@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Loader2, Search, Link2, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { CeoAvatar } from '@/components/ui/ceo-avatar';
 
 interface Props {
   rawInputId: string;
@@ -24,10 +25,15 @@ interface Props {
   submissionEmail?: string | null;
   /** Called after a successful match — useful for parent state updates. */
   onMatched?: () => void;
+  /** Optional controlled-open state. When provided, the parent owns the dialog. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Hide the trigger button (useful when the parent supplies its own trigger). */
+  hideTrigger?: boolean;
 }
 
 interface CeoRow {
-  ceo: { id: string; name: string; email: string | null };
+  ceo: { id: string; name: string; email: string | null; avatarUrl?: string | null };
   coach: { id: string; name: string };
   aliasEmails: string[];
   cycleCount: number;
@@ -98,9 +104,21 @@ function suggestedFor(row: CeoRow, submissionEmail: string | null | undefined): 
   return best;
 }
 
-export function MatchToExistingButton({ rawInputId, submissionEmail, onMatched }: Props) {
+export function MatchToExistingButton({
+  rawInputId,
+  submissionEmail,
+  onMatched,
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger,
+}: Props) {
   const utils = trpc.useUtils();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (v: boolean) => {
+    if (onOpenChange) onOpenChange(v);
+    else setInternalOpen(v);
+  };
   const [query, setQuery] = useState('');
   const [addAlias, setAddAlias] = useState(true);
 
@@ -163,20 +181,23 @@ export function MatchToExistingButton({ rawInputId, submissionEmail, onMatched }
       }
       disabled={assign.isPending}
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-medium">
-            {highlightMatch(row.ceo.name, query)}
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <CeoAvatar name={row.ceo.name} avatarUrl={row.ceo.avatarUrl} size="sm" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-sm font-medium">
+              {highlightMatch(row.ceo.name, query)}
+            </p>
+            {row.aliasEmails.length > 1 && (
+              <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                +{row.aliasEmails.length - 1} alias{row.aliasEmails.length - 1 === 1 ? '' : 'es'}
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+            {highlightMatch(row.ceo.email ?? '(no primary email)', query)}
           </p>
-          {row.aliasEmails.length > 1 && (
-            <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              +{row.aliasEmails.length - 1} alias{row.aliasEmails.length - 1 === 1 ? '' : 'es'}
-            </span>
-          )}
         </div>
-        <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-          {highlightMatch(row.ceo.email ?? '(no primary email)', query)}
-        </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
@@ -191,12 +212,14 @@ export function MatchToExistingButton({ rawInputId, submissionEmail, onMatched }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="outline">
-          <Link2 className="mr-1.5 h-3.5 w-3.5" />
-          Match
-        </Button>
-      </DialogTrigger>
+      {!hideTrigger && (
+        <DialogTrigger asChild>
+          <Button size="sm" variant="outline">
+            <Link2 className="mr-1.5 h-3.5 w-3.5" />
+            Match
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Match to an existing CEO</DialogTitle>

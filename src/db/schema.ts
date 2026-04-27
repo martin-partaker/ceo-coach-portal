@@ -29,6 +29,7 @@ export const ceos = pgTable('ceos', {
     .references(() => coaches.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   email: text('email'),
+  avatarUrl: text('avatar_url'),
   tenXGoal: text('ten_x_goal'),
   tenXGoalUpdatedAt: timestamp('ten_x_goal_updated_at'),
   profileJson: jsonb('profile_json'),

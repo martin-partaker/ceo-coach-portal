@@ -6,6 +6,7 @@ export interface TriageSuggestion {
   ceoId: string;
   ceoName: string;
   ceoEmail: string | null;
+  ceoAvatarUrl: string | null;
   coachId: string;
   coachName: string;
   confidence: number; // 0-100
@@ -94,6 +95,7 @@ interface CeoWithAliases {
   id: string;
   name: string;
   email: string | null;
+  avatarUrl: string | null;
   coachId: string;
   coachName: string;
   aliases: string[];
@@ -105,6 +107,7 @@ async function loadCeoIndex(): Promise<CeoWithAliases[]> {
       id: ceos.id,
       name: ceos.name,
       email: ceos.email,
+      avatarUrl: ceos.avatarUrl,
       coachId: ceos.coachId,
       coachName: coaches.name,
     })
@@ -211,6 +214,7 @@ function toSuggestion(scored: ScoredCeo): TriageSuggestion {
     ceoId: scored.ceo.id,
     ceoName: scored.ceo.name,
     ceoEmail: scored.ceo.email,
+    ceoAvatarUrl: scored.ceo.avatarUrl,
     coachId: scored.ceo.coachId,
     coachName: scored.ceo.coachName,
     confidence: Math.round(scored.score * 100),
@@ -255,6 +259,7 @@ export async function suggestForPendingRow(
           ceoId: ceo.id,
           ceoName: ceo.name,
           ceoEmail: ceo.email,
+          ceoAvatarUrl: ceo.avatarUrl,
           coachId: ceo.coachId,
           coachName: ceo.coachName,
           confidence: 100,
@@ -283,6 +288,7 @@ export async function suggestForPendingRow(
             ceoId: ceo.id,
             ceoName: ceo.name,
             ceoEmail: ceo.email,
+            ceoAvatarUrl: ceo.avatarUrl,
             coachId: ceo.coachId,
             coachName: ceo.coachName,
             confidence: Math.round(m.score * 100),

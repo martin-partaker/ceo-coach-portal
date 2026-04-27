@@ -4,7 +4,7 @@ import type { TallySubmission, TallyQuestion } from '@/lib/tally/client';
 import { findResponseAnswer, answerToString } from '@/lib/tally/heuristics';
 import { renderSubmissionAsText } from '@/lib/tally/render';
 import { findCeoByEmail, isInternalEmail, normalizeEmail } from './identity';
-import { findCycleForOccurredAt } from './match-cycle';
+import { ensureCycleForCeoAndDate } from './match-cycle';
 import { projectRawInput } from './project';
 
 export type TallyIngestOutcome =
@@ -33,7 +33,11 @@ export async function ingestTallySubmission(args: {
   let cycleId: string | null = null;
   let coachId: string | null = null;
   let matchConfidence: number | null = 100;
-  let matchCandidates: unknown = null;
+  // Always retain submitter identity in matchCandidates so the triage UI can
+  // show "what we received" later even after the match resolved. The trade-off:
+  // matchCandidates becomes a dual-purpose blob (submitter info always +
+  // pending-reason metadata when applicable) but the schema doesn't change.
+  let matchCandidates: unknown = rawEmail || rawName ? { email: rawEmail ?? null, name: rawName ?? null } : null;
 
   const looksLikeTest =
     rawName?.toLowerCase().includes('test') || (rawEmail && isInternalEmail(rawEmail));
@@ -53,16 +57,15 @@ export async function ingestTallySubmission(args: {
       matchConfidence = null;
       matchCandidates = { reason: 'unknown_email', email: normalizedEmail, name: rawName };
     } else {
+      // Email exact match → identity is 100% certain. Auto-resolve cycle
+      // (creating a monthly default if the CEO has no cycles yet) so the row
+      // never appears in manual triage. The submitter has already told us
+      // who they are.
       ceoId = ceo.id;
       coachId = ceo.coachId;
-      const cycleMatch = await findCycleForOccurredAt({ ceoId: ceo.id, occurredAt });
-      if (!cycleMatch) {
-        matchStatus = 'pending_cycle';
-        matchConfidence = 100;
-      } else {
-        cycleId = cycleMatch.cycleId;
-        matchConfidence = cycleMatch.confident ? 100 : 75;
-      }
+      const cycleMatch = await ensureCycleForCeoAndDate({ ceoId: ceo.id, occurredAt });
+      cycleId = cycleMatch.cycleId;
+      matchConfidence = cycleMatch.confident ? 100 : 75;
     }
   }
 

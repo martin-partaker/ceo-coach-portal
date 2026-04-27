@@ -9,7 +9,7 @@ import {
 } from '@/lib/zoom/client';
 import { classifyTranscript, type TranscriptClassification } from './classify';
 import { fuzzyMatchCeoForCoach } from './match-ceo';
-import { findCycleForOccurredAt } from './match-cycle';
+import { ensureCycleForCeoAndDate } from './match-cycle';
 import { isInternalEmail } from './identity';
 import { projectRawInput } from './project';
 import { INGESTION_CONFIG } from './config';
@@ -146,11 +146,12 @@ export async function ingestZoomMeeting(args: {
 
   let cycleId: string | null = null;
   if (matchStatus === 'matched' && primaryCeoId) {
-    const cycleMatch = await findCycleForOccurredAt({ ceoId: primaryCeoId, occurredAt });
-    if (cycleMatch) {
-      cycleId = cycleMatch.cycleId;
-      if (!cycleMatch.confident) confidence = Math.min(confidence ?? 100, 75);
-    }
+    const cycleMatch = await ensureCycleForCeoAndDate({
+      ceoId: primaryCeoId,
+      occurredAt,
+    });
+    cycleId = cycleMatch.cycleId;
+    if (!cycleMatch.confident) confidence = Math.min(confidence ?? 100, 75);
   }
 
   const payloadJson = {

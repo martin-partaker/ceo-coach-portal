@@ -24,6 +24,26 @@ import {
 import { coaches as coachesTbl } from '@/db/schema';
 import { inArray } from 'drizzle-orm';
 
+function extractFromTallyPayload(payload: unknown): { email: string | null; name: string | null } {
+  if (!payload || typeof payload !== 'object') return { email: null, name: null };
+  const responses = (payload as { responses?: Array<{ questionId?: string; answer?: unknown }> }).responses;
+  if (!Array.isArray(responses)) return { email: null, name: null };
+
+  let email: string | null = null;
+  // Heuristic: first answer that looks like an email wins.
+  for (const r of responses) {
+    const a = r.answer;
+    if (typeof a !== 'string') continue;
+    const trimmed = a.trim();
+    if (!email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      email = trimmed.toLowerCase();
+      break;
+    }
+  }
+  // Name extraction is too unreliable without form metadata; skip.
+  return { email, name: null };
+}
+
 const STATUS_VALUES = [
   'matched',
   'pending_ceo',
@@ -100,8 +120,13 @@ export const inboxRouter = createTRPCRouter({
           ? (r.matchCandidates as Array<{ candidateName?: string; candidateEmail?: string | null }>)
           : null;
 
-      const submitterEmail = candidates?.email ?? fuzzyArr?.[0]?.candidateEmail ?? null;
-      const submitterName = candidates?.name ?? fuzzyArr?.[0]?.candidateName ?? null;
+      // Fallback: extract email/name from the original Tally payload when
+      // matchCandidates is null (rows ingested before we started preserving it).
+      const payloadFallback = extractFromTallyPayload(r.payloadJson);
+      const submitterEmail =
+        candidates?.email ?? fuzzyArr?.[0]?.candidateEmail ?? payloadFallback.email ?? null;
+      const submitterName =
+        candidates?.name ?? fuzzyArr?.[0]?.candidateName ?? payloadFallback.name ?? null;
 
       const classification = (r.classification ?? null) as {
         participantsSummary?: string;
@@ -129,7 +154,7 @@ export const inboxRouter = createTRPCRouter({
         coachName: r.coachId ? coachById.get(r.coachId) ?? null : null,
         submitterEmail,
         submitterName,
-        textSnippet: (r.textContent ?? '').slice(0, 600),
+        textSnippet: (r.textContent ?? '').slice(0, 8000),
         meetingTopic: payload?.meeting?.topic ?? null,
         participantsSummary: classification?.participantsSummary ?? null,
         matchStatus: r.matchStatus,
@@ -341,6 +366,40 @@ export const inboxRouter = createTRPCRouter({
       await projectRawInput(input.rawInputId);
       return { ok: true };
     }),
+
+  /**
+   * Sweep all pending_cycle rows: for each, ensure a cycle exists (creating
+   * a monthly default if needed) and mark the row matched. Used as a one-shot
+   * cleanup after the auto-create-cycle change shipped, so existing rows
+   * don't get stuck in triage.
+   */
+  resolveAllPendingCycle: adminProcedure.mutation(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select()
+      .from(rawInputs)
+      .where(eq(rawInputs.matchStatus, 'pending_cycle'));
+
+    let resolved = 0;
+    for (const r of rows) {
+      if (!r.ceoId) continue;
+      const cycle = await (await import('@/lib/ingestion/match-cycle')).ensureCycleForCeoAndDate({
+        ceoId: r.ceoId,
+        occurredAt: r.occurredAt,
+      });
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          cycleId: cycle.cycleId,
+          matchStatus: 'matched',
+          matchConfidence: cycle.confident ? 100 : 75,
+        })
+        .where(eq(rawInputs.id, r.id));
+      await projectRawInput(r.id);
+      resolved++;
+    }
+
+    return { scanned: rows.length, resolved };
+  }),
 
   /**
    * Revert a row to a prior state. Used by triage Back/Undo. The caller

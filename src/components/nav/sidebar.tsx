@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Settings,
   ShieldCheck,
+  Inbox,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 
@@ -18,6 +19,7 @@ const navItems = [
 
 const adminItems = [
   { href: '/admin', label: 'Admin', icon: ShieldCheck },
+  { href: '/admin/inbox', label: 'Inbox', icon: Inbox },
 ];
 
 interface SidebarProps {

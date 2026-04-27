@@ -50,10 +50,25 @@ export function InboxDiscoveredForms() {
   const [drafts, setDrafts] = useState<Record<string, ContentType>>({});
 
   const register = trpc.inbox.registerForm.useMutation({
-    onSuccess: () => utils.inbox.listDiscoveredForms.invalidate(),
+    onSuccess: () => {
+      utils.inbox.listDiscoveredForms.invalidate();
+      utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
+    },
   });
   const ignore = trpc.inbox.ignoreForm.useMutation({
-    onSuccess: () => utils.inbox.listDiscoveredForms.invalidate(),
+    onSuccess: () => {
+      utils.inbox.listDiscoveredForms.invalidate();
+      utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
+    },
+  });
+  const deactivate = trpc.inbox.deactivateForm.useMutation({
+    onSuccess: () => {
+      utils.inbox.listDiscoveredForms.invalidate();
+      utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
+    },
   });
 
   if (isLoading) return <Loader2 className="h-4 w-4 animate-spin" />;
@@ -126,11 +141,34 @@ export function InboxDiscoveredForms() {
                   >
                     Activate
                   </Button>
+                  {form.status !== 'ignored' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => ignore.mutate({ formId: form.formId })}
+                      disabled={ignore.isPending}
+                    >
+                      Ignore
+                    </Button>
+                  )}
+                </div>
+              )}
+              {form.status === 'active' && (
+                <div className="flex items-center gap-2">
                   <Button
                     size="sm"
                     variant="outline"
+                    onClick={() => deactivate.mutate({ formId: form.formId })}
+                    disabled={deactivate.isPending}
+                  >
+                    Deactivate
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     onClick={() => ignore.mutate({ formId: form.formId })}
                     disabled={ignore.isPending}
+                    className="text-muted-foreground hover:text-destructive"
                   >
                     Ignore
                   </Button>

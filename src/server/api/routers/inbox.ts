@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { eq, desc, and, sql } from 'drizzle-orm';
+import { eq, desc, and, sql, inArray } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
@@ -22,7 +22,29 @@ import {
   type PendingRowSuggestions,
 } from '@/lib/ingestion/triage-suggest';
 import { coaches as coachesTbl } from '@/db/schema';
-import { inArray } from 'drizzle-orm';
+
+/**
+ * When a Tally form is deactivated/ignored, archive any pending raw_inputs
+ * that came from it so they stop cluttering the triage queue. Recoverable
+ * via the inbox (status = 'archived', not 'discarded').
+ */
+async function archivePendingFromForm(
+  db: typeof import('@/db').db,
+  formId: string
+): Promise<number> {
+  const result = await db
+    .update(rawInputs)
+    .set({ matchStatus: 'archived' })
+    .where(
+      and(
+        eq(rawInputs.source, 'tally'),
+        inArray(rawInputs.matchStatus, ['pending_ceo', 'pending_cycle']),
+        sql`${rawInputs.payloadJson} ->> 'formId' = ${formId}`
+      )
+    )
+    .returning({ id: rawInputs.id });
+  return result.length;
+}
 
 function extractFromTallyPayload(payload: unknown): { email: string | null; name: string | null } {
   if (!payload || typeof payload !== 'object') return { email: null, name: null };
@@ -225,7 +247,21 @@ export const inboxRouter = createTRPCRouter({
         .where(eq(tallyForms.formId, input.formId))
         .returning();
       if (!updated) throw new TRPCError({ code: 'NOT_FOUND' });
-      return updated;
+      const archived = await archivePendingFromForm(ctx.db, input.formId);
+      return { ...updated, archivedRows: archived };
+    }),
+
+  deactivateForm: adminProcedure
+    .input(z.object({ formId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const [updated] = await ctx.db
+        .update(tallyForms)
+        .set({ status: 'pending_review', updatedAt: new Date() })
+        .where(eq(tallyForms.formId, input.formId))
+        .returning();
+      if (!updated) throw new TRPCError({ code: 'NOT_FOUND' });
+      const archived = await archivePendingFromForm(ctx.db, input.formId);
+      return { ...updated, archivedRows: archived };
     }),
 
   assignToCeo: adminProcedure

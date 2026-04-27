@@ -13,6 +13,12 @@ export interface TriageSuggestionView {
   reasoning: string;
 }
 
+export interface TriageCycleSuggestionView {
+  cycleId: string;
+  cycleLabel: string;
+  confident: boolean;
+}
+
 export interface TriageCardData {
   rawInputId: string;
   source: string;
@@ -27,6 +33,7 @@ export interface TriageCardData {
   matchStatus: string;
   topSuggestion: TriageSuggestionView | null;
   alternatives: TriageSuggestionView[];
+  cycleSuggestion: TriageCycleSuggestionView | null;
 }
 
 const CONTENT_TYPE_LABEL: Record<string, string> = {
@@ -270,6 +277,26 @@ export function TriageCard({ data }: { data: TriageCardData }) {
               </kbd>{' '}
               to pick a CEO.
             </p>
+          </div>
+        )}
+
+        {/* Cycle suggestion (for pending_cycle, or when AI also proposes a cycle) */}
+        {data.cycleSuggestion && top && (
+          <div className="mt-3 flex items-center gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Suggested cycle
+            </span>
+            <span className="font-medium">{data.cycleSuggestion.cycleLabel}</span>
+            {!data.cycleSuggestion.confident && (
+              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+                fallback (date outside cycle period)
+              </span>
+            )}
+            {data.cycleSuggestion.confident && (
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-400">
+                date matches period
+              </span>
+            )}
           </div>
         )}
 

@@ -233,6 +233,10 @@ interface FuzzyEntry {
  * Compute suggestions for a single pending raw_input. Reads from existing
  * matchCandidates when present (Zoom fuzzy already ran during ingest) and
  * falls back to fresh global scoring for Tally rows.
+ *
+ * Special case: pending_cycle rows already have a CEO matched — the
+ * "suggestion" is just confirming that CEO (high confidence) so the operator
+ * can move on to the cycle assignment in the same card.
  */
 export async function suggestForPendingRow(
   rawInput: RawInput,
@@ -241,6 +245,27 @@ export async function suggestForPendingRow(
   topSuggestion: TriageSuggestion | null;
   alternatives: TriageSuggestion[];
 }> {
+  // pending_cycle: CEO already matched, the work is to pick a cycle
+  if (rawInput.matchStatus === 'pending_cycle' && rawInput.ceoId) {
+    const idx = ceoIndex ?? (await loadCeoIndex());
+    const ceo = idx.find((c) => c.id === rawInput.ceoId);
+    if (ceo) {
+      return {
+        topSuggestion: {
+          ceoId: ceo.id,
+          ceoName: ceo.name,
+          ceoEmail: ceo.email,
+          coachId: ceo.coachId,
+          coachName: ceo.coachName,
+          confidence: 100,
+          reasoning:
+            'CEO matched by exact email. No cycle covers this date — pick one below.',
+        },
+        alternatives: [],
+      };
+    }
+  }
+
   const candidates = rawInput.matchCandidates;
 
   // Zoom path: matchCandidates is an array of fuzzy entries with topMatches.

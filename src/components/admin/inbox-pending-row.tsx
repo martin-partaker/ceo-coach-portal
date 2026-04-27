@@ -93,6 +93,7 @@ export function InboxPendingRow({ row }: { row: InboxRow }) {
     onSuccess: () => {
       utils.inbox.listPending.invalidate();
       utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
     },
   });
 
@@ -230,6 +231,7 @@ function CreateCeoButton({
     onSuccess: (data) => {
       utils.inbox.listPending.invalidate();
       utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
       if (data?.autoResolved && data.autoResolved > 0) {
         console.info(
           `Created ${data.ceo.name}; auto-resolved ${data.autoResolved} more pending row(s).`

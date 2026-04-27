@@ -21,9 +21,11 @@ interface Props {
   rawInputId: string;
   /** Email present in the submission; offered as an alias to add. */
   submissionEmail?: string | null;
+  /** Called after a successful match — useful for parent state updates (e.g. triage walkthrough advancing the queue). */
+  onMatched?: () => void;
 }
 
-export function MatchToExistingButton({ rawInputId, submissionEmail }: Props) {
+export function MatchToExistingButton({ rawInputId, submissionEmail, onMatched }: Props) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -50,9 +52,11 @@ export function MatchToExistingButton({ rawInputId, submissionEmail }: Props) {
     onSuccess: (data) => {
       utils.inbox.listPending.invalidate();
       utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
       if (data?.autoResolved && data.autoResolved > 0) {
         console.info(`Assigned; auto-resolved ${data.autoResolved} more pending row(s).`);
       }
+      onMatched?.();
       setOpen(false);
     },
   });

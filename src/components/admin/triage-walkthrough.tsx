@@ -36,9 +36,19 @@ export function TriageWalkthrough() {
     discarded: 0,
     skipped: 0,
   });
+  // Snapshotted at session start; doesn't change as items get resolved.
+  // Reset by the "Reset & reload" button.
+  const [totalAtStart, setTotalAtStart] = useState<number | null>(null);
 
-  // The active queue is the original list minus rows already acted on.
-  // Skipped rows roll back to the end.
+  useEffect(() => {
+    if (data && totalAtStart === null) {
+      setTotalAtStart(data.length);
+    }
+  }, [data, totalAtStart]);
+
+  // Queue: server data filtered by optimistic local-acted ids, with skipped
+  // rolled to the end. Auto-resolved rows disappear naturally because the
+  // server stops including them in triageQueue.
   const queue = useMemo(() => {
     if (!data) return [];
     const active = data.filter((d) => !actedIds.has(d.rawInputId));
@@ -47,16 +57,14 @@ export function TriageWalkthrough() {
     return [...head, ...tail];
   }, [data, actedIds, skippedIds]);
 
-  const total = data?.length ?? 0;
-  const done = actedIds.size;
+  const total = totalAtStart ?? 0;
+  const remaining = queue.length;
+  const done = Math.max(0, total - remaining);
   const current = queue[Math.min(index, Math.max(queue.length - 1, 0))] ?? null;
 
   const assignMutation = trpc.inbox.assignToCeo.useMutation();
+  const assignCycleMutation = trpc.inbox.assignCycle.useMutation();
   const discardMutation = trpc.inbox.discard.useMutation();
-
-  const advance = useCallback(() => {
-    setIndex((i) => Math.min(i + 1, Math.max(queue.length - 1, 0)));
-  }, [queue.length]);
 
   const back = useCallback(() => {
     setIndex((i) => Math.max(i - 1, 0));
@@ -69,47 +77,72 @@ export function TriageWalkthrough() {
       next.delete(id);
       return next;
     });
+    // Don't increment index — `queue` is filtered by actedIds, so removing the
+    // current item naturally shifts queue[index] to what was queue[index+1].
   }, []);
 
   const onConfirm = useCallback(async () => {
     if (!current?.topSuggestion) return;
     const id = current.rawInputId;
-    const ceoId = current.topSuggestion.ceoId;
     setStats((s) => ({ ...s, confirmed: s.confirmed + 1 }));
     markActed(id);
-    advance();
     try {
-      await assignMutation.mutateAsync({
-        rawInputId: id,
-        ceoId,
-        addAliasFromSubmission: !!current.submitterEmail,
-      });
+      // pending_cycle: CEO already matched; we just need a cycle assignment.
+      if (
+        current.matchStatus === 'pending_cycle' &&
+        current.cycleSuggestion?.cycleId
+      ) {
+        await assignCycleMutation.mutateAsync({
+          rawInputId: id,
+          cycleId: current.cycleSuggestion.cycleId,
+        });
+      } else {
+        // pending_ceo (or pending_cycle without a cycle suggestion — treat as
+        // a CEO assignment fallback).
+        await assignMutation.mutateAsync({
+          rawInputId: id,
+          ceoId: current.topSuggestion.ceoId,
+          addAliasFromSubmission: !!current.submitterEmail,
+        });
+      }
       utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
     } catch (err) {
       console.error('confirm failed', err);
     }
-  }, [current, advance, markActed, assignMutation, utils]);
+  }, [current, markActed, assignMutation, assignCycleMutation, utils]);
 
   const onDiscard = useCallback(async () => {
     if (!current) return;
     const id = current.rawInputId;
     setStats((s) => ({ ...s, discarded: s.discarded + 1 }));
     markActed(id);
-    advance();
     try {
       await discardMutation.mutateAsync({ rawInputId: id, reason: 'admin_triaged' });
       utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
     } catch (err) {
       console.error('discard failed', err);
     }
-  }, [current, advance, markActed, discardMutation, utils]);
+  }, [current, markActed, discardMutation, utils]);
 
   const onSkip = useCallback(() => {
     if (!current) return;
     setStats((s) => ({ ...s, skipped: s.skipped + 1 }));
     setSkippedIds((s) => new Set([...s, current.rawInputId]));
-    advance();
-  }, [current, advance]);
+    // For skip we DO advance — the item stays in the queue (rolled to end).
+    setIndex((i) => Math.min(i + 1, Math.max(queue.length - 1, 0)));
+  }, [current, queue.length]);
+
+  // External resolution (e.g. via the Match dialog) — update local state to
+  // remove the row from the queue and refresh data.
+  const onExternalMatch = useCallback(() => {
+    if (!current) return;
+    setStats((s) => ({ ...s, overridden: s.overridden + 1 }));
+    markActed(current.rawInputId);
+    utils.inbox.pendingCounts.invalidate();
+    utils.inbox.triageQueue.invalidate();
+  }, [current, markActed, utils]);
 
   // Confidence-graded confirm: amber tier requires hold-to-confirm.
   const confidenceTier: 'high' | 'medium' | 'low' = (() => {
@@ -187,6 +220,7 @@ export function TriageWalkthrough() {
                 setSkippedIds(new Set());
                 setStats({ confirmed: 0, overridden: 0, discarded: 0, skipped: 0 });
                 setIndex(0);
+                setTotalAtStart(null);
                 refetch();
               }}
             >
@@ -232,18 +266,28 @@ export function TriageWalkthrough() {
           <Button
             size="sm"
             onClick={onConfirm}
-            disabled={confirmDisabled || assignMutation.isPending}
+            disabled={
+              confirmDisabled ||
+              assignMutation.isPending ||
+              assignCycleMutation.isPending ||
+              (current.matchStatus === 'pending_cycle' && !current.cycleSuggestion)
+            }
             className={cn(
               confidenceTier === 'high' && 'bg-emerald-600 hover:bg-emerald-700',
               confidenceTier === 'medium' && 'bg-foreground'
             )}
           >
-            Confirm{current.topSuggestion ? ` → ${current.topSuggestion.ceoName}` : ''}
+            {current.matchStatus === 'pending_cycle' && current.cycleSuggestion
+              ? `Confirm cycle → ${current.cycleSuggestion.cycleLabel}`
+              : current.topSuggestion
+                ? `Confirm → ${current.topSuggestion.ceoName}`
+                : 'Confirm'}
             <Kbd>↵</Kbd>
           </Button>
           <MatchToExistingButton
             rawInputId={current.rawInputId}
             submissionEmail={current.submitterEmail}
+            onMatched={onExternalMatch}
           />
           <Button size="sm" variant="ghost" onClick={onDiscard}>
             Discard

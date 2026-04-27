@@ -376,11 +376,16 @@ export function TriageWalkthrough() {
     }
   }, [historyEntry, restoreMutation, utils]);
 
-  // Confidence tier on the live current
+  // Confidence tier on the live current — purely advisory for AI suggestions.
+  // A manual pick is always confirmable regardless of AI confidence.
   const liveTopConfidence = currentLive?.topSuggestion?.confidence ?? 0;
   const confidenceTier: 'high' | 'medium' | 'low' =
     liveTopConfidence >= 95 ? 'high' : liveTopConfidence >= 70 ? 'medium' : 'low';
-  const confirmDisabled = inHistoryView || !currentLive?.topSuggestion || confidenceTier === 'low';
+  const confirmDisabled =
+    inHistoryView ||
+    (manualPick
+      ? false // operator-picked → always confirmable
+      : !currentLive?.topSuggestion || confidenceTier === 'low');
 
   // Keyboard
   useEffect(() => {
@@ -565,11 +570,13 @@ export function TriageWalkthrough() {
               confidenceTier === 'medium' && 'bg-foreground'
             )}
           >
-            {currentLive?.matchStatus === 'pending_cycle' && currentLive.cycleSuggestion
-              ? `Confirm cycle → ${currentLive.cycleSuggestion.cycleLabel}`
-              : currentLive?.topSuggestion
-                ? `Confirm → ${currentLive.topSuggestion.ceoName}`
-                : 'Confirm'}
+            {manualPick
+              ? `Confirm → ${manualPick.ceoName}`
+              : currentLive?.matchStatus === 'pending_cycle' && currentLive.cycleSuggestion
+                ? `Confirm cycle → ${currentLive.cycleSuggestion.cycleLabel}`
+                : currentLive?.topSuggestion
+                  ? `Confirm → ${currentLive.topSuggestion.ceoName}`
+                  : 'Confirm'}
             <Kbd>↵</Kbd>
           </Button>
           {!inHistoryView && currentLive && (
@@ -627,12 +634,15 @@ export function TriageWalkthrough() {
         </div>
       </div>
 
-      {confidenceTier === 'low' && currentLive?.topSuggestion && !inHistoryView && (
-        <p className="text-center text-xs text-muted-foreground">
-          Low-confidence match — Enter is disabled. Use{' '}
-          <Kbd>Tab</Kbd> to pick a CEO yourself.
-        </p>
-      )}
+      {confidenceTier === 'low' &&
+        currentLive?.topSuggestion &&
+        !inHistoryView &&
+        !manualPick && (
+          <p className="text-center text-xs text-muted-foreground">
+            Low-confidence match — Enter is disabled. Use{' '}
+            <Kbd>Tab</Kbd> to pick a CEO yourself.
+          </p>
+        )}
 
       {/* Toast / inline message */}
       {toast && (

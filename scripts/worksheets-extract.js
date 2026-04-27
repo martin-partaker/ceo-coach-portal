@@ -298,18 +298,28 @@ function callClaude({ prompt, addDirs, model, jsonSchema }) {
 
     const child = spawn("claude", args, {
       env,
-      stdio: ["pipe", "pipe", "inherit"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
     let stdout = "";
+    let stderr = "";
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      const s = chunk.toString();
+      stderr += s;
+      process.stderr.write(s);
     });
 
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`claude exited with code ${code}`));
+        reject(
+          new Error(
+            `claude exited with code ${code}\n--- stderr ---\n${stderr.slice(-2000)}\n--- stdout (first 2KB) ---\n${stdout.slice(0, 2000)}`
+          )
+        );
         return;
       }
       try {
@@ -343,6 +353,19 @@ function callClaude({ prompt, addDirs, model, jsonSchema }) {
   });
 }
 
+function unescapeStrings(node) {
+  if (typeof node === "string") {
+    return node.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+  }
+  if (Array.isArray(node)) return node.map(unescapeStrings);
+  if (node && typeof node === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(node)) out[k] = unescapeStrings(v);
+    return out;
+  }
+  return node;
+}
+
 function renderMarkdown(data) {
   const lines = [];
   const w = data.worksheet || {};
@@ -366,8 +389,9 @@ function renderMarkdown(data) {
       if (sub.label) lines.push(`### ${sub.label}`, "");
       if (sub.body) lines.push(sub.body, "");
       for (const list of sub.lists || []) {
-        for (const item of list.items || []) {
-          lines.push(`${list.ordered ? "1." : "-"} ${item}`);
+        const items = list.items || [];
+        for (let i = 0; i < items.length; i++) {
+          lines.push(`${list.ordered ? `${i + 1}.` : "-"} ${items[i]}`);
         }
         lines.push("");
       }
@@ -474,6 +498,16 @@ async function processOne(pdfFile, opts) {
   const pdfPath = path.join(PDF_DIR, pdfFile);
   const jsonOut = path.join(OUTPUT_DIR, `${slug}.json`);
 
+  if (opts.rerender && fs.existsSync(jsonOut)) {
+    process.stderr.write(`↻ ${slug} (re-rendering md/txt from existing JSON)\n`);
+    const data = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
+    const cleaned = unescapeStrings(data);
+    fs.writeFileSync(jsonOut, JSON.stringify(cleaned, null, 2) + "\n");
+    fs.writeFileSync(path.join(OUTPUT_DIR, `${slug}.md`), renderMarkdown(cleaned));
+    fs.writeFileSync(path.join(OUTPUT_DIR, `${slug}.txt`), renderText(cleaned));
+    return;
+  }
+
   if (!opts.force && fs.existsSync(jsonOut)) {
     process.stderr.write(`✓ ${slug} (already extracted; pass --force to rerun)\n`);
     return;
@@ -496,10 +530,14 @@ async function processOne(pdfFile, opts) {
   const cost = meta.cost_usd ?? meta.total_cost_usd ?? 0;
   process.stderr.write(`  ✓ ${seconds}s${cost ? `, $${cost.toFixed(3)}` : ""}\n`);
 
+  // Models occasionally emit "\\n" (literal backslash + n) instead of a real
+  // newline when constrained to JSON output. Walk all strings and undo.
+  const cleaned = unescapeStrings(data);
+
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  fs.writeFileSync(jsonOut, JSON.stringify(data, null, 2) + "\n");
-  fs.writeFileSync(path.join(OUTPUT_DIR, `${slug}.md`), renderMarkdown(data));
-  fs.writeFileSync(path.join(OUTPUT_DIR, `${slug}.txt`), renderText(data));
+  fs.writeFileSync(jsonOut, JSON.stringify(cleaned, null, 2) + "\n");
+  fs.writeFileSync(path.join(OUTPUT_DIR, `${slug}.md`), renderMarkdown(cleaned));
+  fs.writeFileSync(path.join(OUTPUT_DIR, `${slug}.txt`), renderText(cleaned));
   process.stderr.write(`  → ${slug}.{json,md,txt}\n`);
 }
 
@@ -509,6 +547,7 @@ function parseArgs(argv) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--force") opts.force = true;
+    else if (a === "--rerender") opts.rerender = true;
     else if (a === "--all") opts.target = "all";
     else if (a === "--worksheet") opts.target = args[++i];
     else if (a === "--model") opts.model = args[++i];

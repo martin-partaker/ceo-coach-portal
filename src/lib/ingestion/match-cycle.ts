@@ -1,4 +1,3 @@
-import 'server-only';
 import { and, desc, eq, lte, gte } from 'drizzle-orm';
 import { db } from '@/db';
 import { cycles } from '@/db/schema';

@@ -1,4 +1,3 @@
-import 'server-only';
 import { db } from '@/db';
 import { rawInputs, type TallyForm } from '@/db/schema';
 import type { TallySubmission, TallyQuestion } from '@/lib/tally/client';

@@ -1,4 +1,3 @@
-import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { INGESTION_CONFIG } from './config';
 import type { ZoomParticipant } from '@/lib/zoom/client';

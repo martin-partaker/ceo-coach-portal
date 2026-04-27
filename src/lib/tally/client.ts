@@ -1,4 +1,3 @@
-import 'server-only';
 import { INGESTION_CONFIG } from '@/lib/ingestion/config';
 
 const TALLY_BASE_URL = 'https://api.tally.so';

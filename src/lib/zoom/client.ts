@@ -1,4 +1,3 @@
-import 'server-only';
 
 const ZOOM_ACCOUNT_ID = process.env.ZOOM_ACCOUNT_ID!;
 const ZOOM_CLIENT_ID = process.env.ZOOM_CLIENT_ID!;

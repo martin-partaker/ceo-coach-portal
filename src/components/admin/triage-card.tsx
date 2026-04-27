@@ -135,47 +135,85 @@ function DiffEmail({
   );
 }
 
+function normalizeForMatch(s: string): string {
+  return s
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[.,;:!?_'"`()\[\]{}<>\/\\|@#&*+=~^-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreNamePair(a: string, b: string): number {
+  const ta = new Set(normalizeForMatch(a).split(' ').filter(Boolean));
+  const tb = new Set(normalizeForMatch(b).split(' ').filter(Boolean));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  const intersection = new Set([...ta].filter((x) => tb.has(x)));
+  const union = new Set([...ta, ...tb]);
+  return intersection.size / union.size;
+}
+
 /**
  * Build the evidence pills for the AI proposes block — concrete, scannable
- * indicators of what matches and what's missing.
+ * indicators of what matches and what's missing. Designed to NOT cry wolf:
+ * if the submitter didn't include an email, we don't flag that as a warning
+ * — the name match speaks for itself.
  */
 function buildEvidencePills(args: {
   submitterEmail: string | null;
+  submitterName: string | null;
   suggestionEmail: string | null;
+  suggestionName: string;
   matchStatus: string;
   cycleSuggestion: TriageCycleSuggestionView | null;
   occurredAt: Date;
 }): Array<{ label: string; tone: 'ok' | 'warn' | 'fail' }> {
   const out: Array<{ label: string; tone: 'ok' | 'warn' | 'fail' }> = [];
-  const { submitterEmail, suggestionEmail } = args;
+  const { submitterEmail, suggestionEmail, submitterName, suggestionName } = args;
 
-  if (submitterEmail && suggestionEmail) {
-    if (submitterEmail === suggestionEmail) {
-      out.push({ label: 'Email exact match', tone: 'ok' });
-    } else {
-      const [sLocal, sDomain] = submitterEmail.split('@');
-      const [aLocal, aDomain] = suggestionEmail.split('@');
-      if (sLocal === aLocal && sDomain !== aDomain) {
-        out.push({ label: `Domain typo: ${sDomain} → ${aDomain}`, tone: 'warn' });
-      } else if (sDomain === aDomain && sLocal !== aLocal) {
-        out.push({ label: `Same domain · different address`, tone: 'warn' });
+  // Email evidence — only show pills when the submitter actually provided an email.
+  // "No email submitted" is not a warning; it's just absence of one signal.
+  if (submitterEmail) {
+    if (suggestionEmail) {
+      if (submitterEmail === suggestionEmail) {
+        out.push({ label: 'Email exact match', tone: 'ok' });
       } else {
-        out.push({ label: 'Email similar', tone: 'warn' });
+        const [sLocal, sDomain] = submitterEmail.split('@');
+        const [aLocal, aDomain] = suggestionEmail.split('@');
+        if (sLocal === aLocal && sDomain !== aDomain) {
+          out.push({ label: `Domain typo: ${sDomain} → ${aDomain}`, tone: 'warn' });
+        } else if (sDomain === aDomain && sLocal !== aLocal) {
+          out.push({ label: 'Same domain · different address', tone: 'warn' });
+        } else {
+          out.push({ label: 'Email similar', tone: 'warn' });
+        }
       }
+    } else {
+      out.push({ label: 'No email on CEO record', tone: 'warn' });
     }
-  } else if (submitterEmail && !suggestionEmail) {
-    out.push({ label: 'No email on CEO record', tone: 'warn' });
-  } else if (!submitterEmail) {
-    out.push({ label: 'No email submitted', tone: 'warn' });
   }
 
+  // Name evidence — show whenever both sides have a name to compare.
+  if (submitterName && suggestionName) {
+    const score = scoreNamePair(submitterName, suggestionName);
+    if (score >= 0.95) {
+      out.push({ label: 'Names match', tone: 'ok' });
+    } else if (score >= 0.6) {
+      out.push({
+        label: `Name similar: "${submitterName}" ↔ "${suggestionName}"`,
+        tone: 'warn',
+      });
+    }
+  }
+
+  // Cycle evidence
   if (args.matchStatus === 'pending_cycle') {
     if (args.cycleSuggestion?.confident) {
       out.push({ label: `Cycle covers ${args.occurredAt.toISOString().slice(0, 10)}`, tone: 'ok' });
     } else if (args.cycleSuggestion) {
-      out.push({ label: `No cycle covers this date`, tone: 'fail' });
+      out.push({ label: 'No cycle covers this date', tone: 'fail' });
     } else {
-      out.push({ label: `No cycles for this CEO`, tone: 'fail' });
+      out.push({ label: 'No cycles for this CEO', tone: 'fail' });
     }
   }
 
@@ -229,7 +267,9 @@ export function TriageCard({ data, onPickAlternative }: TriageCardProps) {
 
   const evidencePills = buildEvidencePills({
     submitterEmail: data.submitterEmail,
+    submitterName: data.submitterName,
     suggestionEmail: top?.ceoEmail ?? null,
+    suggestionName: top?.ceoName ?? '',
     matchStatus: data.matchStatus,
     cycleSuggestion: data.cycleSuggestion,
     occurredAt: occurred,

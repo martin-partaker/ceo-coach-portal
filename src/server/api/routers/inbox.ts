@@ -184,6 +184,11 @@ export const inboxRouter = createTRPCRouter({
         textSnippet: (r.textContent ?? '').slice(0, 8000),
         meetingTopic: payload?.meeting?.topic ?? null,
         participantsSummary: classification?.participantsSummary ?? null,
+        classification: (r.classification ?? null) as {
+          meetingType?: string;
+          includeInMonthlySummary?: boolean;
+          includeReason?: string;
+        } | null,
         matchStatus: r.matchStatus,
         topSuggestion,
         alternatives,

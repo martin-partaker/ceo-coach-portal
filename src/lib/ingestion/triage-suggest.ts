@@ -24,6 +24,12 @@ export interface SubmittedByCoach {
   name: string | null;
 }
 
+export interface ClassifierLite {
+  meetingType?: string;
+  includeInMonthlySummary?: boolean;
+  includeReason?: string;
+}
+
 export interface PendingRowSuggestions {
   rawInputId: string;
   source: string;
@@ -38,6 +44,8 @@ export interface PendingRowSuggestions {
   textSnippet: string;
   meetingTopic: string | null;
   participantsSummary: string | null;
+  /** Verdict from the LLM classifier (Zoom only) — surfaces in the triage card as a hint. */
+  classification: ClassifierLite | null;
   matchStatus: string;
   // The big ones:
   topSuggestion: TriageSuggestion | null;

@@ -13,6 +13,10 @@ import { db } from '../src/db';
 import { coaches } from '../src/db/schema';
 import { listAllRecordingsForCoach } from '../src/lib/zoom/client';
 import { ingestZoomMeeting } from '../src/lib/ingestion/ingest-zoom';
+import {
+  ensureCoachByZoomEmail,
+  isInternalEmail,
+} from '../src/lib/ingestion/identity';
 import type { ZoomRecording, ZoomParticipant } from '../src/lib/zoom/client';
 
 const TRANSCRIPTS_DIR = path.resolve(__dirname, '..', 'transcripts');
@@ -79,23 +83,7 @@ async function loadCoaches(): Promise<CoachLite[]> {
   return rows.map((r) => ({ id: r.id, zoomEmail: r.zoomUserEmail!, zoomHostId: null }));
 }
 
-function pickCoachForMeeting(
-  coachList: CoachLite[],
-  sidecar: SidecarFile
-): CoachLite | null {
-  const internalEmails = sidecar.participants
-    .filter((p) => p.internal_user)
-    .map((p) => (p.user_email ?? '').toLowerCase().trim())
-    .filter(Boolean);
-  if (internalEmails.length === 0) return null;
-
-  for (const coach of coachList) {
-    if (internalEmails.includes(coach.zoomEmail.toLowerCase().trim())) return coach;
-  }
-  return null;
-}
-
-async function replayLocal(coachList: CoachLite[]) {
+async function replayLocal(initialCoachList: CoachLite[]) {
   const pairs = listLocalTranscripts();
   console.log(`  found ${pairs.length} local transcript(s)`);
   const counts = {
@@ -104,16 +92,55 @@ async function replayLocal(coachList: CoachLite[]) {
     pendingCeo: 0,
     discarded: 0,
     duplicates: 0,
-    skippedNoCoach: 0,
+    autoCreatedCoaches: 0,
+    skippedNoInternalHost: 0,
     errors: 0,
   };
+
+  // Mutable list — we add coaches on-the-fly as we discover @partaker.com
+  // hosts that aren't yet in the system.
+  const coachList = [...initialCoachList];
+  const coachByEmail = new Map(coachList.map((c) => [c.zoomEmail.toLowerCase(), c]));
 
   for (const { vttPath, jsonPath } of pairs) {
     try {
       const sidecar: SidecarFile = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-      const coach = pickCoachForMeeting(coachList, sidecar);
+
+      // Find an internal host. If they're not in coaches yet, create them
+      // (the user assumed @partaker.com == coach, so don't drop transcripts).
+      const internalHosts = (sidecar.participants ?? [])
+        .filter((p) => p.internal_user || (p.user_email && isInternalEmail(p.user_email)))
+        .filter((p) => !!p.user_email);
+
+      if (internalHosts.length === 0) {
+        counts.skippedNoInternalHost++;
+        continue;
+      }
+
+      let coach: CoachLite | undefined;
+      for (const host of internalHosts) {
+        const email = host.user_email!.toLowerCase().trim();
+        if (coachByEmail.has(email)) {
+          coach = coachByEmail.get(email);
+          break;
+        }
+        // Auto-create coach record
+        const { coachId, created } = await ensureCoachByZoomEmail({
+          email,
+          name: host.name,
+        });
+        const newCoach: CoachLite = { id: coachId, zoomEmail: email, zoomHostId: null };
+        coachList.push(newCoach);
+        coachByEmail.set(email, newCoach);
+        if (created) {
+          counts.autoCreatedCoaches++;
+          console.log(`    + auto-created coach for ${email} (${host.name})`);
+        }
+        coach = newCoach;
+        break;
+      }
       if (!coach) {
-        counts.skippedNoCoach++;
+        counts.skippedNoInternalHost++;
         continue;
       }
 

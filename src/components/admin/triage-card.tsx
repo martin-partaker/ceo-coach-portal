@@ -21,6 +21,12 @@ export interface TriageCycleSuggestionView {
   confident: boolean;
 }
 
+export interface ClassifierVerdict {
+  meetingType?: string;
+  includeInMonthlySummary?: boolean;
+  includeReason?: string;
+}
+
 export interface TriageCardData {
   rawInputId: string;
   source: string;
@@ -34,6 +40,7 @@ export interface TriageCardData {
   meetingTopic: string | null;
   participantsSummary: string | null;
   matchStatus: string;
+  classification?: ClassifierVerdict | null;
   topSuggestion: TriageSuggestionView | null;
   alternatives: TriageSuggestionView[];
   cycleSuggestion: TriageCycleSuggestionView | null;
@@ -350,6 +357,58 @@ export function TriageCard({
           </span>
         )}
       </div>
+
+      {/* Classifier verdict — surfaced for Zoom rows where the LLM has an
+          opinion that's worth honoring or overriding. Visible at the top of
+          the source block so the operator can act on it (or ignore it) fast. */}
+      {data.source === 'zoom' && data.classification && (
+        <div
+          className={cn(
+            'border-b border-border px-5 py-2.5 text-xs',
+            data.classification.includeInMonthlySummary
+              ? 'bg-emerald-500/[0.06]'
+              : 'bg-amber-500/[0.06]'
+          )}
+        >
+          <div className="flex items-start gap-2">
+            <AlertCircle
+              className={cn(
+                'mt-0.5 h-3.5 w-3.5 shrink-0',
+                data.classification.includeInMonthlySummary
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-amber-600 dark:text-amber-400'
+              )}
+            />
+            <div className="flex-1">
+              <p
+                className={cn(
+                  'font-medium',
+                  data.classification.includeInMonthlySummary
+                    ? 'text-emerald-700 dark:text-emerald-300'
+                    : 'text-amber-700 dark:text-amber-300'
+                )}
+              >
+                AI suggests:{' '}
+                <span className="font-mono">
+                  {data.classification.meetingType ?? 'unclassified'}
+                </span>
+                {' · '}
+                {data.classification.includeInMonthlySummary
+                  ? 'include in summary'
+                  : 'likely archive / discard'}
+              </p>
+              {data.classification.includeReason && (
+                <p className="mt-0.5 text-muted-foreground">
+                  {data.classification.includeReason}
+                </p>
+              )}
+              <p className="mt-0.5 text-[10px] text-muted-foreground/80">
+                You decide — confirm a CEO match, archive, or discard.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Source block */}
       <div className="space-y-4 bg-muted/20 px-5 py-4">

@@ -14,14 +14,6 @@ import { INGESTION_CONFIG } from './config';
 
 export type ZoomIngestOutcome = 'matched' | 'pending_ceo' | 'discarded' | 'duplicate';
 
-const NON_INGESTED_TYPES: TranscriptClassification['meetingType'][] = [
-  'internal_team',
-  'coach_onboarding',
-  'scheduling_only',
-  'test_or_discard',
-  'external',
-];
-
 /**
  * Ingest a Zoom meeting. If `prefetched` is omitted, transcript +
  * participants are fetched from Zoom. Pass them in to skip API calls
@@ -47,16 +39,12 @@ export async function ingestZoomMeeting(args: {
 
   const occurredAt = new Date(meeting.start_time);
 
+  // Short meetings: skip the LLM call (cost guard) but still ingest as
+  // pending_ceo so the super admin sees them. Most will get archived in
+  // one click but occasionally a short check-in carries real signal.
   if (meeting.duration < INGESTION_CONFIG.minTranscriptMinutes) {
-    await insertDiscarded({
-      coachId,
-      meeting,
-      occurredAt,
-      reason: 'too_short',
-      participants: [],
-      transcriptText: '',
-    });
-    return 'discarded';
+    await insertPendingShort({ coachId, meeting, occurredAt });
+    return 'pending_ceo';
   }
 
   let transcriptText: string | null = args.prefetched?.transcriptText ?? null;
@@ -65,15 +53,8 @@ export async function ingestZoomMeeting(args: {
     transcriptText = fetched?.transcript ?? null;
   }
   if (!transcriptText) {
-    await insertDiscarded({
-      coachId,
-      meeting,
-      occurredAt,
-      reason: 'no_transcript',
-      participants: [],
-      transcriptText: '',
-    });
-    return 'discarded';
+    await insertPendingNoTranscript({ coachId, meeting, occurredAt });
+    return 'pending_ceo';
   }
 
   let participants: ZoomParticipant[] = args.prefetched?.participants ?? [];
@@ -98,18 +79,11 @@ export async function ingestZoomMeeting(args: {
     transcriptText,
   });
 
-  if (NON_INGESTED_TYPES.includes(classification.meetingType)) {
-    await insertDiscarded({
-      coachId,
-      meeting,
-      occurredAt,
-      reason: classification.includeReason,
-      participants,
-      transcriptText,
-      classification,
-    });
-    return 'discarded';
-  }
+  // Don't auto-discard based on classifier verdict. The super admin will
+  // make the final call from triage — even an "internal_team" classification
+  // could be wrong (e.g. when a participant name happens to match an existing
+  // CEO). The classifier's verdict is preserved on raw_inputs.classification
+  // so the triage card can surface it as a hint.
 
   const externals = participants.filter((p) => !p.internal_user && p.name?.trim());
 
@@ -178,38 +152,74 @@ export async function ingestZoomMeeting(args: {
   return matchStatus;
 }
 
-async function insertDiscarded(args: {
+async function insertPendingShort(args: {
   coachId: string;
   meeting: ZoomRecording;
   occurredAt: Date;
-  reason: string;
-  participants: ZoomParticipant[];
-  transcriptText: string;
-  classification?: TranscriptClassification;
 }) {
   await db
     .insert(rawInputs)
     .values({
-    coachId: args.coachId,
-    source: 'zoom',
-    contentType: 'transcript',
-    externalId: args.meeting.uuid,
-    occurredAt: args.occurredAt,
-    payloadJson: {
-      meeting: {
-        uuid: args.meeting.uuid,
-        id: args.meeting.id,
-        topic: args.meeting.topic,
-        start_time: args.meeting.start_time,
-        duration: args.meeting.duration,
+      coachId: args.coachId,
+      source: 'zoom',
+      contentType: 'transcript',
+      externalId: args.meeting.uuid,
+      occurredAt: args.occurredAt,
+      payloadJson: {
+        meeting: {
+          uuid: args.meeting.uuid,
+          id: args.meeting.id,
+          topic: args.meeting.topic,
+          start_time: args.meeting.start_time,
+          duration: args.meeting.duration,
+        },
+        participants: [],
+        classification: null,
+        ingestNote: 'too_short_for_classification',
       },
-      participants: args.participants,
-      classification: args.classification ?? null,
-      discardReason: args.reason,
-    },
-    textContent: args.transcriptText || null,
-    matchStatus: 'discarded',
-    classification: (args.classification ?? null) as unknown as object | null,
-  })
-  .onConflictDoNothing({ target: [rawInputs.source, rawInputs.externalId] });
+      textContent: null,
+      matchStatus: 'pending_ceo',
+      classification: {
+        meetingType: 'scheduling_only',
+        includeInMonthlySummary: false,
+        includeReason: `Skipped LLM (duration ${args.meeting.duration} min < ${INGESTION_CONFIG.minTranscriptMinutes} min threshold).`,
+      } as unknown as object,
+    })
+    .onConflictDoNothing({ target: [rawInputs.source, rawInputs.externalId] });
+}
+
+async function insertPendingNoTranscript(args: {
+  coachId: string;
+  meeting: ZoomRecording;
+  occurredAt: Date;
+}) {
+  await db
+    .insert(rawInputs)
+    .values({
+      coachId: args.coachId,
+      source: 'zoom',
+      contentType: 'transcript',
+      externalId: args.meeting.uuid,
+      occurredAt: args.occurredAt,
+      payloadJson: {
+        meeting: {
+          uuid: args.meeting.uuid,
+          id: args.meeting.id,
+          topic: args.meeting.topic,
+          start_time: args.meeting.start_time,
+          duration: args.meeting.duration,
+        },
+        participants: [],
+        classification: null,
+        ingestNote: 'no_transcript_available',
+      },
+      textContent: null,
+      matchStatus: 'pending_ceo',
+      classification: {
+        meetingType: 'test_or_discard',
+        includeInMonthlySummary: false,
+        includeReason: 'No transcript file available — meeting may not have been cloud-recorded with transcription enabled.',
+      } as unknown as object,
+    })
+    .onConflictDoNothing({ target: [rawInputs.source, rawInputs.externalId] });
 }

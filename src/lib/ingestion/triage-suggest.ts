@@ -302,7 +302,7 @@ export async function suggestForPendingRow(
   // Zoom path: re-compute fuzzy scores fresh at triage time using the
   // current matcher logic, so improvements to scoreNameMatch immediately
   // affect what the operator sees (without re-ingesting).
-  if (rawInput.source === 'zoom' && rawInput.coachId) {
+  if (rawInput.source === 'zoom') {
     const payload = rawInput.payloadJson as {
       participants?: Array<{ name?: string; internal_user?: boolean; user_email?: string }>;
     } | null;
@@ -312,10 +312,27 @@ export async function suggestForPendingRow(
     if (externals.length > 0) {
       const candidateName = externals[0].name!;
       const idx = ceoIndex ?? (await loadCeoIndex());
-      // Scope to the meeting host's roster (coachId is set at ingest)
-      const roster = idx.filter((c) => c.coachId === rawInput.coachId);
-      const scored = roster
-        .map((ceo) => ({ ceo, score: scoreNameMatch(candidateName, ceo.name) }))
+
+      // Search across ALL CEOs, not just the meeting host's roster. Reasons:
+      //  - Auto-created coaches (e.g. Steve Taylor just spun up by a Zoom
+      //    backfill) have no CEOs in their roster yet, so a roster-scoped
+      //    search returns nothing.
+      //  - A CEO's primary coach record may live under a different coach
+      //    than the one hosting today's meeting (e.g. Martin manually
+      //    created Nicole Cooper under his roster, but Steve is now
+      //    coaching her). Operator picks by visual confirmation; coach
+      //    name is shown on each suggestion to disambiguate.
+      // Boost: CEOs that ARE in the host's roster get a tiny score bump
+      // so they sort first when scores are tied.
+      const scored = idx
+        .map((ceo) => {
+          const baseScore = scoreNameMatch(candidateName, ceo.name);
+          const inRoster = ceo.coachId === rawInput.coachId;
+          return {
+            ceo,
+            score: inRoster ? Math.min(1, baseScore + 0.05) : baseScore,
+          };
+        })
         .filter((s) => s.score >= 0.3)
         .sort((a, b) => b.score - a.score);
 

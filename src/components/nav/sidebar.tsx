@@ -9,8 +9,10 @@ import {
   Settings,
   ShieldCheck,
   Inbox,
+  ListChecks,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
+import { trpc } from '@/lib/trpc/client';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -20,6 +22,7 @@ const navItems = [
 const adminItems = [
   { href: '/admin', label: 'Coaches', icon: ShieldCheck },
   { href: '/admin/ceos', label: 'All CEOs', icon: Users },
+  { href: '/admin/triage', label: 'Triage', icon: ListChecks, showPendingBadge: true },
   { href: '/admin/inbox', label: 'Inbox', icon: Inbox },
 ];
 
@@ -29,6 +32,15 @@ interface SidebarProps {
 
 export function Sidebar({ isSuperAdmin }: SidebarProps) {
   const pathname = usePathname();
+
+  // Pull pending counts only when this is a super admin viewing the sidebar.
+  const pendingQuery = trpc.inbox.pendingCounts.useQuery(undefined, {
+    enabled: !!isSuperAdmin,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const pendingTotal =
+    (pendingQuery.data?.pending_ceo ?? 0) + (pendingQuery.data?.pending_cycle ?? 0);
 
   return (
     <aside className="flex h-full w-60 flex-col border-r border-border bg-sidebar">
@@ -77,7 +89,7 @@ export function Sidebar({ isSuperAdmin }: SidebarProps) {
               Administration
             </p>
             <div className="space-y-1">
-              {adminItems.map(({ href, label, icon: Icon }) => {
+              {adminItems.map(({ href, label, icon: Icon, showPendingBadge }) => {
                 // Longest prefix wins — prevents '/admin' from highlighting
                 // while on '/admin/ceos' or '/admin/inbox'.
                 const winningHref = [...adminItems]
@@ -85,6 +97,7 @@ export function Sidebar({ isSuperAdmin }: SidebarProps) {
                   .sort((a, b) => b.length - a.length)
                   .find((h) => pathname === h || pathname.startsWith(h + '/'));
                 const active = winningHref === href;
+                const showBadge = showPendingBadge && pendingTotal > 0;
                 return (
                   <Link
                     key={href}
@@ -97,7 +110,20 @@ export function Sidebar({ isSuperAdmin }: SidebarProps) {
                     )}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
-                    {label}
+                    <span className="flex-1">{label}</span>
+                    {showBadge && (
+                      <span
+                        className={cn(
+                          'ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums',
+                          active
+                            ? 'bg-sidebar-accent-foreground/15 text-sidebar-accent-foreground'
+                            : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                        )}
+                        aria-label={`${pendingTotal} pending`}
+                      >
+                        {pendingTotal > 99 ? '99+' : pendingTotal}
+                      </span>
+                    )}
                   </Link>
                 );
               })}

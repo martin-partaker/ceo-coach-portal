@@ -13,6 +13,14 @@ import {
 import { ensureAlias, normalizeEmail } from '@/lib/ingestion/identity';
 import { projectRawInput } from '@/lib/ingestion/project';
 import { rematchPendingRows } from '@/lib/ingestion/rematch';
+import {
+  suggestForPendingRow,
+  suggestCycleFor,
+  loadCeoIndexCached,
+  type PendingRowSuggestions,
+} from '@/lib/ingestion/triage-suggest';
+import { coaches as coachesTbl } from '@/db/schema';
+import { inArray } from 'drizzle-orm';
 
 const STATUS_VALUES = [
   'matched',
@@ -58,6 +66,79 @@ export const inboxRouter = createTRPCRouter({
         .limit(input.limit);
       return rows;
     }),
+
+  triageQueue: adminProcedure.query(async ({ ctx }): Promise<PendingRowSuggestions[]> => {
+    const rows = await ctx.db
+      .select()
+      .from(rawInputs)
+      .where(inArray(rawInputs.matchStatus, ['pending_ceo', 'pending_cycle']))
+      .orderBy(desc(rawInputs.occurredAt));
+
+    if (rows.length === 0) return [];
+
+    // Load coach map for rows that have a coachId
+    const coachIds = [...new Set(rows.map((r) => r.coachId).filter(Boolean) as string[])];
+    const coachRows =
+      coachIds.length > 0
+        ? await ctx.db
+            .select({ id: coachesTbl.id, name: coachesTbl.name })
+            .from(coachesTbl)
+            .where(inArray(coachesTbl.id, coachIds))
+        : [];
+    const coachById = new Map(coachRows.map((c) => [c.id, c.name]));
+
+    // Pre-load the CEO index once (avoids N round-trips inside the loop).
+    const ceoIndex = await loadCeoIndexCached();
+
+    const out: PendingRowSuggestions[] = [];
+    for (const r of rows) {
+      const candidates = r.matchCandidates as { email?: string; name?: string } | null;
+      const fuzzyArr =
+        Array.isArray(r.matchCandidates) && (r.matchCandidates as Array<{ candidateName?: string; candidateEmail?: string | null }>)[0]
+          ? (r.matchCandidates as Array<{ candidateName?: string; candidateEmail?: string | null }>)
+          : null;
+
+      const submitterEmail = candidates?.email ?? fuzzyArr?.[0]?.candidateEmail ?? null;
+      const submitterName = candidates?.name ?? fuzzyArr?.[0]?.candidateName ?? null;
+
+      const classification = (r.classification ?? null) as {
+        participantsSummary?: string;
+      } | null;
+      const payload = (r.payloadJson ?? null) as {
+        meeting?: { topic?: string };
+      } | null;
+
+      const { topSuggestion, alternatives } = await suggestForPendingRow(r, ceoIndex);
+
+      let cycleSuggestion = null;
+      if (topSuggestion) {
+        cycleSuggestion = await suggestCycleFor({
+          ceoId: topSuggestion.ceoId,
+          occurredAt: r.occurredAt,
+        });
+      }
+
+      out.push({
+        rawInputId: r.id,
+        source: r.source,
+        contentType: r.contentType,
+        occurredAt: r.occurredAt,
+        coachId: r.coachId,
+        coachName: r.coachId ? coachById.get(r.coachId) ?? null : null,
+        submitterEmail,
+        submitterName,
+        textSnippet: (r.textContent ?? '').slice(0, 600),
+        meetingTopic: payload?.meeting?.topic ?? null,
+        participantsSummary: classification?.participantsSummary ?? null,
+        matchStatus: r.matchStatus,
+        topSuggestion,
+        alternatives,
+        cycleSuggestion,
+      });
+    }
+
+    return out;
+  }),
 
   pendingCounts: adminProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db

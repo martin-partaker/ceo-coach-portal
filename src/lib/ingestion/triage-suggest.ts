@@ -1,0 +1,336 @@
+import { db } from '@/db';
+import { ceos, ceoEmailAliases, coaches, cycles, type RawInput } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+
+export interface TriageSuggestion {
+  ceoId: string;
+  ceoName: string;
+  ceoEmail: string | null;
+  coachId: string;
+  coachName: string;
+  confidence: number; // 0-100
+  reasoning: string;
+}
+
+export interface TriageCycleSuggestion {
+  cycleId: string;
+  cycleLabel: string;
+  confident: boolean;
+}
+
+export interface PendingRowSuggestions {
+  rawInputId: string;
+  source: string;
+  contentType: string;
+  occurredAt: Date;
+  coachId: string | null;
+  coachName: string | null;
+  submitterEmail: string | null;
+  submitterName: string | null;
+  textSnippet: string;
+  meetingTopic: string | null;
+  participantsSummary: string | null;
+  matchStatus: string;
+  // The big ones:
+  topSuggestion: TriageSuggestion | null;
+  alternatives: TriageSuggestion[];
+  cycleSuggestion: TriageCycleSuggestion | null;
+}
+
+const PUNCT_RX = /[.,;:!?_'"`()\[\]{}<>\/\\|@#&*+=~^-]/g;
+
+function normalizeText(s: string): string {
+  return s.normalize('NFC').toLowerCase().replace(PUNCT_RX, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function tokens(s: string): string[] {
+  return normalizeText(s).split(' ').filter(Boolean);
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = new Array<number>(b.length + 1);
+  const curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+
+function levenshteinRatio(a: string, b: string): number {
+  if (!a.length && !b.length) return 1;
+  return 1 - levenshtein(a, b) / Math.max(a.length, b.length);
+}
+
+function tokenSetRatio(a: string, b: string): number {
+  const ta = new Set(tokens(a));
+  const tb = new Set(tokens(b));
+  if (ta.size === 0 && tb.size === 0) return 1;
+  const intersection = new Set([...ta].filter((x) => tb.has(x)));
+  const union = new Set([...ta, ...tb]);
+  return intersection.size / union.size;
+}
+
+function scoreNameMatch(candidate: string, ceoName: string): number {
+  const tsr = tokenSetRatio(candidate, ceoName);
+  const candTokens = tokens(candidate);
+  const ceoTokens = tokens(ceoName);
+  const firstCand = candTokens[0] ?? '';
+  const firstCeo = ceoTokens[0] ?? '';
+  const firstNameRatio = firstCand && firstCeo ? levenshteinRatio(firstCand, firstCeo) : 0;
+  if (candTokens.length === 1) return Math.max(tsr, firstNameRatio * 0.95);
+  return Math.max(tsr, firstNameRatio * 0.9);
+}
+
+interface CeoWithAliases {
+  id: string;
+  name: string;
+  email: string | null;
+  coachId: string;
+  coachName: string;
+  aliases: string[];
+}
+
+async function loadCeoIndex(): Promise<CeoWithAliases[]> {
+  const rows = await db
+    .select({
+      id: ceos.id,
+      name: ceos.name,
+      email: ceos.email,
+      coachId: ceos.coachId,
+      coachName: coaches.name,
+    })
+    .from(ceos)
+    .innerJoin(coaches, eq(ceos.coachId, coaches.id));
+
+  const aliases = await db
+    .select({ ceoId: ceoEmailAliases.ceoId, email: ceoEmailAliases.email })
+    .from(ceoEmailAliases);
+
+  const aliasesByCeo = new Map<string, string[]>();
+  for (const a of aliases) {
+    if (!aliasesByCeo.has(a.ceoId)) aliasesByCeo.set(a.ceoId, []);
+    aliasesByCeo.get(a.ceoId)!.push(a.email);
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    aliases: aliasesByCeo.get(r.id) ?? [],
+  }));
+}
+
+interface ScoredCeo {
+  ceo: CeoWithAliases;
+  score: number;
+  reasoningParts: string[];
+}
+
+function scoreCeoForSubmission(args: {
+  ceo: CeoWithAliases;
+  submitterEmail: string | null;
+  submitterName: string | null;
+}): ScoredCeo {
+  const { ceo, submitterEmail, submitterName } = args;
+  let bestScore = 0;
+  const reasoningParts: string[] = [];
+
+  // Email-based scoring
+  if (submitterEmail) {
+    const [submitLocal, submitDomain] = submitterEmail.split('@');
+
+    for (const alias of ceo.aliases) {
+      const [aliasLocal, aliasDomain] = alias.split('@');
+
+      // Exact local + close domain → likely typo
+      if (submitLocal === aliasLocal && submitDomain && aliasDomain) {
+        const domainRatio = levenshteinRatio(submitDomain, aliasDomain);
+        if (domainRatio > 0.7 && domainRatio < 1) {
+          const score = 0.85 + domainRatio * 0.1;
+          if (score > bestScore) {
+            bestScore = score;
+            reasoningParts.length = 0;
+            reasoningParts.push(`domain typo: ${submitDomain} ≈ ${aliasDomain}`);
+          }
+        }
+      }
+
+      // Same domain + close local
+      if (submitDomain === aliasDomain && submitLocal !== aliasLocal) {
+        const localRatio = levenshteinRatio(submitLocal ?? '', aliasLocal ?? '');
+        if (localRatio > 0.7) {
+          const score = localRatio * 0.8 + 0.1; // same domain bonus
+          if (score > bestScore) {
+            bestScore = score;
+            reasoningParts.length = 0;
+            reasoningParts.push(`same domain, similar address: ${submitLocal} ≈ ${aliasLocal}`);
+          }
+        }
+      }
+
+      // Generic full-string fuzzy
+      const ratio = levenshteinRatio(submitterEmail, alias);
+      if (ratio > 0.85 && ratio > bestScore) {
+        bestScore = ratio;
+        reasoningParts.length = 0;
+        reasoningParts.push(`email very close to ${alias}`);
+      }
+    }
+  }
+
+  // Name-based scoring (additive — boosts a partial email match)
+  if (submitterName && submitterName.length >= 2) {
+    const nameScore = scoreNameMatch(submitterName, ceo.name);
+    if (nameScore > 0.6) {
+      // Combine: if both signals agree, boost; otherwise pick best
+      if (bestScore > 0 && reasoningParts.length > 0) {
+        // We already have an email signal. Boost if name agrees.
+        const combined = Math.min(0.99, bestScore * 0.7 + nameScore * 0.4);
+        bestScore = combined;
+        reasoningParts.push(`name match: "${submitterName}" ↔ "${ceo.name}"`);
+      } else if (nameScore > bestScore) {
+        bestScore = nameScore;
+        reasoningParts.length = 0;
+        reasoningParts.push(`name match: "${submitterName}" ↔ "${ceo.name}"`);
+      }
+    }
+  }
+
+  return { ceo, score: bestScore, reasoningParts };
+}
+
+function toSuggestion(scored: ScoredCeo): TriageSuggestion {
+  return {
+    ceoId: scored.ceo.id,
+    ceoName: scored.ceo.name,
+    ceoEmail: scored.ceo.email,
+    coachId: scored.ceo.coachId,
+    coachName: scored.ceo.coachName,
+    confidence: Math.round(scored.score * 100),
+    reasoning: scored.reasoningParts.join(' · ') || 'weak signal',
+  };
+}
+
+interface MatchCandidatesShape {
+  reason?: string;
+  email?: string;
+  name?: string;
+}
+interface FuzzyEntry {
+  candidateName?: string;
+  candidateEmail?: string | null;
+  topMatches?: Array<{ ceoId: string; ceoName: string; score: number }>;
+}
+
+/**
+ * Compute suggestions for a single pending raw_input. Reads from existing
+ * matchCandidates when present (Zoom fuzzy already ran during ingest) and
+ * falls back to fresh global scoring for Tally rows.
+ */
+export async function suggestForPendingRow(
+  rawInput: RawInput,
+  ceoIndex?: CeoWithAliases[]
+): Promise<{
+  topSuggestion: TriageSuggestion | null;
+  alternatives: TriageSuggestion[];
+}> {
+  const candidates = rawInput.matchCandidates;
+
+  // Zoom path: matchCandidates is an array of fuzzy entries with topMatches.
+  if (Array.isArray(candidates)) {
+    const fuzzy = candidates as unknown as FuzzyEntry[];
+    const top = fuzzy[0]?.topMatches ?? [];
+    if (top.length > 0) {
+      const idx = ceoIndex ?? (await loadCeoIndex());
+      const candidateName = fuzzy[0].candidateName ?? '';
+      const mapped: TriageSuggestion[] = top
+        .map((m) => {
+          const ceo = idx.find((c) => c.id === m.ceoId);
+          if (!ceo) return null;
+          return {
+            ceoId: ceo.id,
+            ceoName: ceo.name,
+            ceoEmail: ceo.email,
+            coachId: ceo.coachId,
+            coachName: ceo.coachName,
+            confidence: Math.round(m.score * 100),
+            reasoning: `name match: "${candidateName}" ↔ "${ceo.name}"`,
+          };
+        })
+        .filter((x): x is TriageSuggestion => x !== null);
+
+      return {
+        topSuggestion: mapped[0] ?? null,
+        alternatives: mapped.slice(1, 4),
+      };
+    }
+  }
+
+  // Tally path: compute from submitter email + name across the whole index.
+  const obj = candidates as MatchCandidatesShape | null;
+  const submitterEmail = obj?.email?.toLowerCase().trim() ?? null;
+  const submitterName = obj?.name?.trim() ?? null;
+
+  if (!submitterEmail && !submitterName) {
+    return { topSuggestion: null, alternatives: [] };
+  }
+
+  const idx = ceoIndex ?? (await loadCeoIndex());
+  const scored = idx.map((ceo) =>
+    scoreCeoForSubmission({ ceo, submitterEmail, submitterName })
+  );
+  scored.sort((a, b) => b.score - a.score);
+
+  const meaningful = scored.filter((s) => s.score >= 0.3);
+  if (meaningful.length === 0) {
+    return { topSuggestion: null, alternatives: [] };
+  }
+
+  return {
+    topSuggestion: toSuggestion(meaningful[0]),
+    alternatives: meaningful.slice(1, 4).map(toSuggestion),
+  };
+}
+
+/**
+ * Cycle suggestion for a (ceoId, occurredAt) pair — reused by the triage UI.
+ */
+export async function suggestCycleFor(args: {
+  ceoId: string;
+  occurredAt: Date;
+}): Promise<TriageCycleSuggestion | null> {
+  const occurred = args.occurredAt.toISOString().slice(0, 10);
+  const rows = await db
+    .select({
+      id: cycles.id,
+      label: cycles.label,
+      periodStart: cycles.periodStart,
+      periodEnd: cycles.periodEnd,
+    })
+    .from(cycles)
+    .where(eq(cycles.ceoId, args.ceoId));
+
+  const exact = rows.find(
+    (r) =>
+      r.periodStart && r.periodEnd && r.periodStart <= occurred && r.periodEnd >= occurred
+  );
+  if (exact) return { cycleId: exact.id, cycleLabel: exact.label, confident: true };
+
+  const fallback = rows
+    .filter((r) => r.periodStart && r.periodStart <= occurred)
+    .sort((a, b) => (b.periodStart ?? '').localeCompare(a.periodStart ?? ''))[0];
+  if (fallback) return { cycleId: fallback.id, cycleLabel: fallback.label, confident: false };
+
+  return null;
+}
+
+export async function loadCeoIndexCached(): Promise<CeoWithAliases[]> {
+  return loadCeoIndex();
+}

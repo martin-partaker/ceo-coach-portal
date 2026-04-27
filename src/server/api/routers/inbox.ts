@@ -9,6 +9,8 @@ import {
   cycles,
   tallyForms,
   ceoEmailAliases,
+  journalEntries,
+  transcripts,
 } from '@/db/schema';
 import { ensureAlias, normalizeEmail } from '@/lib/ingestion/identity';
 import { projectRawInput } from '@/lib/ingestion/project';
@@ -337,6 +339,56 @@ export const inboxRouter = createTRPCRouter({
     .input(z.object({ rawInputId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await projectRawInput(input.rawInputId);
+      return { ok: true };
+    }),
+
+  /**
+   * Revert a row to a prior state. Used by triage Back/Undo. The caller
+   * passes the snapshot of values to restore. Server clears any projected
+   * journal_entry / transcript that pointed to this row to keep things tidy.
+   */
+  restore: adminProcedure
+    .input(
+      z.object({
+        rawInputId: z.string().uuid(),
+        matchStatus: z.enum(STATUS_VALUES),
+        ceoId: z.string().uuid().nullable(),
+        cycleId: z.string().uuid().nullable(),
+        coachId: z.string().uuid().nullable(),
+        matchConfidence: z.number().nullable(),
+        matchCandidates: z.unknown().nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Clear projected rows that point at this raw_input
+      await ctx.db
+        .delete(journalEntries)
+        .where(eq(journalEntries.sourceRawInputId, input.rawInputId));
+      await ctx.db
+        .delete(transcripts)
+        .where(eq(transcripts.sourceRawInputId, input.rawInputId));
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          matchStatus: input.matchStatus,
+          ceoId: input.ceoId,
+          cycleId: input.cycleId,
+          coachId: input.coachId,
+          matchConfidence: input.matchConfidence,
+          matchCandidates: (input.matchCandidates ?? null) as object | null,
+          resolvedAt: null,
+          resolvedBy: null,
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+
       return { ok: true };
     }),
 

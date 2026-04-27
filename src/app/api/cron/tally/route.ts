@@ -13,6 +13,7 @@ import { inferIdentityFields, findResponseAnswer, answerToString } from '@/lib/t
 import { renderSubmissionAsText } from '@/lib/tally/render';
 import { findCeoByEmail, isInternalEmail, normalizeEmail } from '@/lib/ingestion/identity';
 import { findCycleForOccurredAt } from '@/lib/ingestion/match-cycle';
+import { projectRawInput } from '@/lib/ingestion/project';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -197,21 +198,26 @@ async function ingestSubmission(args: {
     }
   }
 
+  let insertedId: string | null = null;
   try {
-    await db.insert(rawInputs).values({
-      ceoId,
-      cycleId,
-      coachId,
-      source: 'tally',
-      contentType: formRow.contentType,
-      externalId: submission.id,
-      occurredAt,
-      payloadJson: submission as unknown as object,
-      textContent,
-      matchStatus,
-      matchConfidence,
-      matchCandidates: matchCandidates as object | null,
-    });
+    const [inserted] = await db
+      .insert(rawInputs)
+      .values({
+        ceoId,
+        cycleId,
+        coachId,
+        source: 'tally',
+        contentType: formRow.contentType,
+        externalId: submission.id,
+        occurredAt,
+        payloadJson: submission as unknown as object,
+        textContent,
+        matchStatus,
+        matchConfidence,
+        matchCandidates: matchCandidates as object | null,
+      })
+      .returning({ id: rawInputs.id });
+    insertedId = inserted?.id ?? null;
   } catch (err) {
     // Unique violation on (source, external_id) → already ingested
     const msg = err instanceof Error ? err.message : '';
@@ -219,6 +225,14 @@ async function ingestSubmission(args: {
       return 'duplicate';
     }
     throw err;
+  }
+
+  // Project to typed tables for matched rows with a cycle (or for content
+  // types like intake/goal_worksheet that don't need a cycle).
+  if (insertedId && matchStatus === 'matched') {
+    if (cycleId || formRow.contentType === 'intake' || formRow.contentType === 'goal_worksheet') {
+      await projectRawInput(insertedId);
+    }
   }
 
   return matchStatus;

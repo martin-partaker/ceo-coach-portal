@@ -60,6 +60,7 @@ export const journalEntries = pgTable('journal_entries', {
   weekNumber: integer('week_number').notNull(),
   title: text('title').notNull(),
   content: text('content').notNull().default(''),
+  sourceRawInputId: uuid('source_raw_input_id'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -73,6 +74,7 @@ export const transcripts = pgTable('transcripts', {
   zoomMeetingId: text('zoom_meeting_id'),
   duration: integer('duration'), // minutes
   recordedAt: timestamp('recorded_at'),
+  sourceRawInputId: uuid('source_raw_input_id'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

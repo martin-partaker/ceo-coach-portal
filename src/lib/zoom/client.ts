@@ -62,6 +62,16 @@ export interface ZoomRecording {
   recording_files: ZoomRecordingFile[];
 }
 
+export interface ZoomParticipant {
+  id?: string;
+  user_id?: string;
+  name: string;
+  user_email?: string;
+  duration?: number;
+  internal_user?: boolean;
+  status?: string;
+}
+
 interface ZoomRecordingFile {
   id: string;
   file_type: string;
@@ -133,6 +143,65 @@ export async function fetchTranscript(meetingId: string | number, userEmail: str
     transcript,
     meetingTopic: data.topic ?? 'Untitled meeting',
   };
+}
+
+/**
+ * List all recordings for a coach across a wide date range, walking
+ * Zoom's 30-day window cap internally. Used by the cron + backfill.
+ */
+export async function listAllRecordingsForCoach(
+  userEmail: string,
+  fromDate: Date,
+  toDate: Date
+): Promise<ZoomRecording[]> {
+  const out: ZoomRecording[] = [];
+  let cursor = new Date(fromDate);
+
+  while (cursor < toDate) {
+    const windowEnd = new Date(Math.min(cursor.getTime() + 29 * 24 * 60 * 60 * 1000, toDate.getTime()));
+    const fromStr = cursor.toISOString().slice(0, 10);
+    const toStr = windowEnd.toISOString().slice(0, 10);
+    const meetings = await listRecordings(userEmail, fromStr, toStr);
+    out.push(...meetings);
+    cursor = new Date(windowEnd.getTime() + 24 * 60 * 60 * 1000);
+  }
+
+  return out;
+}
+
+/**
+ * Zoom UUIDs that contain "/" or start with "/" must be double-URL-encoded
+ * before being used as a path parameter. Per Zoom docs.
+ */
+function encodeMeetingUuid(uuid: string): string {
+  if (uuid.includes('/') || uuid.startsWith('//') || uuid.startsWith('+')) {
+    return encodeURIComponent(encodeURIComponent(uuid));
+  }
+  return encodeURIComponent(uuid);
+}
+
+export async function fetchParticipants(meetingUuid: string): Promise<ZoomParticipant[]> {
+  const encoded = encodeMeetingUuid(meetingUuid);
+  const out: ZoomParticipant[] = [];
+  let nextPageToken = '';
+
+  while (true) {
+    const params: Record<string, string> = { page_size: '100' };
+    if (nextPageToken) params.next_page_token = nextPageToken;
+    const res = await zoomFetch(`/past_meetings/${encoded}/participants`, params);
+    if (!res.ok) {
+      if (res.status === 404) return out;
+      const text = await res.text();
+      throw new Error(`Zoom participants list failed (${res.status}): ${text}`);
+    }
+    const data = await res.json();
+    const items: ZoomParticipant[] = Array.isArray(data.participants) ? data.participants : [];
+    out.push(...items);
+    if (!data.next_page_token) break;
+    nextPageToken = data.next_page_token;
+  }
+
+  return out;
 }
 
 function cleanVttTranscript(vtt: string): string {

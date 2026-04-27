@@ -10,7 +10,9 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "seed:curriculum": "tsx --env-file=.env scripts/seed-curriculum.ts",
-    "backfill:aliases": "tsx --env-file=.env scripts/backfill-aliases.ts"
+    "backfill:aliases": "tsx --env-file=.env scripts/backfill-aliases.ts",
+    "backfill:tally": "tsx --env-file=.env scripts/backfill-tally.ts",
+    "backfill:zoom": "tsx --env-file=.env scripts/backfill-zoom.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

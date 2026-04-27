@@ -1,19 +1,11 @@
 import { NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { rawInputs, ingestionCursors, tallyForms } from '@/db/schema';
-import {
-  listSubmissionsSince,
-  getFormQuestions,
-  type TallySubmission,
-  type TallyQuestion,
-} from '@/lib/tally/client';
+import { ingestionCursors } from '@/db/schema';
+import { listSubmissionsSince } from '@/lib/tally/client';
 import { getActiveTallyForms } from '@/lib/tally/registry';
-import { inferIdentityFields, findResponseAnswer, answerToString } from '@/lib/tally/heuristics';
-import { renderSubmissionAsText } from '@/lib/tally/render';
-import { findCeoByEmail, isInternalEmail, normalizeEmail } from '@/lib/ingestion/identity';
-import { findCycleForOccurredAt } from '@/lib/ingestion/match-cycle';
-import { projectRawInput } from '@/lib/ingestion/project';
+import { inferIdentityFields } from '@/lib/tally/heuristics';
+import { ingestTallySubmission } from '@/lib/ingestion/ingest-tally';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -77,7 +69,7 @@ export async function GET(req: Request) {
 
       for (const sub of orderedSubs) {
         try {
-          const outcome = await ingestSubmission({
+          const outcome = await ingestTallySubmission({
             formRow: form,
             submission: sub,
             questions,
@@ -140,100 +132,4 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json({ results });
-}
-
-type Outcome = 'matched' | 'pending_ceo' | 'pending_cycle' | 'discarded' | 'duplicate';
-
-async function ingestSubmission(args: {
-  formRow: typeof tallyForms.$inferSelect;
-  submission: TallySubmission;
-  questions: TallyQuestion[];
-  emailQid: string | null;
-  nameQid: string | null;
-}): Promise<Outcome> {
-  const { formRow, submission, questions, emailQid, nameQid } = args;
-
-  const rawEmail = answerToString(findResponseAnswer(submission.responses, emailQid));
-  const rawName = answerToString(findResponseAnswer(submission.responses, nameQid));
-  const occurredAt = new Date(submission.submittedAt);
-  const textContent = renderSubmissionAsText(questions, submission);
-
-  // Discard heuristics
-  let matchStatus: Outcome = 'matched';
-  let ceoId: string | null = null;
-  let cycleId: string | null = null;
-  let coachId: string | null = null;
-  let matchConfidence: number | null = 100;
-  let matchCandidates: unknown = null;
-
-  const looksLikeTest =
-    rawName?.toLowerCase().includes('test') ||
-    (rawEmail && isInternalEmail(rawEmail));
-
-  if (looksLikeTest) {
-    matchStatus = 'discarded';
-    matchConfidence = null;
-  } else if (!rawEmail) {
-    matchStatus = 'pending_ceo';
-    matchConfidence = null;
-    matchCandidates = { reason: 'no_email_in_submission', name: rawName };
-  } else {
-    const normalizedEmail = normalizeEmail(rawEmail);
-    const ceo = await findCeoByEmail(normalizedEmail);
-    if (!ceo) {
-      matchStatus = 'pending_ceo';
-      matchConfidence = null;
-      matchCandidates = { reason: 'unknown_email', email: normalizedEmail, name: rawName };
-    } else {
-      ceoId = ceo.id;
-      coachId = ceo.coachId;
-      const cycleMatch = await findCycleForOccurredAt({ ceoId: ceo.id, occurredAt });
-      if (!cycleMatch) {
-        matchStatus = 'pending_cycle';
-        matchConfidence = 100;
-      } else {
-        cycleId = cycleMatch.cycleId;
-        matchConfidence = cycleMatch.confident ? 100 : 75;
-      }
-    }
-  }
-
-  let insertedId: string | null = null;
-  try {
-    const [inserted] = await db
-      .insert(rawInputs)
-      .values({
-        ceoId,
-        cycleId,
-        coachId,
-        source: 'tally',
-        contentType: formRow.contentType,
-        externalId: submission.id,
-        occurredAt,
-        payloadJson: submission as unknown as object,
-        textContent,
-        matchStatus,
-        matchConfidence,
-        matchCandidates: matchCandidates as object | null,
-      })
-      .returning({ id: rawInputs.id });
-    insertedId = inserted?.id ?? null;
-  } catch (err) {
-    // Unique violation on (source, external_id) → already ingested
-    const msg = err instanceof Error ? err.message : '';
-    if (msg.includes('raw_inputs_source_extid_idx') || msg.includes('duplicate key')) {
-      return 'duplicate';
-    }
-    throw err;
-  }
-
-  // Project to typed tables for matched rows with a cycle (or for content
-  // types like intake/goal_worksheet that don't need a cycle).
-  if (insertedId && matchStatus === 'matched') {
-    if (cycleId || formRow.contentType === 'intake' || formRow.contentType === 'goal_worksheet') {
-      await projectRawInput(insertedId);
-    }
-  }
-
-  return matchStatus;
 }

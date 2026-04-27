@@ -67,11 +67,12 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
         const result = await importTranscript.mutateAsync({
           cycleId,
           meetingId: meeting.id,
+          meetingUuid: meeting.uuid,
           meetingTopic: meeting.topic,
           meetingDuration: meeting.duration,
           meetingStartTime: meeting.startTime,
         });
-        imported.push(result.transcript);
+        if (result.transcript) imported.push(result.transcript);
       } catch {
         // Skip failed, continue
       }

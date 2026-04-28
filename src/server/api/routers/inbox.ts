@@ -9,6 +9,7 @@ import {
   cycles,
   tallyForms,
   ceoEmailAliases,
+  ingestionCursors,
   journalEntries,
   transcripts,
 } from '@/db/schema';
@@ -23,6 +24,10 @@ import {
   type PendingRowSuggestions,
 } from '@/lib/ingestion/triage-suggest';
 import { coaches as coachesTbl } from '@/db/schema';
+import { listForms, getFormQuestions, listSubmissionsSince } from '@/lib/tally/client';
+import { upsertTallyForm, getActiveTallyForms } from '@/lib/tally/registry';
+import { inferIdentityFields } from '@/lib/tally/heuristics';
+import { ingestTallySubmission } from '@/lib/ingestion/ingest-tally';
 
 /**
  * When a Tally form is deactivated/ignored, archive any pending raw_inputs
@@ -287,6 +292,177 @@ export const inboxRouter = createTRPCRouter({
       .select()
       .from(tallyForms)
       .orderBy(desc(tallyForms.updatedAt));
+  }),
+
+  /**
+   * Latest "we successfully ran the Tally cron" timestamp, surfaced on
+   * the Integrations page so the operator can tell at a glance whether
+   * data is current. Returns the newest lastSuccessAt across every
+   * tally:* cursor row plus any error messages still on those rows.
+   */
+  lastTallySync: adminProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select()
+      .from(ingestionCursors)
+      .where(sql`${ingestionCursors.source} like 'tally:%'`);
+    let lastRunAt: Date | null = null;
+    let lastSuccessAt: Date | null = null;
+    const errors: Array<{ source: string; message: string }> = [];
+    for (const r of rows) {
+      if (!lastRunAt || r.lastRunAt > lastRunAt) lastRunAt = r.lastRunAt;
+      if (r.lastSuccessAt && (!lastSuccessAt || r.lastSuccessAt > lastSuccessAt)) {
+        lastSuccessAt = r.lastSuccessAt;
+      }
+      if (r.lastError) errors.push({ source: r.source, message: r.lastError });
+    }
+    return { lastRunAt, lastSuccessAt, errors };
+  }),
+
+  /**
+   * Manual "Sync now" trigger used by the Integrations page. Mirrors what
+   * the /api/cron/tally-discover and /api/cron/tally jobs do, in order:
+   *   1. List every form on Tally and upsert into the registry. New forms
+   *      land in `pending_review` so the operator can decide what to do.
+   *   2. For every active form, fetch new submissions since the cursor
+   *      and run them through the same ingestion pipeline as the cron.
+   *
+   * Failures in one form don't fail the whole sync — per-form errors are
+   * collected and returned so the UI can surface them.
+   */
+  syncTally: adminProcedure.mutation(async ({ ctx }) => {
+    const errors: Array<{ formId: string; phase: 'discover' | 'ingest'; message: string }> = [];
+
+    // 1. Discover (pulls every form from Tally, upserts into registry).
+    let discovered = 0;
+    let newForms = 0;
+    try {
+      const forms = await listForms();
+      discovered = forms.length;
+      for (const form of forms) {
+        try {
+          const questions = await getFormQuestions(form.id);
+          const { isNew } = await upsertTallyForm({ form, questionsSnapshot: questions });
+          if (isNew) newForms += 1;
+        } catch (err) {
+          errors.push({
+            formId: form.id,
+            phase: 'discover',
+            message: err instanceof Error ? err.message : 'unknown error',
+          });
+        }
+      }
+    } catch (err) {
+      errors.push({
+        formId: '*',
+        phase: 'discover',
+        message: err instanceof Error ? err.message : 'unknown error',
+      });
+    }
+
+    // 2. Ingest new submissions for every active form, mirroring the cron.
+    const activeForms = await getActiveTallyForms();
+    let ingested = 0;
+    let matched = 0;
+    let pendingCeo = 0;
+    let pendingCycle = 0;
+    let duplicates = 0;
+    let discarded = 0;
+
+    for (const form of activeForms) {
+      try {
+        const cursorSource = `tally:${form.formId}`;
+        const [cursorRow] = await ctx.db
+          .select()
+          .from(ingestionCursors)
+          .where(eq(ingestionCursors.source, cursorSource))
+          .limit(1);
+
+        const sinceId = cursorRow?.cursor ?? null;
+        const { submissions, questions } = await listSubmissionsSince(form.formId, sinceId);
+
+        const heuristic = inferIdentityFields(questions);
+        const emailQid = form.emailQuestionId ?? heuristic.emailQuestionId;
+        const nameQid = form.nameQuestionId ?? heuristic.nameQuestionId;
+
+        // Process oldest first so the cursor advances correctly if we
+        // crash mid-loop.
+        const orderedSubs = [...submissions].reverse();
+        for (const sub of orderedSubs) {
+          try {
+            const outcome = await ingestTallySubmission({
+              formRow: form,
+              submission: sub,
+              questions,
+              emailQid,
+              nameQid,
+            });
+            ingested += 1;
+            if (outcome === 'duplicate') duplicates += 1;
+            else if (outcome === 'matched') matched += 1;
+            else if (outcome === 'pending_ceo') pendingCeo += 1;
+            else if (outcome === 'pending_cycle') pendingCycle += 1;
+            else if (outcome === 'discarded') discarded += 1;
+          } catch (err) {
+            errors.push({
+              formId: form.formId,
+              phase: 'ingest',
+              message: err instanceof Error ? err.message : 'unknown error',
+            });
+          }
+        }
+
+        // Advance cursor to newest submission seen.
+        const newestId = submissions[0]?.id ?? sinceId;
+        if (newestId) {
+          await ctx.db
+            .insert(ingestionCursors)
+            .values({
+              source: cursorSource,
+              cursor: newestId,
+              lastRunAt: new Date(),
+              lastSuccessAt: new Date(),
+              lastError: null,
+            })
+            .onConflictDoUpdate({
+              target: ingestionCursors.source,
+              set: {
+                cursor: newestId,
+                lastRunAt: new Date(),
+                lastSuccessAt: new Date(),
+                lastError: null,
+              },
+            });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        errors.push({ formId: form.formId, phase: 'ingest', message: msg });
+        await ctx.db
+          .insert(ingestionCursors)
+          .values({
+            source: `tally:${form.formId}`,
+            cursor: '',
+            lastRunAt: new Date(),
+            lastError: msg,
+          })
+          .onConflictDoUpdate({
+            target: ingestionCursors.source,
+            set: { lastRunAt: new Date(), lastError: msg },
+          });
+      }
+    }
+
+    return {
+      discovered,
+      newForms,
+      activeForms: activeForms.length,
+      ingested,
+      matched,
+      pendingCeo,
+      pendingCycle,
+      duplicates,
+      discarded,
+      errors,
+    };
   }),
 
   registerForm: adminProcedure

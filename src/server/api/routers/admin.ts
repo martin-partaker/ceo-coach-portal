@@ -1,8 +1,31 @@
 import { z } from 'zod';
-import { eq, desc, sql } from 'drizzle-orm';
+import { eq, desc, sql, inArray, and } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
-import { coaches, ceos, cycles, reports, ceoEmailAliases } from '@/db/schema';
+import { createTRPCRouter, adminProcedure, protectedProcedure } from '@/server/api/trpc';
+import {
+  coaches,
+  ceos,
+  cycles,
+  reports,
+  ceoEmailAliases,
+  rawInputs,
+  journalEntries,
+  transcripts,
+} from '@/db/schema';
+
+/**
+ * Same scope rule used by roster.*: unscoped means a real super admin who
+ * is *not* impersonating a coach (they bypass coach-scope filters); scoped
+ * means everyone else — regular coach OR admin actively impersonating a
+ * coach. CEO management mutations widened to protectedProcedure use this
+ * to require ceo.coachId === ctx.coach.id when scoped.
+ */
+function isUnscopedAdmin(ctx: {
+  realCoach: { isSuperAdmin: boolean } | null;
+  isImpersonating: boolean;
+}): boolean {
+  return !!ctx.realCoach?.isSuperAdmin && !ctx.isImpersonating;
+}
 
 export const adminRouter = createTRPCRouter({
   listCoaches: adminProcedure.query(async ({ ctx }) => {
@@ -203,13 +226,14 @@ export const adminRouter = createTRPCRouter({
       return created;
     }),
 
-  updateCeo: adminProcedure
+  updateCeo: protectedProcedure
     .input(
       z.object({
         ceoId: z.string().uuid(),
         name: z.string().min(1).optional(),
         email: z.string().email().nullable().optional(),
         tenXGoal: z.string().nullable().optional(),
+        avatarUrl: z.string().url().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -219,6 +243,9 @@ export const adminRouter = createTRPCRouter({
         .where(eq(ceos.id, input.ceoId))
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!isUnscopedAdmin(ctx) && ceo.coachId !== ctx.coach.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
 
       const set: Partial<typeof ceos.$inferInsert> = {};
       if (input.name !== undefined) set.name = input.name;
@@ -229,6 +256,7 @@ export const adminRouter = createTRPCRouter({
         set.tenXGoal = input.tenXGoal;
         set.tenXGoalUpdatedAt = new Date();
       }
+      if (input.avatarUrl !== undefined) set.avatarUrl = input.avatarUrl;
 
       const [updated] = await ctx.db
         .update(ceos)
@@ -245,6 +273,83 @@ export const adminRouter = createTRPCRouter({
       }
 
       return updated;
+    }),
+
+  addCeoAlias: protectedProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        email: z.string().email(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Resolve + ownership-check the CEO up front when scoped.
+      const [ownerCeo] = await ctx.db
+        .select({ coachId: ceos.coachId })
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ownerCeo) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!isUnscopedAdmin(ctx) && ownerCeo.coachId !== ctx.coach.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+
+      const normalized = input.email.toLowerCase().trim();
+      const [existing] = await ctx.db
+        .select()
+        .from(ceoEmailAliases)
+        .where(eq(ceoEmailAliases.email, normalized))
+        .limit(1);
+      if (existing) {
+        if (existing.ceoId === input.ceoId) return existing;
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'That email is already linked to a different CEO.',
+        });
+      }
+      const [created] = await ctx.db
+        .insert(ceoEmailAliases)
+        .values({ ceoId: input.ceoId, email: normalized })
+        .returning();
+      return created;
+    }),
+
+  removeCeoAlias: protectedProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        email: z.string().email(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const normalized = input.email.toLowerCase().trim();
+      // Don't let the operator orphan the CEO from their primary email
+      // — the canonical address on the ceos row stays authoritative.
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!isUnscopedAdmin(ctx) && ceo.coachId !== ctx.coach.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+      if (ceo.email === normalized) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            'This is the CEO\'s primary email — change the email field first, then remove the old alias.',
+        });
+      }
+      await ctx.db
+        .delete(ceoEmailAliases)
+        .where(
+          and(
+            eq(ceoEmailAliases.ceoId, input.ceoId),
+            eq(ceoEmailAliases.email, normalized)
+          )
+        );
+      return { ok: true };
     }),
 
   reassignCeo: adminProcedure
@@ -282,8 +387,16 @@ export const adminRouter = createTRPCRouter({
       return updated;
     }),
 
-  deleteCeo: adminProcedure
-    .input(z.object({ ceoId: z.string().uuid() }))
+  deleteCeo: protectedProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        // When true, detach raw_inputs (matched/pending_cycle revert to
+        // pending_ceo for re-triage) before deleting. Used to dedupe
+        // duplicate CEOs without losing their data.
+        releaseInputs: z.boolean().default(false),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const [ceo] = await ctx.db
         .select()
@@ -291,11 +404,71 @@ export const adminRouter = createTRPCRouter({
         .where(eq(ceos.id, input.ceoId))
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!isUnscopedAdmin(ctx) && ceo.coachId !== ctx.coach.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+
+      let released = 0;
+
+      if (input.releaseInputs) {
+        const attached = await ctx.db
+          .select({ id: rawInputs.id, matchStatus: rawInputs.matchStatus })
+          .from(rawInputs)
+          .where(eq(rawInputs.ceoId, input.ceoId));
+
+        if (attached.length > 0) {
+          const ids = attached.map((r) => r.id);
+
+          // Reverse projection — these would otherwise cascade-delete via
+          // cycles, but we want to free the raw_inputs cleanly.
+          await ctx.db
+            .delete(journalEntries)
+            .where(inArray(journalEntries.sourceRawInputId, ids));
+          await ctx.db
+            .delete(transcripts)
+            .where(inArray(transcripts.sourceRawInputId, ids));
+
+          // Re-triage anything that was attributing to this CEO. Discarded
+          // and archived rows keep their status — only their CEO link is
+          // cleared so the cascade below doesn't drop them.
+          const reTriageIds = attached
+            .filter(
+              (r) =>
+                r.matchStatus === 'matched' ||
+                r.matchStatus === 'pending_cycle'
+            )
+            .map((r) => r.id);
+
+          if (reTriageIds.length > 0) {
+            await ctx.db
+              .update(rawInputs)
+              .set({
+                ceoId: null,
+                cycleId: null,
+                matchStatus: 'pending_ceo',
+                matchConfidence: null,
+                resolvedAt: null,
+                resolvedBy: null,
+              })
+              .where(inArray(rawInputs.id, reTriageIds));
+            released = reTriageIds.length;
+          }
+
+          const otherIds = ids.filter((id) => !reTriageIds.includes(id));
+          if (otherIds.length > 0) {
+            await ctx.db
+              .update(rawInputs)
+              .set({ ceoId: null, cycleId: null })
+              .where(inArray(rawInputs.id, otherIds));
+          }
+        }
+      }
 
       // Cascade: aliases, cycles, journal_entries, transcripts, action_items,
       // reports, raw_inputs all reference ceos with onDelete: 'cascade'.
+      // (When releaseInputs=true, raw_inputs were already detached above.)
       await ctx.db.delete(ceos).where(eq(ceos.id, input.ceoId));
-      return { ok: true };
+      return { ok: true, released };
     }),
 
   /* ───────────────────── Coach management ───────────────────── */

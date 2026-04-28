@@ -160,30 +160,30 @@ export function RosterV2Row({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              {isAdmin && (
-                <DropdownMenuItem onClick={() => setEditOpen(true)}>
-                  <Pencil className="mr-2 h-3.5 w-3.5" /> Edit profile
-                </DropdownMenuItem>
-              )}
+              <DropdownMenuItem onClick={() => setEditOpen(true)}>
+                <Pencil className="mr-2 h-3.5 w-3.5" /> Edit profile
+              </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link href={`/ceos/${summary.ceo.id}`}>
                   <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open full page
                 </Link>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {/* Reassigning to another coach is inherently a cross-coach
+                  action — admin only. Edit profile + Delete CEO now run
+                  through the coach-scoped widening so both surfaces use
+                  the same dialogs. */}
               {isAdmin && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setReassignOpen(true)}>
-                    <ArrowRightLeft className="mr-2 h-3.5 w-3.5" /> Reassign coach
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => setDeleteOpen(true)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete CEO
-                  </DropdownMenuItem>
-                </>
+                <DropdownMenuItem onClick={() => setReassignOpen(true)}>
+                  <ArrowRightLeft className="mr-2 h-3.5 w-3.5" /> Reassign coach
+                </DropdownMenuItem>
               )}
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete CEO
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -192,49 +192,54 @@ export function RosterV2Row({
       {/* Expanded body — Phase B injects this */}
       {expanded && activeCycle && renderExpanded?.(activeCycle, cycles, setActiveCycleId, { reviewKey })}
 
-      {/* Admin-only CEO management dialogs. These all hit `admin.*` tRPC
-          procedures, so they aren't mounted on the coach surface. */}
+      {/* CEO profile + delete dialogs. The underlying admin.updateCeo /
+          addCeoAlias / removeCeoAlias / deleteCeo procedures are now
+          coach-scoped (Phase 4), so both surfaces mount these. The
+          reassign-coach dialog stays admin-only because reassigning to
+          another coach is inherently a cross-coach action. */}
+      <CeoProfileDrawer
+        ceo={{
+          id: summary.ceo.id,
+          name: summary.ceo.name,
+          email: summary.ceo.email,
+          avatarUrl: summary.ceo.avatarUrl,
+          tenXGoal: summary.ceo.tenXGoal,
+          coachId: summary.ceo.coachId,
+          aliasEmails: summary.aliasEmails,
+        }}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onReassign={
+          isAdmin
+            ? () => {
+                setEditOpen(false);
+                setReassignOpen(true);
+              }
+            : undefined
+        }
+        onDelete={() => {
+          setEditOpen(false);
+          setDeleteOpen(true);
+        }}
+      />
       {isAdmin && (
-        <>
-          <CeoProfileDrawer
-            ceo={{
-              id: summary.ceo.id,
-              name: summary.ceo.name,
-              email: summary.ceo.email,
-              avatarUrl: summary.ceo.avatarUrl,
-              tenXGoal: summary.ceo.tenXGoal,
-              coachId: summary.ceo.coachId,
-              aliasEmails: summary.aliasEmails,
-            }}
-            open={editOpen}
-            onOpenChange={setEditOpen}
-            onReassign={() => {
-              setEditOpen(false);
-              setReassignOpen(true);
-            }}
-            onDelete={() => {
-              setEditOpen(false);
-              setDeleteOpen(true);
-            }}
-          />
-          <RosterReassignCeoDialog
-            ceo={{ id: summary.ceo.id, name: summary.ceo.name, coachId: summary.ceo.coachId }}
-            coaches={coaches}
-            open={reassignOpen}
-            onOpenChange={setReassignOpen}
-          />
-          <RosterDeleteCeoDialog
-            ceo={{
-              id: summary.ceo.id,
-              name: summary.ceo.name,
-              cycleCount: ceoCycleCount,
-              inputCount: ceoInputCount,
-            }}
-            open={deleteOpen}
-            onOpenChange={setDeleteOpen}
-          />
-        </>
+        <RosterReassignCeoDialog
+          ceo={{ id: summary.ceo.id, name: summary.ceo.name, coachId: summary.ceo.coachId }}
+          coaches={coaches}
+          open={reassignOpen}
+          onOpenChange={setReassignOpen}
+        />
       )}
+      <RosterDeleteCeoDialog
+        ceo={{
+          id: summary.ceo.id,
+          name: summary.ceo.name,
+          cycleCount: ceoCycleCount,
+          inputCount: ceoInputCount,
+        }}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+      />
     </div>
   );
 }

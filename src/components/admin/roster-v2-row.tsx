@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ChevronRight, MoreHorizontal, Pencil, ArrowRightLeft, ExternalLink, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,9 +15,9 @@ import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import { cn } from '@/lib/utils';
 import type { RosterCeoSummary, RosterCycle, RosterReadiness } from '@/server/api/routers/roster';
 import { InlineTimeline } from './roster-v2-timeline';
-import { RosterEditCeoDialog } from './roster-edit-ceo-dialog';
 import { RosterReassignCeoDialog } from './roster-reassign-ceo-dialog';
 import { RosterDeleteCeoDialog } from './roster-delete-ceo-dialog';
+import { CeoProfileDrawer } from './ceo-profile-drawer';
 
 interface CoachOption {
   id: string;
@@ -25,24 +25,75 @@ interface CoachOption {
   email: string;
 }
 
+interface RowIntent {
+  /** Bumped each time the user clicks Review →; the expanded body uses
+   *  this as a one-shot signal to auto-open the report reviewer. */
+  reviewKey: number;
+}
+
 interface Props {
   summary: RosterCeoSummary;
   coaches: CoachOption[];
   expanded: boolean;
   onToggle: () => void;
-  /** Optional: render the expanded body when `expanded` is true. */
-  renderExpanded?: (current: RosterCycle, all: RosterCycle[]) => React.ReactNode;
+  /** Optional: render the expanded body when `expanded` is true. The row
+   *  controls which cycle is active so the inline Gantt above can highlight
+   *  it; the expanded body should render the cycle identified by
+   *  `activeCycleId` and call `setActiveCycleId` when the user picks a
+   *  different tab. The 4th arg carries one-shot UI intents triggered by
+   *  the row's NextAction buttons (e.g. auto-open the report reviewer). */
+  renderExpanded?: (
+    activeCycle: RosterCycle,
+    all: RosterCycle[],
+    setActiveCycleId: (id: string) => void,
+    intent: RowIntent
+  ) => React.ReactNode;
+  /** Which surface this row is rendering on. `coach` hides the admin-only
+   *  CEO actions (edit profile / reassign / delete) and the coach-side
+   *  reassignment dropdown — those rely on `admin.*` mutations. Defaults
+   *  to `'admin'` so existing call sites are unchanged. */
+  surface?: 'admin' | 'coach';
 }
 
-export function RosterV2Row({ summary, coaches, expanded, onToggle, renderExpanded }: Props) {
+export function RosterV2Row({
+  summary,
+  coaches,
+  expanded,
+  onToggle,
+  renderExpanded,
+  surface = 'admin',
+}: Props) {
+  const isAdmin = surface === 'admin';
   const cycles = summary.cycles;
   const cur = cycles[cycles.length - 1] ?? null;
+
+  const [activeCycleId, setActiveCycleId] = useState<string | null>(cur?.id ?? null);
+
+  // If the row's underlying cycles change (e.g. a new cycle was created
+  // from the expanded panel), make sure the active id still resolves.
+  useEffect(() => {
+    if (!activeCycleId || !cycles.find((c) => c.id === activeCycleId)) {
+      setActiveCycleId(cur?.id ?? null);
+    }
+  }, [cycles, activeCycleId, cur]);
+
+  const activeCycle = cycles.find((c) => c.id === activeCycleId) ?? cur;
 
   const [editOpen, setEditOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [reviewKey, setReviewKey] = useState(0);
+
+  // Open the inline workspace and (optionally) signal a one-shot intent
+  // like "show me the report" that propagates to the expanded body.
+  function expandWithIntent(targetCycleId: string, intent: 'review' | 'open') {
+    setActiveCycleId(targetCycleId);
+    if (!expanded) onToggle();
+    if (intent === 'review') setReviewKey((k) => k + 1);
+  }
 
   const ceoCycleCount = cycles.length;
+  const ceoInputCount = cycles.reduce((n, c) => n + c.submissions.length, 0);
 
   return (
     <div className="border-t border-border first:border-t-0">
@@ -75,7 +126,10 @@ export function RosterV2Row({ summary, coaches, expanded, onToggle, renderExpand
 
         {/* Inline timeline */}
         <div className="min-w-0">
-          <InlineTimeline cycles={cycles} />
+          <InlineTimeline
+            cycles={cycles}
+            highlightCycleId={expanded ? activeCycleId : null}
+          />
         </div>
 
         {/* Readiness fraction */}
@@ -84,8 +138,12 @@ export function RosterV2Row({ summary, coaches, expanded, onToggle, renderExpand
         </div>
 
         {/* Next action */}
-        <div className="flex justify-end">
-          <NextAction cycle={cur} ceoId={summary.ceo.id} />
+        <div onClick={(e) => e.stopPropagation()} className="flex justify-end">
+          <NextAction
+            cycle={cur}
+            onReview={() => cur && expandWithIntent(cur.id, 'review')}
+            onOpenInline={() => cur && expandWithIntent(cur.id, 'open')}
+          />
         </div>
 
         {/* Actions menu */}
@@ -101,54 +159,82 @@ export function RosterV2Row({ summary, coaches, expanded, onToggle, renderExpand
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onClick={() => setEditOpen(true)}>
-                <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setReassignOpen(true)}>
-                <ArrowRightLeft className="mr-2 h-3.5 w-3.5" /> Reassign coach
-              </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-48">
+              {isAdmin && (
+                <DropdownMenuItem onClick={() => setEditOpen(true)}>
+                  <Pencil className="mr-2 h-3.5 w-3.5" /> Edit profile
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem asChild>
                 <Link href={`/ceos/${summary.ceo.id}`}>
-                  <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open profile
+                  <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open full page
                 </Link>
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => setDeleteOpen(true)}
-                className="text-destructive focus:text-destructive"
-              >
-                <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
-              </DropdownMenuItem>
+              {isAdmin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setReassignOpen(true)}>
+                    <ArrowRightLeft className="mr-2 h-3.5 w-3.5" /> Reassign coach
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setDeleteOpen(true)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete CEO
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
       {/* Expanded body — Phase B injects this */}
-      {expanded && cur && renderExpanded?.(cur, cycles)}
+      {expanded && activeCycle && renderExpanded?.(activeCycle, cycles, setActiveCycleId, { reviewKey })}
 
-      <RosterEditCeoDialog
-        ceo={{
-          id: summary.ceo.id,
-          name: summary.ceo.name,
-          email: summary.ceo.email,
-          tenXGoal: summary.ceo.tenXGoal,
-        }}
-        open={editOpen}
-        onOpenChange={setEditOpen}
-      />
-      <RosterReassignCeoDialog
-        ceo={{ id: summary.ceo.id, name: summary.ceo.name, coachId: summary.ceo.coachId }}
-        coaches={coaches}
-        open={reassignOpen}
-        onOpenChange={setReassignOpen}
-      />
-      <RosterDeleteCeoDialog
-        ceo={{ id: summary.ceo.id, name: summary.ceo.name, cycleCount: ceoCycleCount }}
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-      />
+      {/* Admin-only CEO management dialogs. These all hit `admin.*` tRPC
+          procedures, so they aren't mounted on the coach surface. */}
+      {isAdmin && (
+        <>
+          <CeoProfileDrawer
+            ceo={{
+              id: summary.ceo.id,
+              name: summary.ceo.name,
+              email: summary.ceo.email,
+              avatarUrl: summary.ceo.avatarUrl,
+              tenXGoal: summary.ceo.tenXGoal,
+              coachId: summary.ceo.coachId,
+              aliasEmails: summary.aliasEmails,
+            }}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            onReassign={() => {
+              setEditOpen(false);
+              setReassignOpen(true);
+            }}
+            onDelete={() => {
+              setEditOpen(false);
+              setDeleteOpen(true);
+            }}
+          />
+          <RosterReassignCeoDialog
+            ceo={{ id: summary.ceo.id, name: summary.ceo.name, coachId: summary.ceo.coachId }}
+            coaches={coaches}
+            open={reassignOpen}
+            onOpenChange={setReassignOpen}
+          />
+          <RosterDeleteCeoDialog
+            ceo={{
+              id: summary.ceo.id,
+              name: summary.ceo.name,
+              cycleCount: ceoCycleCount,
+              inputCount: ceoInputCount,
+            }}
+            open={deleteOpen}
+            onOpenChange={setDeleteOpen}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -196,13 +282,17 @@ function FractionPill({ cycle }: { cycle: RosterCycle | null }) {
   );
 }
 
-function NextAction({ cycle, ceoId }: { cycle: RosterCycle | null; ceoId: string }) {
+function NextAction({
+  cycle,
+  onReview,
+  onOpenInline,
+}: {
+  cycle: RosterCycle | null;
+  onReview: () => void;
+  onOpenInline: () => void;
+}) {
   if (!cycle) {
-    return (
-      <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs">
-        <Link href={`/ceos/${ceoId}`}>Open</Link>
-      </Button>
-    );
+    return null;
   }
   if (cycle.phase === 'sent') {
     return <span className="font-mono text-[11px] text-muted-foreground">cycle closed</span>;
@@ -216,22 +306,29 @@ function NextAction({ cycle, ceoId }: { cycle: RosterCycle | null; ceoId: string
   }
   if (cycle.phase === 'generated') {
     return (
-      <Button asChild size="sm" className="h-7 px-2 text-xs" style={{ background: 'oklch(58% 0.14 258)' }}>
-        <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>Review →</Link>
+      <Button
+        size="sm"
+        className="h-7 px-2 text-xs"
+        style={{ background: 'oklch(58% 0.14 258)' }}
+        onClick={onReview}
+      >
+        Review →
       </Button>
     );
   }
   if (cycle.phase === 'ready') {
     return (
-      <Button asChild size="sm" className="h-7 px-2 text-xs" style={{ background: 'oklch(58% 0.14 258)' }}>
-        <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>Generate →</Link>
+      <Button
+        size="sm"
+        className="h-7 px-2 text-xs"
+        style={{ background: 'oklch(58% 0.14 258)' }}
+        onClick={onOpenInline}
+      >
+        Generate →
       </Button>
     );
   }
-  // gathering — passive state, no urgent CTA
-  return (
-    <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs">
-      <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>Open</Link>
-    </Button>
-  );
+  // gathering — passive state, no urgent CTA. The chevron on the left
+  // already expands the row inline, so we don't render a redundant button.
+  return null;
 }

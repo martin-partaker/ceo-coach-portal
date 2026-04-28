@@ -1,4 +1,6 @@
-import { eq, asc, and, inArray, sql } from 'drizzle-orm';
+import { eq, asc, and, desc, inArray, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
   ceos,
@@ -295,4 +297,93 @@ export const rosterRouter = createTRPCRouter({
         return a.ceo.name.localeCompare(b.ceo.name);
       });
   }),
+
+  /**
+   * Full content of a single cycle for the inline workspace expansion in
+   * Roster v2. Admin-scoped (no per-coach filtering). Returns the cycle
+   * row, the CEO row, every projected input (journal entries, transcripts),
+   * action items, and the latest report. The page mirrors what the standalone
+   * cycle page shows but in a denser inline panel.
+   */
+  cycleDetail: adminProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, cycle.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [coach] = await ctx.db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, ceo.coachId))
+        .limit(1);
+
+      const [journals, cycleTranscripts, cycleActionItems, latestReport, cycleRawInputs] =
+        await Promise.all([
+          ctx.db
+            .select()
+            .from(journalEntries)
+            .where(eq(journalEntries.cycleId, input.cycleId))
+            .orderBy(asc(journalEntries.weekNumber)),
+          ctx.db
+            .select()
+            .from(transcriptsTable)
+            .where(eq(transcriptsTable.cycleId, input.cycleId))
+            .orderBy(desc(transcriptsTable.recordedAt)),
+          ctx.db
+            .select()
+            .from(actionItems)
+            .where(eq(actionItems.cycleId, input.cycleId))
+            .orderBy(asc(actionItems.createdAt)),
+          ctx.db
+            .select()
+            .from(reports)
+            .where(eq(reports.cycleId, input.cycleId))
+            .orderBy(desc(reports.generatedAt))
+            .limit(1),
+          ctx.db
+            .select()
+            .from(rawInputs)
+            .where(
+              and(
+                eq(rawInputs.cycleId, input.cycleId),
+                eq(rawInputs.matchStatus, 'matched')
+              )
+            )
+            .orderBy(asc(rawInputs.occurredAt)),
+        ]);
+
+      const actionsBucketed = {
+        open: cycleActionItems.filter((a) => a.status === 'open').length,
+        done: cycleActionItems.filter((a) => a.status === 'done').length,
+        dropped: cycleActionItems.filter((a) => a.status === 'dropped').length,
+      };
+
+      const unconfirmed = cycleRawInputs.filter(
+        (r) => r.matchConfidence != null && r.matchConfidence < 100
+      );
+
+      return {
+        cycle,
+        ceo,
+        coach: coach ?? null,
+        journals,
+        transcripts: cycleTranscripts,
+        actionItems: cycleActionItems,
+        actionsBucketed,
+        rawInputs: cycleRawInputs,
+        unconfirmedCount: unconfirmed.length,
+        report: latestReport[0] ?? null,
+      };
+    }),
 });

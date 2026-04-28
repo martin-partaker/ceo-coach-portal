@@ -24,7 +24,10 @@ import { CycleWorkspace } from '@/components/admin/roster-v2-workspace';
  * land on anyone's.
  */
 export function SingleCeoPage({ ceoId }: { ceoId: string }) {
-  const summaryQuery = trpc.roster.cycleSummary.useQuery();
+  // Deep-link page: ask for 'all' so an admin can land on any CEO. A
+  // regular coach falls through to coach scope server-side, so this
+  // still filters to their own CEOs.
+  const summaryQuery = trpc.roster.cycleSummary.useQuery({ scope: 'all' });
   const summary = useMemo(() => {
     if (!summaryQuery.data) return null;
     return summaryQuery.data.find((s) => s.ceo.id === ceoId) ?? null;

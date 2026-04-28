@@ -30,7 +30,10 @@ export function SingleCyclePage({
   ceoId: string;
   cycleId: string;
 }) {
-  const summaryQuery = trpc.roster.cycleSummary.useQuery();
+  // Deep-link page: ask for 'all' so an admin can land on any CEO's
+  // cycle. Non-admins fall through to coach scope server-side, so a
+  // regular coach still only sees their own CEOs here.
+  const summaryQuery = trpc.roster.cycleSummary.useQuery({ scope: 'all' });
   const summary = useMemo(() => {
     if (!summaryQuery.data) return null;
     return (

@@ -16,8 +16,13 @@ export function RosterV2Wrapper({ currentCoachId }: { currentCoachId: string }) 
   return (
     <RosterV2Page
       currentCoachId={currentCoachId}
-      renderExpanded={(current: RosterCycle, all: RosterCycle[]) => (
-        <ExpandedFromCache cycleId={current.id} cycles={all} />
+      renderExpanded={(active: RosterCycle, all: RosterCycle[], setActive, intent) => (
+        <ExpandedFromCache
+          cycleId={active.id}
+          cycles={all}
+          onChange={setActive}
+          reviewKey={intent.reviewKey}
+        />
       )}
       renderManager={(summaries: RosterCeoSummary[]) => (
         <RosterV2Manager summaries={summaries} />
@@ -29,11 +34,20 @@ export function RosterV2Wrapper({ currentCoachId }: { currentCoachId: string }) 
 function ExpandedFromCache({
   cycleId,
   cycles,
+  onChange,
+  reviewKey,
 }: {
   cycleId: string;
   cycles: RosterCycle[];
+  onChange: (id: string) => void;
+  reviewKey: number;
 }) {
-  const { data } = trpc.roster.cycleSummary.useQuery(undefined, { staleTime: 60_000 });
+  // Match the page-level scope ('all') so this query reuses the same
+  // cache entry rather than triggering a second request.
+  const { data } = trpc.roster.cycleSummary.useQuery(
+    { scope: 'all' },
+    { staleTime: 60_000 },
+  );
   const summary = useMemo(() => {
     if (!data) return null;
     return data.find((s) => s.cycles.some((c) => c.id === cycleId)) ?? null;
@@ -41,6 +55,12 @@ function ExpandedFromCache({
 
   if (!summary) return null;
   return (
-    <CycleWorkspace summary={summary} cycles={cycles} initialActiveCycleId={cycleId} />
+    <CycleWorkspace
+      summary={summary}
+      cycles={cycles}
+      activeCycleId={cycleId}
+      onActiveCycleIdChange={onChange}
+      reviewKey={reviewKey}
+    />
   );
 }

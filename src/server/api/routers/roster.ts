@@ -168,9 +168,24 @@ export const rosterRouter = createTRPCRouter({
    * matched raw_input). The client uses this to render the inline timeline,
    * the readiness fraction pill, and the expanded cycle workspace.
    */
-  cycleSummary: protectedProcedure.query(async ({ ctx }): Promise<RosterCeoSummary[]> => {
+  cycleSummary: protectedProcedure
+    .input(
+      z
+        .object({
+          /** 'coach' (default) — always filter to ctx.coach.id, regardless
+           *  of whether the caller is admin. The dashboard always asks for
+           *  this so admins viewing /dashboard see their own roster, not
+           *  everyone's. 'all' — return every CEO across every coach;
+           *  honoured only for real super admins who are not impersonating
+           *  (anyone else silently falls through to coach scope). */
+          scope: z.enum(['coach', 'all']).optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }): Promise<RosterCeoSummary[]> => {
     const now = new Date();
-    const unscoped = isUnscopedAdmin(ctx);
+    const wantsAll = input?.scope === 'all';
+    const unscoped = wantsAll && isUnscopedAdmin(ctx);
 
     // 1. CEOs + coach. Regular coaches (and impersonating admins) see only
     //    the CEOs assigned to ctx.coach.id; unscoped admins see everyone.

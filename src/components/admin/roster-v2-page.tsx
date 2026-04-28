@@ -60,7 +60,12 @@ export function RosterV2Page({
   renderManager,
 }: Props) {
   const isAdmin = surface === 'admin';
-  const { data, isLoading } = trpc.roster.cycleSummary.useQuery();
+  // Coach surface always asks for coach scope — even when the caller is
+  // a super admin viewing their own /dashboard, they should see only
+  // their own CEOs (the cross-coach view lives on /admin/ceos).
+  const { data, isLoading } = trpc.roster.cycleSummary.useQuery({
+    scope: isAdmin ? 'all' : 'coach',
+  });
   // Coach surface doesn't need the cross-coach list — it can't reassign.
   const { data: coachList } = trpc.admin.listCoaches.useQuery(undefined, {
     enabled: isAdmin,
@@ -202,19 +207,26 @@ export function RosterV2Page({
         </div>
       ) : (
         // Coach surface: skip the per-coach grouping (there's only one
-        // coach — themselves) and render a flat list of CEO rows.
-        <div className="overflow-hidden rounded-lg border border-border bg-background">
-          {filteredSummaries.map((r) => (
-            <RosterV2Row
-              key={r.ceo.id}
-              summary={r}
-              coaches={coachOptions}
-              expanded={openCeoId === r.ceo.id}
-              onToggle={() => setOpenCeoId(openCeoId === r.ceo.id ? null : r.ceo.id)}
-              renderExpanded={renderExpanded}
-              surface="coach"
-            />
-          ))}
+        // coach — themselves) and render a flat list of CEO rows. The
+        // Legend lives just above the list so the dot colors used in
+        // the timeline strip aren't a mystery.
+        <div>
+          <div className="mb-1 flex items-center justify-end gap-3 px-1 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+            <Legend />
+          </div>
+          <div className="overflow-hidden rounded-lg border border-border bg-background">
+            {filteredSummaries.map((r) => (
+              <RosterV2Row
+                key={r.ceo.id}
+                summary={r}
+                coaches={coachOptions}
+                expanded={openCeoId === r.ceo.id}
+                onToggle={() => setOpenCeoId(openCeoId === r.ceo.id ? null : r.ceo.id)}
+                renderExpanded={renderExpanded}
+                surface="coach"
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

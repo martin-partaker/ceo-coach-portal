@@ -47,7 +47,12 @@ function ExpandedFromCache({
   onChange: (id: string) => void;
   reviewKey: number;
 }) {
-  const { data } = trpc.roster.cycleSummary.useQuery(undefined, { staleTime: 60_000 });
+  // Match the page-level scope ('coach') so this query reuses the same
+  // cache entry rather than triggering a second request.
+  const { data } = trpc.roster.cycleSummary.useQuery(
+    { scope: 'coach' },
+    { staleTime: 60_000 },
+  );
   const summary = useMemo(() => {
     if (!data) return null;
     return data.find((s) => s.cycles.some((c) => c.id === cycleId)) ?? null;

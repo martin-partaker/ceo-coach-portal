@@ -174,11 +174,19 @@ export const rosterRouter = createTRPCRouter({
 
     // 1. CEOs + coach. Regular coaches (and impersonating admins) see only
     //    the CEOs assigned to ctx.coach.id; unscoped admins see everyone.
-    const ceoRows = await ctx.db
+    //
+    //    NB: we conditionally append `.where(...)` instead of passing
+    //    `unscoped ? undefined : eq(...)` because Drizzle 0.45 does not
+    //    reliably treat `.where(undefined)` as a no-op — when `unscoped`
+    //    is true the original (admin) query had no `.where()` clause at
+    //    all, and we replicate that exactly here.
+    const ceoBaseQuery = ctx.db
       .select({ ceo: ceos, coach: coaches })
       .from(ceos)
-      .innerJoin(coaches, eq(ceos.coachId, coaches.id))
-      .where(unscoped ? undefined : eq(ceos.coachId, ctx.coach.id));
+      .innerJoin(coaches, eq(ceos.coachId, coaches.id));
+    const ceoRows = unscoped
+      ? await ceoBaseQuery
+      : await ceoBaseQuery.where(eq(ceos.coachId, ctx.coach.id));
 
     if (ceoRows.length === 0) return [];
 

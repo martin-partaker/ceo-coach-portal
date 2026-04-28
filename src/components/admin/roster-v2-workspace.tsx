@@ -18,7 +18,6 @@ import {
   FileText,
   Mail,
   Pencil,
-  ExternalLink,
   AlertTriangle,
   Check,
   CheckCircle2,
@@ -123,12 +122,6 @@ export function CycleWorkspace({
           <Plus className="h-3 w-3" /> New cycle
         </button>
         <span className="flex-1" />
-        <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground">
-          <Link href={`/ceos/${summary.ceo.id}/cycles/${cycle.id}`}>
-            <ExternalLink className="mr-1 h-3 w-3" />
-            Open full page
-          </Link>
-        </Button>
       </div>
 
       <CycleBody
@@ -1110,7 +1103,6 @@ function ReadinessCard({
         )}
         <ReportReviewer
           cycleId={cycle.id}
-          ceoId={ceoId}
           ceoName={ceoName}
           cycleLabel={cycle.label}
           open={reviewOpen}

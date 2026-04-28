@@ -1,14 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { ChevronRight, MoreHorizontal, Pencil, ArrowRightLeft, ExternalLink, Trash2 } from 'lucide-react';
+import { ChevronRight, MoreHorizontal, Pencil, ArrowRightLeft, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
@@ -163,12 +161,6 @@ export function RosterV2Row({
               <DropdownMenuItem onClick={() => setEditOpen(true)}>
                 <Pencil className="mr-2 h-3.5 w-3.5" /> Edit profile
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link href={`/ceos/${summary.ceo.id}`}>
-                  <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open full page
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
               {/* Reassigning to another coach is inherently a cross-coach
                   action — admin only. Edit profile + Delete CEO now run
                   through the coach-scoped widening so both surfaces use

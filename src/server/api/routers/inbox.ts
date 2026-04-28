@@ -13,6 +13,7 @@ import {
   transcripts,
 } from '@/db/schema';
 import { ensureAlias, normalizeEmail } from '@/lib/ingestion/identity';
+import { ensureCycleForCeoAndDate } from '@/lib/ingestion/match-cycle';
 import { projectRawInput } from '@/lib/ingestion/project';
 import { rematchPendingRows } from '@/lib/ingestion/rematch';
 import {
@@ -372,13 +373,24 @@ export const inboxRouter = createTRPCRouter({
         }
       }
 
+      // Auto-attach a cycle for the row's date — exact CEO match means we
+      // can resolve the cycle deterministically (creating a monthly default
+      // when none covers the date). Without this, projection silently no-ops
+      // and the row never reaches the typed transcripts / journal_entries
+      // tables, so it doesn't show up on the roster's cycle strip.
+      const cycleMatch = await ensureCycleForCeoAndDate({
+        ceoId: ceo.id,
+        occurredAt: raw.occurredAt,
+      });
+
       await ctx.db
         .update(rawInputs)
         .set({
           ceoId: ceo.id,
           coachId: ceo.coachId,
+          cycleId: cycleMatch.cycleId,
           matchStatus: 'matched',
-          matchConfidence: 100,
+          matchConfidence: cycleMatch.confident ? 100 : 75,
           resolvedAt: new Date(),
           resolvedBy: ctx.coach.id,
         })
@@ -428,13 +440,28 @@ export const inboxRouter = createTRPCRouter({
 
       await ensureAlias(createdCeo.id, normalizedEmail);
 
+      // Read the row's occurredAt before we update it, then auto-attach a
+      // cycle (creating a monthly default for this brand-new CEO).
+      const [rowForDate] = await ctx.db
+        .select({ occurredAt: rawInputs.occurredAt })
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      const cycleMatch = rowForDate
+        ? await ensureCycleForCeoAndDate({
+            ceoId: createdCeo.id,
+            occurredAt: rowForDate.occurredAt,
+          })
+        : null;
+
       await ctx.db
         .update(rawInputs)
         .set({
           ceoId: createdCeo.id,
           coachId: input.coachId,
+          cycleId: cycleMatch?.cycleId ?? null,
           matchStatus: 'matched',
-          matchConfidence: 100,
+          matchConfidence: cycleMatch?.confident ? 100 : 75,
           resolvedAt: new Date(),
           resolvedBy: ctx.coach.id,
         })

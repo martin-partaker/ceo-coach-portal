@@ -82,6 +82,16 @@ export function RosterV2Row({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [reviewKey, setReviewKey] = useState(0);
 
+  // Reset the review intent counter when the row collapses. Without this,
+  // a "Review →" click leaves reviewKey ≥ 1 in row state, and the next
+  // time the user expands the row by simply clicking on it the workspace
+  // remounts, ReadinessCard's useEffect([reviewKey]) fires on mount, and
+  // the report reviewer auto-opens — which is what just happened from
+  // the user's perspective.
+  useEffect(() => {
+    if (!expanded) setReviewKey(0);
+  }, [expanded]);
+
   // Open the inline workspace and (optionally) signal a one-shot intent
   // like "show me the report" that propagates to the expanded body.
   function expandWithIntent(targetCycleId: string, intent: 'review' | 'open') {
@@ -181,8 +191,21 @@ export function RosterV2Row({
         </div>
       </div>
 
-      {/* Expanded body — Phase B injects this */}
-      {expanded && activeCycle && renderExpanded?.(activeCycle, cycles, setActiveCycleId, { reviewKey })}
+      {/* Expanded body — Phase B injects this when there's a cycle to
+          show; for a brand-new CEO (no cycles yet) we render a minimal
+          empty-state so the row doesn't silently collapse to nothing. */}
+      {expanded && activeCycle &&
+        renderExpanded?.(activeCycle, cycles, setActiveCycleId, { reviewKey })}
+      {expanded && !activeCycle && (
+        <div className="border-t border-border bg-muted/20 px-12 py-6 text-[12px] text-muted-foreground">
+          <p className="italic">
+            No data for this coachee yet — no cycles, transcripts, or journals
+            have been imported. Their first cycle will appear here automatically
+            once a Tally submission or Zoom transcript lands, or you can create
+            one manually from the CEO profile.
+          </p>
+        </div>
+      )}
 
       {/* CEO profile + delete dialogs. The underlying admin.updateCeo /
           addCeoAlias / removeCeoAlias / deleteCeo procedures are now

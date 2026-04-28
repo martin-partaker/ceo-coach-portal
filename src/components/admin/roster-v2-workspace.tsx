@@ -4,14 +4,33 @@ import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
-import { Loader2, FileText, Mail, Pencil, ExternalLink, AlertTriangle, Check, Plus, Sparkles, Undo2, RefreshCw, FilePlus } from 'lucide-react';
+import {
+  Loader2,
+  FileText,
+  Mail,
+  Pencil,
+  ExternalLink,
+  AlertTriangle,
+  Check,
+  Plus,
+  Sparkles,
+  Undo2,
+  RefreshCw,
+  FilePlus,
+  ChevronDown,
+  ChevronRight,
+  Target,
+  CalendarRange,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type {
   RosterCeoSummary,
   RosterCycle,
-  RosterReadiness,
 } from '@/server/api/routers/roster';
 import { CONTENT_TYPE_DOT, fmtShortDate, PHASE_DOT, dayOffset, relativeDay } from './roster-v2-shared';
+import { CycleEditDialog } from './roster-v2-cycle-edit-dialog';
+import { CycleCreateDialog } from './roster-v2-cycle-create-dialog';
+import { NotesEditor } from './roster-v2-notes-editor';
 
 interface Props {
   summary: RosterCeoSummary;
@@ -26,6 +45,7 @@ interface Props {
  */
 export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props) {
   const [activeCycleId, setActiveCycleId] = useState(initialActiveCycleId);
+  const [newCycleOpen, setNewCycleOpen] = useState(false);
   const cycle = cycles.find((c) => c.id === activeCycleId);
   const cycleIndex = cycles.findIndex((c) => c.id === activeCycleId);
   const prevCycle = cycleIndex > 0 ? cycles[cycleIndex - 1] : null;
@@ -64,6 +84,13 @@ export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props)
             </button>
           );
         })}
+        <button
+          onClick={() => setNewCycleOpen(true)}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+          style={{ marginBottom: -1 }}
+        >
+          <Plus className="h-3 w-3" /> New cycle
+        </button>
         <span className="flex-1" />
         <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground">
           <Link href={`/ceos/${summary.ceo.id}/cycles/${cycle.id}`}>
@@ -73,10 +100,14 @@ export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props)
         </Button>
       </div>
 
-      <CycleBody
-        ceo={summary.ceo}
-        cycle={cycle}
-        prevCycle={prevCycle}
+      <CycleBody ceo={summary.ceo} cycle={cycle} prevCycle={prevCycle} />
+
+      <CycleCreateDialog
+        ceoId={summary.ceo.id}
+        ceoName={summary.ceo.name}
+        open={newCycleOpen}
+        onOpenChange={setNewCycleOpen}
+        onCreated={(id) => setActiveCycleId(id)}
       />
     </div>
   );
@@ -94,14 +125,21 @@ function CycleBody({
   const detail = trpc.roster.cycleDetail.useQuery({ cycleId: cycle.id });
   const data = detail.data;
 
-  const totalReady = (Object.values(cycle.readiness) as RosterReadiness[keyof RosterReadiness][]).filter((r) => r.done).length;
+  const totalReady = Object.values(cycle.readiness).filter((r) => r.done).length;
   const totalSlots = 6;
   const isReady = totalReady === totalSlots;
+
+  const [editCycleOpen, setEditCycleOpen] = useState(false);
 
   return (
     <div className="grid grid-cols-1 gap-6 px-12 py-5 lg:grid-cols-[1fr_280px]">
       {/* Left column — input slots */}
       <div className="grid gap-3">
+        {/* 10x goal callout — context for the AI summary, prominent so the
+            super admin can see what each CEO is working toward without
+            jumping to the profile. */}
+        <TenXGoalCallout ceoName={ceo.name} ceoId={ceo.id} tenXGoal={ceo.tenXGoal} />
+
         {/* Header row */}
         <div className="mb-1 flex items-baseline gap-3">
           <div className="text-base font-semibold">{cycle.label}</div>
@@ -112,10 +150,28 @@ function CycleBody({
             {' · session period for '}
             {ceo.name}
           </div>
+          <button
+            onClick={() => setEditCycleOpen(true)}
+            className="inline-flex items-center gap-1 rounded border border-transparent px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            aria-label="Edit cycle"
+          >
+            <CalendarRange className="h-3 w-3" /> edit dates
+          </button>
         </div>
 
         {/* Day-precise mini timeline */}
         <CycleSubmissionsStrip cycle={cycle} />
+
+        <CycleEditDialog
+          cycle={{
+            id: cycle.id,
+            label: cycle.label,
+            periodStart: cycle.periodStart,
+            periodEnd: cycle.periodEnd,
+          }}
+          open={editCycleOpen}
+          onOpenChange={setEditCycleOpen}
+        />
 
         {/* Unconfirmed banner */}
         {(data?.unconfirmedCount ?? 0) > 0 && (
@@ -151,12 +207,14 @@ function CycleBody({
           }
         >
           {data?.transcripts.length ? (
-            data.transcripts.slice(0, 3).map((t) => (
-              <SubmissionPreview
+            data.transcripts.map((t) => (
+              <ExpandableEntry
                 key={t.id}
                 title={t.title || 'Untitled meeting'}
-                sub={`Zoom · ${t.recordedAt ? fmtShortDate(t.recordedAt.toString().slice(0, 10)) : '—'}${t.duration ? ` · ${t.duration} min` : ''}`}
+                sub={`Zoom${t.recordedAt ? ` · ${fmtShortDate(t.recordedAt.toString().slice(0, 10))}` : ''}${t.duration ? ` · ${t.duration} min` : ''}`}
                 dotColor={CONTENT_TYPE_DOT.transcript}
+                content={t.content}
+                meta={`${(t.content ?? '').length.toLocaleString()} chars`}
               />
             ))
           ) : (
@@ -164,14 +222,16 @@ function CycleBody({
           )}
         </InputSlot>
 
-        <InputSlot icon="note" title="Extra Notes & Context" status="optional">
-          {cycle.readiness ? (
-            <p className="px-1 py-1 text-[12px] italic text-muted-foreground">
-              {(data?.cycle?.additionalContext?.trim()
-                ? data.cycle.additionalContext.slice(0, 220)
-                : 'Paste any additional context — emails, notes, meeting prep — that should inform this session.')}
-            </p>
-          ) : null}
+        <InputSlot
+          icon="note"
+          title="Extra Notes & Context"
+          status={data?.cycle.additionalContext?.trim() ? 'done' : 'optional'}
+        >
+          {data ? (
+            <NotesEditor cycleId={cycle.id} initialValue={data.cycle.additionalContext} />
+          ) : (
+            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
+          )}
         </InputSlot>
 
         <InputSlot
@@ -229,11 +289,12 @@ function CycleBody({
           {data?.journals.length ? (
             <div className="grid gap-1.5">
               {data.journals.map((j) => (
-                <SubmissionPreview
+                <ExpandableEntry
                   key={j.id}
                   title={j.title || `Week ${j.weekNumber}`}
                   sub={`Tally · Week ${j.weekNumber}`}
                   dotColor={CONTENT_TYPE_DOT.weekly_journal}
+                  content={j.content}
                   compact
                 />
               ))}
@@ -458,34 +519,122 @@ function AiBadge() {
   );
 }
 
-function SubmissionPreview({
+function TenXGoalCallout({
+  ceoName,
+  ceoId,
+  tenXGoal,
+}: {
+  ceoName: string;
+  ceoId: string;
+  tenXGoal: string | null;
+}) {
+  const has = !!tenXGoal?.trim();
+  return (
+    <div
+      className="rounded-lg border px-3 py-2.5"
+      style={
+        has
+          ? {
+              background: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 94%)',
+              borderColor: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 65%)',
+            }
+          : { background: 'var(--muted)', borderColor: 'var(--border)' }
+      }
+    >
+      <div className="mb-1 flex items-center gap-1.5">
+        <Target
+          className="h-3 w-3"
+          style={{ color: has ? 'oklch(55% 0.12 152)' : 'var(--muted-foreground)' }}
+        />
+        <span
+          className="font-mono text-[10px] uppercase tracking-wider"
+          style={{ color: has ? 'oklch(55% 0.12 152)' : 'var(--muted-foreground)' }}
+        >
+          {ceoName}&apos;s 10x goal
+        </span>
+        <span className="flex-1" />
+        <Link
+          href={`/ceos/${ceoId}`}
+          className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
+        >
+          edit on profile →
+        </Link>
+      </div>
+      {has ? (
+        <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">
+          {tenXGoal}
+        </p>
+      ) : (
+        <p className="text-[12px] italic text-muted-foreground">
+          No 10x goal set — open the CEO profile to capture one.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ExpandableEntry({
   title,
   sub,
   dotColor,
+  content,
+  meta,
   compact,
 }: {
   title: string;
   sub?: string;
   dotColor: string;
+  content: string | null;
+  meta?: string;
   compact?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const hasContent = !!content?.trim();
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2.5 rounded border border-border bg-muted/30',
-        compact ? 'px-2.5 py-1.5' : 'px-2.5 py-2'
-      )}
-    >
-      <span
-        className="inline-block h-2 w-2 shrink-0 rounded-full"
-        style={{ background: dotColor }}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12px]">{title}</div>
-        {!compact && sub && (
-          <div className="truncate font-mono text-[11px] text-muted-foreground">{sub}</div>
+    <div className="overflow-hidden rounded border border-border bg-muted/30">
+      <button
+        type="button"
+        onClick={() => hasContent && setOpen((o) => !o)}
+        disabled={!hasContent}
+        className={cn(
+          'flex w-full items-center gap-2.5 text-left transition-colors',
+          compact ? 'px-2.5 py-1.5' : 'px-2.5 py-2',
+          hasContent && 'hover:bg-muted/50'
         )}
-      </div>
+      >
+        <span
+          className="grid h-3 w-3 shrink-0 place-items-center text-muted-foreground"
+          aria-hidden
+        >
+          {hasContent ? (
+            open ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )
+          ) : null}
+        </span>
+        <span
+          className="inline-block h-2 w-2 shrink-0 rounded-full"
+          style={{ background: dotColor }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px]">{title}</div>
+          {!compact && sub && (
+            <div className="truncate font-mono text-[11px] text-muted-foreground">{sub}</div>
+          )}
+        </div>
+        {meta && (
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{meta}</span>
+        )}
+      </button>
+      {open && hasContent && (
+        <div className="max-h-72 overflow-y-auto border-t border-border bg-background px-3 py-2.5">
+          <pre className="whitespace-pre-wrap break-words font-sans text-[11.5px] leading-relaxed text-foreground/85">
+            {content}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

@@ -386,4 +386,93 @@ export const rosterRouter = createTRPCRouter({
         report: latestReport[0] ?? null,
       };
     }),
+
+  /**
+   * Update one or more fields on a cycle. Used by the inline workspace for
+   * editing the date range, label, and additionalContext (the "Extra Notes
+   * & Context" textarea). Admin-scoped — coach scope happens elsewhere.
+   */
+  updateCycle: adminProcedure
+    .input(
+      z.object({
+        cycleId: z.string().uuid(),
+        label: z.string().min(1).optional(),
+        periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        additionalContext: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const set: Partial<typeof cycles.$inferInsert> = {};
+      if (input.label !== undefined) set.label = input.label;
+      if (input.periodStart !== undefined) set.periodStart = input.periodStart;
+      if (input.periodEnd !== undefined) set.periodEnd = input.periodEnd;
+      if (input.additionalContext !== undefined) set.additionalContext = input.additionalContext;
+
+      // Sanity: if both dates supplied, end must be ≥ start
+      if (set.periodStart && set.periodEnd && set.periodStart > set.periodEnd) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Cycle end date must be on or after the start date.',
+        });
+      }
+
+      const [updated] = await ctx.db
+        .update(cycles)
+        .set(set)
+        .where(eq(cycles.id, input.cycleId))
+        .returning();
+      return updated;
+    }),
+
+  /**
+   * Create a new cycle for a CEO from inside the inline workspace. Admin
+   * uses this when the operator clicks "+ New cycle" in the cycle tab strip.
+   */
+  createCycle: adminProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        label: z.string().min(1),
+        periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [ceo] = await ctx.db
+        .select({ id: ceos.id })
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND', message: 'CEO not found' });
+
+      if (
+        input.periodStart &&
+        input.periodEnd &&
+        input.periodStart > input.periodEnd
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Cycle end date must be on or after the start date.',
+        });
+      }
+
+      const [created] = await ctx.db
+        .insert(cycles)
+        .values({
+          ceoId: input.ceoId,
+          label: input.label,
+          periodStart: input.periodStart ?? null,
+          periodEnd: input.periodEnd ?? null,
+        })
+        .returning();
+      return created;
+    }),
 });

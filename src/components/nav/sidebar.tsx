@@ -7,7 +7,6 @@ import {
   Users,
   LayoutDashboard,
   Settings,
-  ShieldCheck,
   Inbox,
   ListChecks,
 } from 'lucide-react';
@@ -20,7 +19,6 @@ const navItems = [
 ];
 
 const adminItems = [
-  { href: '/admin', label: 'Coaches', icon: ShieldCheck },
   { href: '/admin/ceos', label: 'Roster', icon: Users },
   { href: '/admin/triage', label: 'Triage', icon: ListChecks, showPendingBadge: true },
   { href: '/admin/inbox', label: 'Inbox', icon: Inbox },

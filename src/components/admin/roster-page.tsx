@@ -17,13 +17,14 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  Eye,
   Loader2,
   MoreHorizontal,
   Pencil,
   Search,
   ShieldCheck,
+  ShieldOff,
   Trash2,
-  UserCog,
   Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -220,11 +221,27 @@ function CoachSection({
   highlight: string;
   currentCoachId: string;
 }) {
+  const utils = trpc.useUtils();
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [impersonating, setImpersonating] = useState(false);
 
   const isAutoCreated = !coach.neonAuthUserId;
   const isSelf = coach.id === currentCoachId;
+
+  const toggleAdmin = trpc.admin.toggleAdmin.useMutation({
+    onSuccess: () => utils.admin.listCoaches.invalidate(),
+  });
+
+  async function impersonate() {
+    setImpersonating(true);
+    await fetch('/api/admin/impersonate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ coachId: coach.id }),
+    });
+    window.location.href = '/dashboard';
+  }
 
   return (
     <Card className="overflow-hidden">
@@ -285,16 +302,38 @@ function CoachSection({
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuItem onClick={() => setEditOpen(true)}>
                 <Pencil className="mr-2 h-3.5 w-3.5" /> Edit coach
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link href={`/admin/coaches/${coach.id}`}>
-                  <UserCog className="mr-2 h-3.5 w-3.5" /> Open detail
-                  {coach.isSuperAdmin && <ShieldCheck className="ml-2 h-3 w-3" />}
-                </Link>
-              </DropdownMenuItem>
+              {!!coach.neonAuthUserId && (
+                <DropdownMenuItem
+                  onClick={impersonate}
+                  disabled={impersonating || isSelf}
+                >
+                  {impersonating ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Eye className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  Impersonate
+                </DropdownMenuItem>
+              )}
+              {!isSelf && (
+                <DropdownMenuItem
+                  onClick={() => toggleAdmin.mutate({ coachId: coach.id })}
+                  disabled={toggleAdmin.isPending}
+                >
+                  {toggleAdmin.isPending ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : coach.isSuperAdmin ? (
+                    <ShieldOff className="mr-2 h-3.5 w-3.5" />
+                  ) : (
+                    <ShieldCheck className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {coach.isSuperAdmin ? 'Remove admin' : 'Make admin'}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setDeleteOpen(true)}

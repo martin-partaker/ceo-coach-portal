@@ -28,48 +28,6 @@ export const adminRouter = createTRPCRouter({
     return enriched;
   }),
 
-  getCoachDetail: adminProcedure
-    .input(z.object({ coachId: z.string().uuid() }))
-    .query(async ({ ctx, input }) => {
-      const [coach] = await ctx.db
-        .select()
-        .from(coaches)
-        .where(eq(coaches.id, input.coachId))
-        .limit(1);
-      if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
-
-      const coachCeos = await ctx.db
-        .select()
-        .from(ceos)
-        .where(eq(ceos.coachId, coach.id))
-        .orderBy(desc(ceos.createdAt));
-
-      const enriched = await Promise.all(
-        coachCeos.map(async (ceo) => {
-          const [latestCycle] = await ctx.db
-            .select()
-            .from(cycles)
-            .where(eq(cycles.ceoId, ceo.id))
-            .orderBy(desc(cycles.createdAt))
-            .limit(1);
-
-          let hasReport = false;
-          if (latestCycle) {
-            const [report] = await ctx.db
-              .select({ id: reports.id })
-              .from(reports)
-              .where(eq(reports.cycleId, latestCycle.id))
-              .limit(1);
-            hasReport = !!report;
-          }
-
-          return { ceo, latestCycle: latestCycle ?? null, hasReport };
-        })
-      );
-
-      return { coach, ceos: enriched };
-    }),
-
   createCoach: adminProcedure
     .input(
       z.object({
@@ -127,30 +85,6 @@ export const adminRouter = createTRPCRouter({
       const [updated] = await ctx.db
         .update(coaches)
         .set({ isSuperAdmin: !coach.isSuperAdmin })
-        .where(eq(coaches.id, input.coachId))
-        .returning();
-
-      return updated;
-    }),
-
-  updateCoachZoomEmail: adminProcedure
-    .input(
-      z.object({
-        coachId: z.string().uuid(),
-        zoomUserEmail: z.string().email().nullable(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const [coach] = await ctx.db
-        .select()
-        .from(coaches)
-        .where(eq(coaches.id, input.coachId))
-        .limit(1);
-      if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
-
-      const [updated] = await ctx.db
-        .update(coaches)
-        .set({ zoomUserEmail: input.zoomUserEmail })
         .where(eq(coaches.id, input.coachId))
         .returning();
 

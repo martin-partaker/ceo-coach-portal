@@ -184,9 +184,20 @@ function CycleBody({
             jumping to the profile. */}
         <TenXGoalCallout ceoName={ceo.name} ceoId={ceo.id} tenXGoal={ceo.tenXGoal} />
 
-        {/* Header row */}
+        {/* Header row — cycle title is itself a button so it's obvious
+            you can edit the cycle (rename, change dates, or delete it)
+            from the title. The pencil affordance reinforces the click
+            target. */}
         <div className="mb-1 flex items-baseline gap-3">
-          <div className="text-base font-semibold">{deriveCycleLabel(cycle)}</div>
+          <button
+            type="button"
+            onClick={() => setEditCycleOpen(true)}
+            className="group inline-flex items-baseline gap-1.5 rounded text-base font-semibold transition-colors hover:text-foreground/70"
+            aria-label="Edit cycle"
+          >
+            <span>{deriveCycleLabel(cycle)}</span>
+            <Pencil className="h-3 w-3 self-center text-muted-foreground/60 transition-colors group-hover:text-foreground" />
+          </button>
           <div className="font-mono text-[11px] text-muted-foreground">
             {cycle.periodStart && fmtShortDate(cycle.periodStart)}
             {' → '}
@@ -195,11 +206,12 @@ function CycleBody({
             {ceo.name}
           </div>
           <button
+            type="button"
             onClick={() => setEditCycleOpen(true)}
-            className="inline-flex items-center gap-1 rounded border border-transparent px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            className="inline-flex items-center gap-1 rounded border border-border bg-muted/30 px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             aria-label="Edit cycle"
           >
-            <CalendarRange className="h-3 w-3" /> edit dates
+            <CalendarRange className="h-3 w-3" /> Edit cycle
           </button>
         </div>
 

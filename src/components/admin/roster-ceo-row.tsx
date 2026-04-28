@@ -12,10 +12,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Pencil, ArrowRightLeft, ExternalLink, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Pencil, ArrowRightLeft, ExternalLink, Trash2, Inbox } from 'lucide-react';
 import { RosterEditCeoDialog } from './roster-edit-ceo-dialog';
 import { RosterReassignCeoDialog } from './roster-reassign-ceo-dialog';
 import { RosterDeleteCeoDialog } from './roster-delete-ceo-dialog';
+import { CeoDataDrawer } from './ceo-data-drawer';
 
 export interface RosterCeoRowData {
   id: string;
@@ -48,6 +49,10 @@ export function RosterCeoRow({
   const [editOpen, setEditOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [dataOpen, setDataOpen] = useState(false);
+
+  const coachName =
+    coaches.find((c) => c.id === ceo.coachId)?.name ?? 'Unknown coach';
 
   return (
     <div className="group flex items-center gap-3 px-6 py-2.5 transition-colors hover:bg-muted/30">
@@ -85,13 +90,18 @@ export function RosterCeoRow({
         </p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
-        <div className="text-right">
+      <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => setDataOpen(true)}
+          aria-label={`Inspect data for ${ceo.name}`}
+          className="rounded-md px-2 py-1 text-right transition-colors hover:bg-muted/60 hover:text-foreground"
+        >
           <p className="tabular-nums">{ceo.cycleCount}</p>
           <p className="text-[10px] uppercase tracking-wider">cycles</p>
-        </div>
+        </button>
         {ceo.latestCycleLabel && (
-          <div className="text-right">
+          <div className="px-1 text-right">
             <p className="font-mono">{ceo.latestCycleLabel}</p>
             <p className="text-[10px] text-muted-foreground/70">latest</p>
           </div>
@@ -109,16 +119,20 @@ export function RosterCeoRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onClick={() => setEditOpen(true)}>
-              <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setReassignOpen(true)}>
-              <ArrowRightLeft className="mr-2 h-3.5 w-3.5" /> Reassign coach
+            <DropdownMenuItem onClick={() => setDataOpen(true)}>
+              <Inbox className="mr-2 h-3.5 w-3.5" /> Inspect data
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link href={`/ceos/${ceo.id}`}>
                 <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open profile
               </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => setEditOpen(true)}>
+              <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setReassignOpen(true)}>
+              <ArrowRightLeft className="mr-2 h-3.5 w-3.5" /> Reassign coach
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -151,6 +165,13 @@ export function RosterCeoRow({
         ceo={{ id: ceo.id, name: ceo.name, cycleCount: ceo.cycleCount }}
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
+      />
+      <CeoDataDrawer
+        ceoId={ceo.id}
+        ceoName={ceo.name}
+        coachName={coachName}
+        open={dataOpen}
+        onOpenChange={setDataOpen}
       />
     </div>
   );

@@ -112,6 +112,78 @@ export const inboxRouter = createTRPCRouter({
       return rows;
     }),
 
+  /**
+   * Returns every assigned input for a CEO (matched + archived) so super
+   * admins can inspect what's actually in the system. Used by the per-CEO
+   * data drawer in the Roster.
+   */
+  listForCeo: adminProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        search: z.string().trim().optional(),
+        limit: z.number().min(1).max(500).default(200),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const filters = [
+        eq(rawInputs.ceoId, input.ceoId),
+        inArray(rawInputs.matchStatus, ['matched', 'archived']),
+      ];
+      if (input.search && input.search.length > 0) {
+        const needle = `%${input.search.replace(/[%_]/g, (c) => `\\${c}`)}%`;
+        filters.push(sql`${rawInputs.textContent} ILIKE ${needle}`);
+      }
+
+      const rows = await ctx.db
+        .select({
+          rawInput: rawInputs,
+          cycleId: cycles.id,
+          cycleLabel: cycles.label,
+        })
+        .from(rawInputs)
+        .leftJoin(cycles, eq(rawInputs.cycleId, cycles.id))
+        .where(and(...filters))
+        .orderBy(desc(rawInputs.occurredAt))
+        .limit(input.limit);
+
+      if (rows.length === 0) {
+        return { items: [], totalCycles: 0 };
+      }
+
+      const ids = rows.map((r) => r.rawInput.id);
+      const [projectedJournals, projectedTranscripts, cycleCount] =
+        await Promise.all([
+          ctx.db
+            .select({ id: journalEntries.sourceRawInputId })
+            .from(journalEntries)
+            .where(inArray(journalEntries.sourceRawInputId, ids)),
+          ctx.db
+            .select({ id: transcripts.sourceRawInputId })
+            .from(transcripts)
+            .where(inArray(transcripts.sourceRawInputId, ids)),
+          ctx.db
+            .select({ count: sql<number>`count(*)` })
+            .from(cycles)
+            .where(eq(cycles.ceoId, input.ceoId)),
+        ]);
+
+      const projectedSet = new Set<string>();
+      for (const p of projectedJournals) if (p.id) projectedSet.add(p.id);
+      for (const p of projectedTranscripts) if (p.id) projectedSet.add(p.id);
+
+      return {
+        items: rows.map((r) => ({
+          rawInput: r.rawInput,
+          cycle: r.cycleId
+            ? { id: r.cycleId, label: r.cycleLabel ?? '' }
+            : null,
+          projected: projectedSet.has(r.rawInput.id),
+        })),
+        totalCycles: Number(cycleCount[0]?.count ?? 0),
+      };
+    }),
+
   triageQueue: adminProcedure.query(async ({ ctx }): Promise<PendingRowSuggestions[]> => {
     const rows = await ctx.db
       .select()

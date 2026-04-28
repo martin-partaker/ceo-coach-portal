@@ -211,6 +211,230 @@ export const adminRouter = createTRPCRouter({
     return enriched;
   }),
 
+  /* ───────────────────── CEO management ───────────────────── */
+
+  createCeo: adminProcedure
+    .input(
+      z.object({
+        name: z.string().min(1),
+        email: z.string().email().nullable().optional(),
+        coachId: z.string().uuid(),
+        tenXGoal: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [coach] = await ctx.db
+        .select({ id: coaches.id })
+        .from(coaches)
+        .where(eq(coaches.id, input.coachId))
+        .limit(1);
+      if (!coach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found' });
+
+      const normalizedEmail = input.email ? input.email.toLowerCase().trim() : null;
+
+      // Email collision check (against alias table)
+      if (normalizedEmail) {
+        const [clash] = await ctx.db
+          .select()
+          .from(ceoEmailAliases)
+          .where(eq(ceoEmailAliases.email, normalizedEmail))
+          .limit(1);
+        if (clash) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Email already linked to a different CEO.',
+          });
+        }
+      }
+
+      const [created] = await ctx.db
+        .insert(ceos)
+        .values({
+          coachId: input.coachId,
+          name: input.name,
+          email: normalizedEmail,
+          tenXGoal: input.tenXGoal ?? null,
+          tenXGoalUpdatedAt: input.tenXGoal ? new Date() : null,
+        })
+        .returning();
+
+      // Mirror into alias table for the lookup path
+      if (normalizedEmail) {
+        await ctx.db
+          .insert(ceoEmailAliases)
+          .values({ ceoId: created.id, email: normalizedEmail })
+          .onConflictDoNothing({ target: ceoEmailAliases.email });
+      }
+
+      return created;
+    }),
+
+  updateCeo: adminProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        name: z.string().min(1).optional(),
+        email: z.string().email().nullable().optional(),
+        tenXGoal: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const set: Partial<typeof ceos.$inferInsert> = {};
+      if (input.name !== undefined) set.name = input.name;
+      if (input.email !== undefined) {
+        set.email = input.email ? input.email.toLowerCase().trim() : null;
+      }
+      if (input.tenXGoal !== undefined) {
+        set.tenXGoal = input.tenXGoal;
+        set.tenXGoalUpdatedAt = new Date();
+      }
+
+      const [updated] = await ctx.db
+        .update(ceos)
+        .set(set)
+        .where(eq(ceos.id, input.ceoId))
+        .returning();
+
+      // If email changed, ensure it's in the aliases table
+      if (input.email !== undefined && set.email) {
+        await ctx.db
+          .insert(ceoEmailAliases)
+          .values({ ceoId: updated.id, email: set.email })
+          .onConflictDoNothing({ target: ceoEmailAliases.email });
+      }
+
+      return updated;
+    }),
+
+  reassignCeo: adminProcedure
+    .input(
+      z.object({
+        ceoId: z.string().uuid(),
+        newCoachId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [coach] = await ctx.db
+        .select({ id: coaches.id })
+        .from(coaches)
+        .where(eq(coaches.id, input.newCoachId))
+        .limit(1);
+      if (!coach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found' });
+
+      if (ceo.coachId === input.newCoachId) {
+        return ceo;
+      }
+
+      const [updated] = await ctx.db
+        .update(ceos)
+        .set({ coachId: input.newCoachId })
+        .where(eq(ceos.id, input.ceoId))
+        .returning();
+
+      return updated;
+    }),
+
+  deleteCeo: adminProcedure
+    .input(z.object({ ceoId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Cascade: aliases, cycles, journal_entries, transcripts, action_items,
+      // reports, raw_inputs all reference ceos with onDelete: 'cascade'.
+      await ctx.db.delete(ceos).where(eq(ceos.id, input.ceoId));
+      return { ok: true };
+    }),
+
+  /* ───────────────────── Coach management ───────────────────── */
+
+  updateCoach: adminProcedure
+    .input(
+      z.object({
+        coachId: z.string().uuid(),
+        name: z.string().min(1).optional(),
+        email: z.string().email().optional(),
+        zoomUserEmail: z.string().email().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [coach] = await ctx.db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, input.coachId))
+        .limit(1);
+      if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const set: Partial<typeof coaches.$inferInsert> = {};
+      if (input.name !== undefined) set.name = input.name;
+      if (input.email !== undefined) set.email = input.email.toLowerCase().trim();
+      if (input.zoomUserEmail !== undefined) {
+        set.zoomUserEmail = input.zoomUserEmail
+          ? input.zoomUserEmail.toLowerCase().trim()
+          : null;
+      }
+
+      const [updated] = await ctx.db
+        .update(coaches)
+        .set(set)
+        .where(eq(coaches.id, input.coachId))
+        .returning();
+      return updated;
+    }),
+
+  deleteCoach: adminProcedure
+    .input(z.object({ coachId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [coach] = await ctx.db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, input.coachId))
+        .limit(1);
+      if (!coach) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Refuse to delete a coach who still has CEOs — operator must
+      // reassign or delete them first to avoid surprise cascades.
+      const [{ count }] = await ctx.db
+        .select({ count: sql<number>`count(*)` })
+        .from(ceos)
+        .where(eq(ceos.coachId, input.coachId));
+      const ceoCount = Number(count);
+      if (ceoCount > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Coach has ${ceoCount} CEO${ceoCount === 1 ? '' : 's'}. Reassign or delete them first.`,
+        });
+      }
+
+      if (coach.id === ctx.coach.id) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'You cannot delete your own coach account.',
+        });
+      }
+
+      await ctx.db.delete(coaches).where(eq(coaches.id, input.coachId));
+      return { ok: true };
+    }),
+
   // View-as: get a coach's dashboard data (CEOs with status)
   viewAsCoach: adminProcedure
     .input(z.object({ coachId: z.string().uuid() }))

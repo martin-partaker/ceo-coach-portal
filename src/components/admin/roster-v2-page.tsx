@@ -107,23 +107,30 @@ export function RosterV2Page({
     return [...map.values()].sort((a, b) => a.coach.name.localeCompare(b.coach.name));
   }, [filteredSummaries]);
 
-  // Subtitle counts by phase
+  // Subtitle counts by phase. CEOs without any cycles get their own
+  // bucket so the totals add up (a CEO with no cycle isn't gathering,
+  // ready, generated, sent, or idle — there's literally nothing to be
+  // in any of those states).
   const counts = useMemo(() => {
     let ready = 0,
       generated = 0,
       gathering = 0,
       sent = 0,
-      idle = 0;
+      idle = 0,
+      noCycle = 0;
     for (const s of summaries) {
       const last = s.cycles[s.cycles.length - 1];
-      if (!last) continue;
+      if (!last) {
+        noCycle += 1;
+        continue;
+      }
       if (last.phase === 'ready') ready++;
       else if (last.phase === 'generated') generated++;
       else if (last.phase === 'gathering') gathering++;
       else if (last.phase === 'sent') sent++;
       else idle++;
     }
-    return { ready, generated, gathering, sent, idle };
+    return { ready, generated, gathering, sent, idle, noCycle };
   }, [summaries]);
 
   if (isLoading) {
@@ -135,9 +142,23 @@ export function RosterV2Page({
   }
 
   const headerTitle = isAdmin ? 'Roster' : 'Dashboard';
-  const headerSubtitle = isAdmin
-    ? `${summaries.length} CEO${summaries.length === 1 ? '' : 's'} · ${counts.ready} ready · ${counts.generated} generated · ${counts.gathering} gathering`
-    : `${summaries.length} CEO${summaries.length === 1 ? '' : 's'} on your roster · ${counts.ready} ready · ${counts.generated} generated · ${counts.gathering} gathering`;
+  // Show only buckets that have at least one CEO so the math always adds
+  // up to the headline total. The order here is roughly action priority:
+  // ready ⟶ generated are things the operator should look at; gathering
+  // is the default working state; idle / sent / no-cycle are stable or
+  // empty states.
+  const bucketParts: string[] = [];
+  if (counts.ready) bucketParts.push(`${counts.ready} ready`);
+  if (counts.generated) bucketParts.push(`${counts.generated} generated`);
+  if (counts.gathering) bucketParts.push(`${counts.gathering} gathering`);
+  if (counts.sent) bucketParts.push(`${counts.sent} sent`);
+  if (counts.idle) bucketParts.push(`${counts.idle} idle`);
+  if (counts.noCycle) bucketParts.push(`${counts.noCycle} no cycle`);
+  const totalLabel = `${summaries.length} CEO${summaries.length === 1 ? '' : 's'}${
+    isAdmin ? '' : ' on your roster'
+  }`;
+  const headerSubtitle =
+    bucketParts.length > 0 ? `${totalLabel} · ${bucketParts.join(' · ')}` : totalLabel;
   const searchPlaceholder = isAdmin
     ? 'Search name / email / coach…'
     : 'Search CEO name or email…';

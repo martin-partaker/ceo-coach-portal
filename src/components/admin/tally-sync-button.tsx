@@ -114,30 +114,61 @@ export function TallySyncButton() {
 }
 
 function SyncSummary({ result }: { result: SyncResult }) {
+  // "Genuinely new" = submissions that actually landed somewhere in our
+  // schema. We deliberately exclude `duplicates` (already in raw_inputs
+  // — Tally's API doesn't filter by cursor on the wire, so a re-fetch
+  // can return rows we've already seen) so the badge doesn't lie.
+  // `discarded` rows did get inserted, so they count as new even though
+  // they're rejected.
+  const genuinelyNew =
+    result.matched + result.pendingCeo + result.pendingCycle + result.discarded;
+
   const parts: string[] = [];
   if (result.newForms > 0) {
     parts.push(`${result.newForms} new form${result.newForms === 1 ? '' : 's'}`);
   }
-  if (result.ingested > 0) {
+  if (genuinelyNew > 0) {
     parts.push(
-      `${result.ingested} new submission${result.ingested === 1 ? '' : 's'}`,
+      `${genuinelyNew} new submission${genuinelyNew === 1 ? '' : 's'}`,
     );
   }
+
   if (parts.length === 0) {
+    // Nothing actually new — but say so honestly, and mention dedupe so
+    // the operator knows their click did do something.
+    const dedup = result.duplicates;
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+      <span className="inline-flex flex-wrap items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
         <CheckCircle2 className="h-3 w-3" />
-        Nothing new — already up to date.
+        Already up to date
+        {dedup > 0 && (
+          <span className="text-muted-foreground">
+            · {dedup} submission{dedup === 1 ? '' : 's'} re-checked, all already
+            ingested
+          </span>
+        )}
+        {result.errors.length > 0 && (
+          <span className="text-amber-600 dark:text-amber-400">
+            · {result.errors.length} error{result.errors.length === 1 ? '' : 's'}
+          </span>
+        )}
       </span>
     );
   }
+
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+    <span className="inline-flex flex-wrap items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
       <CheckCircle2 className="h-3 w-3" />
-      Found {parts.join(', ')}.
+      Found {parts.join(', ')}
+      {result.duplicates > 0 && (
+        <span className="text-muted-foreground">
+          · {result.duplicates} duplicate{result.duplicates === 1 ? '' : 's'}{' '}
+          skipped
+        </span>
+      )}
       {result.errors.length > 0 && (
-        <span className="ml-1 text-amber-600 dark:text-amber-400">
-          ({result.errors.length} error{result.errors.length === 1 ? '' : 's'})
+        <span className="text-amber-600 dark:text-amber-400">
+          · {result.errors.length} error{result.errors.length === 1 ? '' : 's'}
         </span>
       )}
     </span>

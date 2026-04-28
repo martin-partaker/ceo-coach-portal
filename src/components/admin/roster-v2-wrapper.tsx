@@ -2,9 +2,10 @@
 
 import { useMemo } from 'react';
 import { trpc } from '@/lib/trpc/client';
-import type { RosterCycle } from '@/server/api/routers/roster';
+import type { RosterCeoSummary, RosterCycle } from '@/server/api/routers/roster';
 import { RosterV2Page } from './roster-v2-page';
 import { CycleWorkspace } from './roster-v2-workspace';
+import { RosterV2Manager } from './roster-v2-manager';
 
 /**
  * Wires Phase B (inline workspace) into the Roster v2 page via the
@@ -17,6 +18,9 @@ export function RosterV2Wrapper({ currentCoachId }: { currentCoachId: string }) 
       currentCoachId={currentCoachId}
       renderExpanded={(current: RosterCycle, all: RosterCycle[]) => (
         <ExpandedFromCache cycleId={current.id} cycles={all} />
+      )}
+      renderManager={(summaries: RosterCeoSummary[]) => (
+        <RosterV2Manager summaries={summaries} />
       )}
     />
   );

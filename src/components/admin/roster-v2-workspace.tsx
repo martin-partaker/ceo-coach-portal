@@ -1,9 +1,18 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Loader2,
   FileText,
@@ -12,39 +21,61 @@ import {
   ExternalLink,
   AlertTriangle,
   Check,
+  CheckCircle2,
   Plus,
   Sparkles,
-  Undo2,
   RefreshCw,
   FilePlus,
+  Download,
   ChevronDown,
   ChevronRight,
   Target,
   CalendarRange,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/api/root';
 import type {
   RosterCeoSummary,
   RosterCycle,
 } from '@/server/api/routers/roster';
-import { CONTENT_TYPE_DOT, fmtShortDate, PHASE_DOT, dayOffset, relativeDay } from './roster-v2-shared';
+import { CONTENT_TYPE_DOT, fmtShortDate, PHASE_DOT, dayOffset, relativeDay, deriveCycleLabel } from './roster-v2-shared';
 import { CycleEditDialog } from './roster-v2-cycle-edit-dialog';
 import { CycleCreateDialog } from './roster-v2-cycle-create-dialog';
 import { NotesEditor } from './roster-v2-notes-editor';
+import { CycleFieldEditor } from './roster-v2-cycle-field-editor';
+import { PromptInspector } from './prompt-inspector';
+import { ManualTranscriptDialog } from './manual-transcript-dialog';
+import { AddWeekDialog } from './add-week-dialog';
+import { ReportReviewer } from './report-reviewer';
+import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
 
 interface Props {
   summary: RosterCeoSummary;
   cycles: RosterCycle[];
-  initialActiveCycleId: string;
+  activeCycleId: string;
+  onActiveCycleIdChange: (id: string) => void;
+  /** Bumped each time the parent row's "Review →" button is clicked.
+   *  Used as a one-shot trigger to auto-open the report reviewer dialog
+   *  inside this workspace (no page navigation). */
+  reviewKey?: number;
 }
 
 /**
  * Inline workspace shown when a row is expanded. Mirrors the standalone
  * cycle page but denser. The user can switch between this CEO's cycles via
  * tabs at the top. Detail data is fetched on-demand per cycle.
+ *
+ * `activeCycleId` is owned by the parent row so the inline Gantt above can
+ * highlight the same cycle the tab strip is showing.
  */
-export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props) {
-  const [activeCycleId, setActiveCycleId] = useState(initialActiveCycleId);
+export function CycleWorkspace({
+  summary,
+  cycles,
+  activeCycleId,
+  onActiveCycleIdChange,
+  reviewKey,
+}: Props) {
   const [newCycleOpen, setNewCycleOpen] = useState(false);
   const cycle = cycles.find((c) => c.id === activeCycleId);
   const cycleIndex = cycles.findIndex((c) => c.id === activeCycleId);
@@ -64,7 +95,7 @@ export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props)
           return (
             <button
               key={c.id}
-              onClick={() => setActiveCycleId(c.id)}
+              onClick={() => onActiveCycleIdChange(c.id)}
               className={cn(
                 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
                 active
@@ -80,7 +111,7 @@ export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props)
                 className="inline-block h-1.5 w-1.5 rounded-full"
                 style={{ background: PHASE_DOT[c.phase] }}
               />
-              {c.label}
+              {deriveCycleLabel(c)}
             </button>
           );
         })}
@@ -100,14 +131,19 @@ export function CycleWorkspace({ summary, cycles, initialActiveCycleId }: Props)
         </Button>
       </div>
 
-      <CycleBody ceo={summary.ceo} cycle={cycle} prevCycle={prevCycle} />
+      <CycleBody
+        ceo={summary.ceo}
+        cycle={cycle}
+        prevCycle={prevCycle}
+        reviewKey={reviewKey}
+      />
 
       <CycleCreateDialog
         ceoId={summary.ceo.id}
         ceoName={summary.ceo.name}
         open={newCycleOpen}
         onOpenChange={setNewCycleOpen}
-        onCreated={(id) => setActiveCycleId(id)}
+        onCreated={(id) => onActiveCycleIdChange(id)}
       />
     </div>
   );
@@ -117,10 +153,12 @@ function CycleBody({
   ceo,
   cycle,
   prevCycle,
+  reviewKey,
 }: {
   ceo: RosterCeoSummary['ceo'];
   cycle: RosterCycle;
   prevCycle: RosterCycle | null;
+  reviewKey?: number;
 }) {
   const detail = trpc.roster.cycleDetail.useQuery({ cycleId: cycle.id });
   const data = detail.data;
@@ -130,6 +168,14 @@ function CycleBody({
   const isReady = totalReady === totalSlots;
 
   const [editCycleOpen, setEditCycleOpen] = useState(false);
+  const [pasteTranscriptOpen, setPasteTranscriptOpen] = useState(false);
+  const [zoomImportOpen, setZoomImportOpen] = useState(false);
+  const [addWeekOpen, setAddWeekOpen] = useState(false);
+
+  // Need the caller's Zoom email to know whether the Zoom import button
+  // should be enabled (the dialog itself shows a settings hint when not).
+  const me = trpc.coaches.getMe.useQuery();
+  const hasZoomEmail = !!me.data?.zoomUserEmail;
 
   return (
     <div className="grid grid-cols-1 gap-6 px-12 py-5 lg:grid-cols-[1fr_280px]">
@@ -142,7 +188,7 @@ function CycleBody({
 
         {/* Header row */}
         <div className="mb-1 flex items-baseline gap-3">
-          <div className="text-base font-semibold">{cycle.label}</div>
+          <div className="text-base font-semibold">{deriveCycleLabel(cycle)}</div>
           <div className="font-mono text-[11px] text-muted-foreground">
             {cycle.periodStart && fmtShortDate(cycle.periodStart)}
             {' → '}
@@ -201,9 +247,24 @@ function CycleBody({
           title="Zoom Transcript"
           status={cycle.readiness.tx.done ? 'done' : 'empty'}
           right={
-            <Button asChild size="sm" variant="outline" className="h-6 px-2 text-[11px]">
-              <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>Import from Zoom</Link>
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[11px]"
+                onClick={() => setZoomImportOpen(true)}
+              >
+                <Download className="mr-1 h-3 w-3" /> Import from Zoom
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[11px]"
+                onClick={() => setPasteTranscriptOpen(true)}
+              >
+                <FilePlus className="mr-1 h-3 w-3" /> Paste text
+              </Button>
+            </div>
           }
         >
           {data?.transcripts.length ? (
@@ -211,7 +272,7 @@ function CycleBody({
               <ExpandableEntry
                 key={t.id}
                 title={t.title || 'Untitled meeting'}
-                sub={`Zoom${t.recordedAt ? ` · ${fmtShortDate(t.recordedAt.toString().slice(0, 10))}` : ''}${t.duration ? ` · ${t.duration} min` : ''}`}
+                sub={`${t.zoomMeetingId ? 'Zoom' : 'Manual'}${t.recordedAt ? ` · ${fmtShortDate(new Date(t.recordedAt).toISOString().slice(0, 10))}` : ''}${t.duration ? ` · ${t.duration} min` : ''}`}
                 dotColor={CONTENT_TYPE_DOT.transcript}
                 content={t.content}
                 meta={`${(t.content ?? '').length.toLocaleString()} chars`}
@@ -221,6 +282,21 @@ function CycleBody({
             <EmptyHint label="No transcript for this session" />
           )}
         </InputSlot>
+
+        <ManualTranscriptDialog
+          cycleId={cycle.id}
+          open={pasteTranscriptOpen}
+          onOpenChange={setPasteTranscriptOpen}
+        />
+
+        <ZoomImportDialog
+          cycleId={cycle.id}
+          ceoId={ceo.id}
+          hasZoomEmail={hasZoomEmail}
+          existingTranscripts={data?.transcripts ?? []}
+          open={zoomImportOpen}
+          onOpenChange={setZoomImportOpen}
+        />
 
         <InputSlot
           icon="note"
@@ -239,38 +315,30 @@ function CycleBody({
           title="Monthly Goals & Commitments"
           status={cycle.readiness.goals.done ? 'done' : 'empty'}
           aiSuggested={cycle.readiness.goals.ai}
-          right={
-            <>
-              {cycle.readiness.goals.ai && (
-                <Button asChild size="sm" variant="ghost" className="h-6 px-2 text-[11px]">
-                  <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                    <Undo2 className="mr-1 h-3 w-3" /> Undo
-                  </Link>
-                </Button>
-              )}
-              <Button asChild size="sm" variant="ghost" className="h-6 px-2 text-[11px]">
-                <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                  <RefreshCw className="mr-1 h-3 w-3" /> Re-generate
-                </Link>
-              </Button>
-            </>
-          }
         >
-          {cycle.readiness.goals.done ? (
-            <BodyText ai={cycle.readiness.goals.ai}>
-              {data?.cycle.monthlyGoals?.trim() ?? '(loading…)'}
-            </BodyText>
+          {data ? (
+            cycle.readiness.goals.done || cycle.readiness.goals.ai ? (
+              <CycleFieldEditor
+                cycleId={cycle.id}
+                field="monthlyGoals"
+                initialValue={data.cycle.monthlyGoals}
+                ai={cycle.readiness.goals.ai}
+                rows={6}
+              />
+            ) : (
+              <EmptyHint
+                label="No monthly goals captured yet"
+                cta={
+                  <PrefillButton
+                    cycleId={cycle.id}
+                    field="monthlyGoals"
+                    label="AI prefill from transcript"
+                  />
+                }
+              />
+            )
           ) : (
-            <EmptyHint
-              label="No monthly goals captured yet"
-              cta={
-                <Button asChild size="sm" variant="ghost" className="h-6 px-2 text-[11px]">
-                  <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                    <Sparkles className="mr-1 h-3 w-3" /> AI prefill from transcript
-                  </Link>
-                </Button>
-              }
-            />
+            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
           )}
         </InputSlot>
 
@@ -288,119 +356,113 @@ function CycleBody({
         >
           {data?.journals.length ? (
             <div className="grid gap-1.5">
-              {data.journals.map((j) => (
-                <ExpandableEntry
-                  key={j.id}
-                  title={j.title || `Week ${j.weekNumber}`}
-                  sub={`Tally · Week ${j.weekNumber}`}
-                  dotColor={CONTENT_TYPE_DOT.weekly_journal}
-                  content={j.content}
-                  compact
-                />
-              ))}
+              {data.journals.map((j) => {
+                // Prefer the actual submission timestamp so two journals
+                // filed in the same week stay visually distinct. Fall back
+                // to the synthetic week range only when the journal has no
+                // raw_input ancestor (manually added, etc.).
+                const submitted = j.submittedAt
+                  ? new Date(j.submittedAt).toISOString().slice(0, 10)
+                  : null;
+                const title = submitted
+                  ? fmtShortDate(submitted)
+                  : j.effectiveDate && j.effectiveEndDate && j.effectiveDate !== j.effectiveEndDate
+                    ? `${fmtShortDate(j.effectiveDate)} → ${fmtShortDate(j.effectiveEndDate)}`
+                    : j.effectiveDate
+                      ? fmtShortDate(j.effectiveDate)
+                      : `Week ${j.weekNumber}`;
+                const borrowed = j.parentCycleId !== cycle.id;
+                const parentLabel = deriveCycleLabel({
+                  label: j.parentCycleLabel,
+                  periodStart: j.parentPeriodStart,
+                  periodEnd: j.parentPeriodEnd,
+                });
+                const sub = borrowed
+                  ? `from ${parentLabel} · Week ${j.weekNumber}`
+                  : `Week ${j.weekNumber}`;
+                return (
+                  <ExpandableEntry
+                    key={j.id}
+                    title={title}
+                    sub={sub}
+                    dotColor={CONTENT_TYPE_DOT.weekly_journal}
+                    content={j.content}
+                    compact
+                  />
+                );
+              })}
             </div>
           ) : (
             <EmptyHint label="No weekly journals yet" />
           )}
-          <Button asChild variant="outline" size="sm" className="mt-1 h-7 w-full border-dashed text-xs text-muted-foreground">
-            <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-              <Plus className="mr-1 h-3 w-3" />
-              Add week
-            </Link>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-1 h-7 w-full border-dashed text-xs text-muted-foreground"
+            onClick={() => setAddWeekOpen(true)}
+          >
+            <Plus className="mr-1 h-3 w-3" />
+            Add week
           </Button>
         </InputSlot>
+
+        <AddWeekDialog
+          cycleId={cycle.id}
+          cyclePeriodStart={cycle.periodStart}
+          cyclePeriodEnd={cycle.periodEnd}
+          open={addWeekOpen}
+          onOpenChange={setAddWeekOpen}
+        />
 
         <InputSlot
           icon="reflect"
           title="Monthly Reflection"
           status={cycle.readiness.reflect.done ? 'done' : 'empty'}
           aiSuggested={cycle.readiness.reflect.ai}
-          right={
-            <>
-              {cycle.readiness.reflect.ai && (
-                <Button asChild size="sm" variant="ghost" className="h-6 px-2 text-[11px]">
-                  <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                    <Undo2 className="mr-1 h-3 w-3" /> Undo
-                  </Link>
-                </Button>
-              )}
-              <Button asChild size="sm" variant="ghost" className="h-6 px-2 text-[11px]">
-                <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                  <RefreshCw className="mr-1 h-3 w-3" /> Re-generate
-                </Link>
-              </Button>
-            </>
-          }
         >
-          {cycle.readiness.reflect.done ? (
-            <BodyText ai={cycle.readiness.reflect.ai}>
-              {data?.cycle.monthlyReflection?.trim() ?? '(loading…)'}
-            </BodyText>
+          {data ? (
+            cycle.readiness.reflect.done || cycle.readiness.reflect.ai ? (
+              <CycleFieldEditor
+                cycleId={cycle.id}
+                field="monthlyReflection"
+                initialValue={data.cycle.monthlyReflection}
+                ai={cycle.readiness.reflect.ai}
+                rows={8}
+              />
+            ) : (
+              <EmptyHint
+                label="No reflection captured yet"
+                cta={
+                  <PrefillButton
+                    cycleId={cycle.id}
+                    field="monthlyReflection"
+                    label="AI prefill from journals + transcript"
+                  />
+                }
+              />
+            )
           ) : (
-            <EmptyHint
-              label="No reflection captured yet"
-              cta={
-                <Button asChild size="sm" variant="ghost" className="h-6 px-2 text-[11px]">
-                  <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                    <Sparkles className="mr-1 h-3 w-3" /> AI prefill from journals + transcript
-                  </Link>
-                </Button>
-              }
-            />
+            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
           )}
         </InputSlot>
 
-        <InputSlot
-          icon="actions"
-          title="Action Items"
-          status={cycle.readiness.actions.done ? 'done' : 'empty'}
-          countLabel={
-            data
-              ? `${data.actionsBucketed.open} open · ${data.actionsBucketed.done} done · ${data.actionsBucketed.dropped} dropped`
-              : '— · — · —'
-          }
-        >
-          {data?.actionItems.length ? (
-            <div className="grid gap-1.5">
-              {data.actionItems.slice(0, 3).map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-center gap-2 rounded border border-border bg-background px-2.5 py-1.5 text-[12px]"
-                >
-                  <span
-                    className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{
-                      background:
-                        a.status === 'done'
-                          ? 'oklch(55% 0.12 152)'
-                          : a.status === 'dropped'
-                            ? 'var(--muted-foreground)'
-                            : 'oklch(58% 0.13 64)',
-                    }}
-                  />
-                  <span className="truncate">{a.item}</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">{a.owner}</span>
-                </div>
-              ))}
-              {data.actionItems.length > 3 && (
-                <Button asChild variant="ghost" size="sm" className="h-6 px-2 text-[11px] text-muted-foreground">
-                  <Link href={`/ceos/${ceo.id}/cycles/${cycle.id}`}>
-                    + {data.actionItems.length - 3} more
-                  </Link>
-                </Button>
-              )}
-            </div>
-          ) : (
-            <EmptyHint label="No action items reviewed for this cycle" />
-          )}
-        </InputSlot>
+        <ActionItemsSlot cycleId={cycle.id} ceoId={ceo.id} data={data} readinessDone={cycle.readiness.actions.done} />
       </div>
 
       {/* Right rail */}
       <div className="grid gap-3 self-start">
-        <ReadinessCard ceoId={ceo.id} cycle={cycle} totalReady={totalReady} totalSlots={totalSlots} isReady={isReady} />
+        <ReadinessCard
+          ceoId={ceo.id}
+          ceoName={ceo.name}
+          cycle={cycle}
+          totalReady={totalReady}
+          totalSlots={totalSlots}
+          isReady={isReady}
+          reviewKey={reviewKey}
+        />
         <ContextInspector
           ceoId={ceo.id}
+          ceoName={ceo.name}
           cycle={cycle}
           prevCycle={prevCycle}
           submissionsCount={data?.rawInputs.length ?? cycle.submissions.length}
@@ -452,6 +514,132 @@ function CycleSubmissionsStrip({ cycle }: { cycle: RosterCycle }) {
         );
       })}
     </div>
+  );
+}
+
+type CycleDetailData = inferRouterOutputs<AppRouter>['roster']['cycleDetail'];
+
+function ActionItemsSlot({
+  cycleId,
+  ceoId,
+  data,
+  readinessDone,
+}: {
+  cycleId: string;
+  ceoId: string;
+  data: CycleDetailData | undefined;
+  readinessDone: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const items = data?.actionItems ?? [];
+  const total = data?.actionsBucketed.total ?? items.length;
+  const reviewedCount = data?.actionsBucketed.reviewed ?? 0;
+  const isEmpty = total === 0;
+  const allReviewed = !isEmpty && reviewedCount === total;
+
+  const updateItem = trpc.actionItems.update.useMutation({
+    onSuccess: () => {
+      utils.roster.cycleDetail.invalidate({ cycleId });
+      utils.roster.cycleSummary.invalidate();
+      utils.actionItems.listForCycle.invalidate({ cycleId });
+    },
+  });
+  const setAll = trpc.actionItems.setAllReviewed.useMutation({
+    onSuccess: () => {
+      utils.roster.cycleDetail.invalidate({ cycleId });
+      utils.roster.cycleSummary.invalidate();
+      utils.actionItems.listForCycle.invalidate({ cycleId });
+    },
+  });
+
+  return (
+    <InputSlot
+      icon="actions"
+      title="Action Items"
+      status={readinessDone ? 'done' : 'empty'}
+      countLabel={
+        isEmpty
+          ? 'auto-reviewed (no items)'
+          : `${reviewedCount}/${total} reviewed`
+      }
+      right={
+        !isEmpty ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-[11px]"
+            disabled={setAll.isPending}
+            onClick={() =>
+              setAll.mutate({ cycleId, reviewed: !allReviewed })
+            }
+          >
+            {setAll.isPending ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            ) : (
+              <CheckCircle2 className="mr-1 h-3 w-3" />
+            )}
+            {allReviewed ? 'Unreview all' : 'Mark all reviewed'}
+          </Button>
+        ) : undefined
+      }
+    >
+      {isEmpty ? (
+        <div className="flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 text-[12px] text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          No action items — section auto-reviewed.
+        </div>
+      ) : (
+        <div className="grid gap-1.5">
+          {items.slice(0, 3).map((a) => (
+            <div
+              key={a.id}
+              className={cn(
+                'flex items-center gap-2 rounded border px-2.5 py-1.5 text-[12px] transition-colors',
+                a.reviewed
+                  ? 'border-emerald-500/30 bg-emerald-500/[0.04]'
+                  : 'border-border bg-background'
+              )}
+            >
+              <Checkbox
+                checked={a.reviewed}
+                onCheckedChange={(v) =>
+                  updateItem.mutate({ id: a.id, reviewed: v === true })
+                }
+                aria-label={a.reviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
+                className="shrink-0"
+              />
+              <span
+                className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{
+                  background:
+                    a.status === 'done'
+                      ? 'oklch(55% 0.12 152)'
+                      : a.status === 'dropped'
+                        ? 'var(--muted-foreground)'
+                        : 'oklch(58% 0.13 64)',
+                }}
+              />
+              <span className={cn('truncate', a.reviewed && 'text-foreground/70')}>
+                {a.item}
+              </span>
+              <span className="ml-auto text-[10px] text-muted-foreground">{a.owner}</span>
+            </div>
+          ))}
+          {items.length > 3 && (
+            <Button
+              asChild
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] text-muted-foreground"
+            >
+              <Link href={`/ceos/${ceoId}/cycles/${cycleId}`}>
+                + {items.length - 3} more
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
+    </InputSlot>
   );
 }
 
@@ -529,6 +717,7 @@ function TenXGoalCallout({
   tenXGoal: string | null;
 }) {
   const has = !!tenXGoal?.trim();
+  const [expanded, setExpanded] = useState(false);
   return (
     <div
       className="rounded-lg border px-3 py-2.5"
@@ -553,6 +742,24 @@ function TenXGoalCallout({
           {ceoName}&apos;s 10x goal
         </span>
         <span className="flex-1" />
+        {has && (
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="inline-flex items-center gap-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+            aria-expanded={expanded}
+          >
+            {expanded ? (
+              <>
+                collapse <ChevronDown className="h-3 w-3" />
+              </>
+            ) : (
+              <>
+                expand <ChevronRight className="h-3 w-3" />
+              </>
+            )}
+          </button>
+        )}
         <Link
           href={`/ceos/${ceoId}`}
           className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
@@ -561,9 +768,25 @@ function TenXGoalCallout({
         </Link>
       </div>
       {has ? (
-        <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">
-          {tenXGoal}
-        </p>
+        expanded ? (
+          <div className="max-h-40 overflow-y-auto pr-1">
+            <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">
+              {tenXGoal}
+            </p>
+          </div>
+        ) : (
+          <p
+            className="text-[12.5px] leading-relaxed text-foreground/90"
+            style={{
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {tenXGoal}
+          </p>
+        )
       ) : (
         <p className="text-[12px] italic text-muted-foreground">
           No 10x goal set — open the CEO profile to capture one.
@@ -648,6 +871,51 @@ function EmptyHint({ label, cta }: { label: string; cta?: React.ReactNode }) {
   );
 }
 
+/**
+ * Inline AI prefill trigger for an empty Monthly Goals / Monthly Reflection
+ * slot. Calls roster.prefillCycleField — on success the cycle data is
+ * invalidated and the slot re-renders with CycleFieldEditor showing the
+ * AI-suggested value (with Undo + Re-generate already wired up there).
+ */
+function PrefillButton({
+  cycleId,
+  field,
+  label,
+}: {
+  cycleId: string;
+  field: 'monthlyGoals' | 'monthlyReflection';
+  label: string;
+}) {
+  const utils = trpc.useUtils();
+  const prefill = trpc.roster.prefillCycleField.useMutation({
+    onSuccess: () => {
+      utils.roster.cycleDetail.invalidate({ cycleId });
+      utils.roster.cycleSummary.invalidate();
+    },
+  });
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-6 px-2 text-[11px]"
+        disabled={prefill.isPending}
+        onClick={() => prefill.mutate({ cycleId, field })}
+      >
+        {prefill.isPending ? (
+          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+        ) : (
+          <Sparkles className="mr-1 h-3 w-3" />
+        )}
+        {prefill.isPending ? 'Generating…' : label}
+      </Button>
+      {prefill.error && (
+        <span className="text-[10px] text-destructive">{prefill.error.message}</span>
+      )}
+    </div>
+  );
+}
+
 function BodyText({ children, ai }: { children: React.ReactNode; ai?: boolean }) {
   return (
     <div
@@ -670,17 +938,45 @@ function BodyText({ children, ai }: { children: React.ReactNode; ai?: boolean })
 
 function ReadinessCard({
   ceoId,
+  ceoName,
   cycle,
   totalReady,
   totalSlots,
   isReady,
+  reviewKey,
 }: {
   ceoId: string;
+  ceoName: string;
   cycle: RosterCycle;
   totalReady: number;
   totalSlots: number;
   isReady: boolean;
+  reviewKey?: number;
 }) {
+  const utils = trpc.useUtils();
+  const [confirmGapsOpen, setConfirmGapsOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
+  // Auto-open the report reviewer when the parent row's "Review →" button
+  // is clicked. The row bumps `reviewKey` each time so consecutive clicks
+  // re-open the dialog after the user has dismissed it. Only fires when
+  // a report is actually available for this cycle.
+  useEffect(() => {
+    if (reviewKey === undefined || reviewKey === 0) return;
+    if (cycle.phase === 'generated' || cycle.phase === 'sent') {
+      setReviewOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewKey]);
+  const generate = trpc.reports.generate.useMutation({
+    onSuccess: () => {
+      utils.roster.cycleSummary.invalidate();
+      utils.roster.cycleDetail.invalidate({ cycleId: cycle.id });
+      utils.reports.getForCycle.invalidate({ cycleId: cycle.id });
+      setConfirmGapsOpen(false);
+      setReviewOpen(true);
+    },
+  });
   const items: Array<{ key: keyof RosterCycle['readiness']; label: string }> = [
     { key: 'tenx', label: '10x goal' },
     { key: 'goals', label: 'Monthly goals' },
@@ -689,6 +985,10 @@ function ReadinessCard({
     { key: 'tx', label: 'Zoom transcript' },
     { key: 'actions', label: 'Action items reviewed' },
   ];
+
+  const missingLabels = items
+    .filter((i) => !cycle.readiness[i.key].done)
+    .map((i) => i.label);
   return (
     <div
       className="rounded-lg border p-3.5"
@@ -750,40 +1050,72 @@ function ReadinessCard({
           </Button>
         )}
         {cycle.phase === 'generated' && (
-          <>
-            <Button
-              asChild
-              size="sm"
-              className="h-7 text-xs"
-              style={{ background: 'oklch(58% 0.14 258)' }}
-            >
-              <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>Review report</Link>
-            </Button>
-            <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
-              <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>
-                <RefreshCw className="mr-1 h-3 w-3" /> Re-generate
-              </Link>
-            </Button>
-          </>
-        )}
-        {(cycle.phase === 'ready' || cycle.phase === 'gathering') && (
           <Button
-            asChild={isReady}
             size="sm"
             className="h-7 text-xs"
-            disabled={!isReady}
-            style={isReady ? { background: 'oklch(58% 0.14 258)' } : {}}
+            style={{ background: 'oklch(58% 0.14 258)' }}
+            onClick={() => setReviewOpen(true)}
           >
-            {isReady ? (
-              <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>
-                <Mail className="mr-1.5 h-3 w-3" />
-                Generate Email
-              </Link>
-            ) : (
-              <span>Generate Email</span>
-            )}
+            Review report
           </Button>
         )}
+        {(cycle.phase === 'ready' || cycle.phase === 'gathering') && (
+          <>
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              disabled={generate.isPending}
+              style={
+                isReady
+                  ? { background: 'oklch(58% 0.14 258)' }
+                  : {
+                      background: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 88%)',
+                      color: 'oklch(58% 0.13 64)',
+                      border: '1px solid color-mix(in oklab, oklch(58% 0.13 64), transparent 60%)',
+                    }
+              }
+              onClick={() => {
+                if (isReady) generate.mutate({ cycleId: cycle.id });
+                else setConfirmGapsOpen(true);
+              }}
+            >
+              {generate.isPending ? (
+                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              ) : isReady ? (
+                <Mail className="mr-1.5 h-3 w-3" />
+              ) : (
+                <AlertTriangle className="mr-1.5 h-3 w-3" />
+              )}
+              {generate.isPending
+                ? 'Generating…'
+                : isReady
+                  ? 'Generate Email'
+                  : 'Generate with gaps'}
+            </Button>
+            {generate.error && (
+              <p className="mt-1 text-[11px] text-destructive">
+                {generate.error.message}
+              </p>
+            )}
+            <ConfirmGapsDialog
+              open={confirmGapsOpen}
+              onOpenChange={setConfirmGapsOpen}
+              ceoName={ceoName}
+              cycleLabel={cycle.label}
+              missing={missingLabels}
+              isPending={generate.isPending}
+              onConfirm={() => generate.mutate({ cycleId: cycle.id })}
+            />
+          </>
+        )}
+        <ReportReviewer
+          cycleId={cycle.id}
+          ceoId={ceoId}
+          ceoName={ceoName}
+          cycleLabel={cycle.label}
+          open={reviewOpen}
+          onOpenChange={setReviewOpen}
+        />
         {cycle.phase === 'idle' && (
           <Button variant="ghost" size="sm" className="h-7 text-xs">
             Send nudge
@@ -794,17 +1126,87 @@ function ReadinessCard({
   );
 }
 
+function ConfirmGapsDialog({
+  open,
+  onOpenChange,
+  ceoName,
+  cycleLabel,
+  missing,
+  isPending,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  ceoName: string;
+  cycleLabel: string;
+  missing: string[];
+  isPending: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            Generate with gaps?
+          </DialogTitle>
+          <DialogDescription className="pt-1">
+            {ceoName} · {cycleLabel} —{' '}
+            <span className="font-medium text-foreground">
+              {missing.length}
+            </span>{' '}
+            input{missing.length === 1 ? '' : 's'} aren&apos;t filled in yet.
+            The AI will use what&apos;s there and flag the missing pieces in
+            the email.
+          </DialogDescription>
+        </DialogHeader>
+        <ul className="mt-2 space-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+          {missing.map((m) => (
+            <li
+              key={m}
+              className="flex items-center gap-2 text-amber-700 dark:text-amber-400"
+            >
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+              {m}
+            </li>
+          ))}
+        </ul>
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={isPending}
+            onClick={onConfirm}
+            style={{ background: 'oklch(58% 0.13 64)' }}
+          >
+            {isPending ? (
+              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+            ) : (
+              <Mail className="mr-1.5 h-3 w-3" />
+            )}
+            Generate anyway
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ContextInspector({
-  ceoId,
+  ceoName,
   cycle,
   prevCycle,
   submissionsCount,
 }: {
   ceoId: string;
+  ceoName: string;
   cycle: RosterCycle;
   prevCycle: RosterCycle | null;
   submissionsCount: number;
 }) {
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const rows: Array<{ label: string; detail: string; dim?: boolean }> = [
     { label: 'CEO profile', detail: '10x goal · intake · industry' },
     {
@@ -834,13 +1236,20 @@ function ContextInspector({
         </div>
       ))}
       <Button
-        asChild
         variant="outline"
         size="sm"
         className="mt-2 h-6 w-full text-[11px] text-muted-foreground"
+        onClick={() => setInspectorOpen(true)}
       >
-        <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>Inspect prompt →</Link>
+        Inspect prompt →
       </Button>
+      <PromptInspector
+        cycleId={cycle.id}
+        cycleLabel={cycle.label}
+        ceoName={ceoName}
+        open={inspectorOpen}
+        onOpenChange={setInspectorOpen}
+      />
     </div>
   );
 }

@@ -25,11 +25,29 @@ interface ZoomImportDialogProps {
   hasZoomEmail: boolean;
   existingTranscripts: Transcript[];
   onTranscriptsImported?: (transcripts: Transcript[]) => void;
+  /** Controlled-mode open state. When provided, the dialog skips its
+   *  built-in trigger button and lets the parent supply its own. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscripts, onTranscriptsImported }: ZoomImportDialogProps) {
+export function ZoomImportDialog({
+  cycleId,
+  ceoId,
+  hasZoomEmail,
+  existingTranscripts,
+  onTranscriptsImported,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+}: ZoomImportDialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = (v: boolean) => {
+    if (isControlled) controlledOnOpenChange?.(v);
+    else setUncontrolledOpen(v);
+  };
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [importSuccess, setImportSuccess] = useState(false);
@@ -104,12 +122,14 @@ export function ZoomImportDialog({ cycleId, ceoId, hasZoomEmail, existingTranscr
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Download className="mr-1.5 h-3.5 w-3.5" />
-          Import from Zoom
-        </Button>
-      </DialogTrigger>
+      {!isControlled && (
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Download className="mr-1.5 h-3.5 w-3.5" />
+            Import from Zoom
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Import Zoom Transcript</DialogTitle>

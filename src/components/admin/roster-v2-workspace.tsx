@@ -129,6 +129,7 @@ export function CycleWorkspace({
         cycle={cycle}
         prevCycle={prevCycle}
         reviewKey={reviewKey}
+        onActiveCycleIdChange={onActiveCycleIdChange}
       />
 
       <CycleCreateDialog
@@ -147,11 +148,15 @@ function CycleBody({
   cycle,
   prevCycle,
   reviewKey,
+  onActiveCycleIdChange,
 }: {
   ceo: RosterCeoSummary['ceo'];
   cycle: RosterCycle;
   prevCycle: RosterCycle | null;
   reviewKey?: number;
+  /** Called when the active cycle changes (e.g. the user just deleted
+   *  the current cycle and we need to switch to a sibling). */
+  onActiveCycleIdChange: (id: string) => void;
 }) {
   const detail = trpc.roster.cycleDetail.useQuery({ cycleId: cycle.id });
   const data = detail.data;
@@ -210,6 +215,14 @@ function CycleBody({
           }}
           open={editCycleOpen}
           onOpenChange={setEditCycleOpen}
+          onDeleted={(nextCycleId) => {
+            // The deleted cycle was active; switch to a sibling so the
+            // workspace doesn't render a not-found state until the
+            // cycleSummary cache invalidation re-fetches. If there's no
+            // sibling we leave the active id as-is and the workspace
+            // null-renders once the parent's cycles array refreshes.
+            if (nextCycleId) onActiveCycleIdChange(nextCycleId);
+          }}
         />
 
         {/* Unconfirmed banner */}

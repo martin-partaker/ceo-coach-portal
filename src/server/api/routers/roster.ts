@@ -753,6 +753,47 @@ export const rosterRouter = createTRPCRouter({
     }),
 
   /**
+   * Delete a cycle. FK relationships cascade to journals, transcripts,
+   * action items, reports, and detach raw_inputs (set null) — see
+   * schema definitions. Coach-scope guard mirrors updateCycle.
+   *
+   * Returns a sibling cycle id (newest first) so the caller can switch
+   * the active cycle in the workspace tab strip without flicker.
+   */
+  deleteCycle: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (!isUnscopedAdmin(ctx)) {
+        const [ceo] = await ctx.db
+          .select({ coachId: ceos.coachId })
+          .from(ceos)
+          .where(eq(ceos.id, cycle.ceoId))
+          .limit(1);
+        if (!ceo || ceo.coachId !== ctx.coach.id) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+      }
+
+      await ctx.db.delete(cycles).where(eq(cycles.id, input.cycleId));
+
+      const [sibling] = await ctx.db
+        .select({ id: cycles.id })
+        .from(cycles)
+        .where(eq(cycles.ceoId, cycle.ceoId))
+        .orderBy(desc(cycles.createdAt))
+        .limit(1);
+
+      return { ok: true, nextCycleId: sibling?.id ?? null };
+    }),
+
+  /**
    * Create a new cycle for a CEO from inside the inline workspace. Triggered
    * when the operator clicks "+ New cycle" in the cycle tab strip.
    */

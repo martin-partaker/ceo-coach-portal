@@ -15,6 +15,7 @@ import {
   BookOpen,
   Check,
   Copy,
+  Download,
   FileText,
   Loader2,
   Mail,
@@ -183,19 +184,34 @@ export function ReportReviewer({
         <SheetFooter className="flex-row items-center gap-2">
           <span className="flex-1" />
           {data && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => regenerate.mutate({ cycleId })}
-              disabled={regenerate.isPending}
-            >
-              {regenerate.isPending ? (
-                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-3 w-3" />
-              )}
-              Re-generate
-            </Button>
+            <>
+              <Button asChild variant="outline" size="sm">
+                {/* Plain anchor with `download` so the browser saves
+                    the file directly. The route handler streams the
+                    rendered PDF with a Content-Disposition filename. */}
+                <a
+                  href={`/api/reports/${cycleId}/pdf`}
+                  download
+                  rel="noreferrer"
+                >
+                  <Download className="mr-1.5 h-3 w-3" />
+                  Download PDF
+                </a>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => regenerate.mutate({ cycleId })}
+                disabled={regenerate.isPending}
+              >
+                {regenerate.isPending ? (
+                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1.5 h-3 w-3" />
+                )}
+                Re-generate
+              </Button>
+            </>
           )}
         </SheetFooter>
       </SheetContent>

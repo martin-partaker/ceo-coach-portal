@@ -176,6 +176,12 @@ async function aiSuggestCeoForRawInput(
 
   let topic = '';
   let participantsLine = '';
+  /** True when every external (non-Zoom-internal) participant on the
+   *  meeting is on the platform's coach list. Strong signal that this
+   *  is a coach-to-coach internal meeting (e.g. supervision call, peer
+   *  check-in) and shouldn't be matched to ANY CEO — even if a CEO is
+   *  named in the topic or transcript. */
+  let allParticipantsAreCoaches = false;
   if (rawInput.source === 'zoom') {
     const payload = rawInput.payloadJson as {
       meeting?: { topic?: string };
@@ -187,16 +193,46 @@ async function aiSuggestCeoForRawInput(
     } | null;
     const externals = (payload?.participants ?? []).filter((p) => !p.internal_user);
     if (externals.length > 0) {
-      const dedup = Array.from(
-        new Set(
-          externals.map(
-            (p) => `${p.name ?? '?'}${p.user_email ? ` <${p.user_email}>` : ''}`,
-          ),
-        ),
+      // Annotate each participant with their resolved role so the model
+      // doesn't have to cross-reference against the coach list itself.
+      // Names are normalised to lowercase for the lookup since Zoom
+      // capitalisation varies.
+      const coachSet = new Set(coachNames.map((n) => n.toLowerCase().trim()));
+      const ceoNameSet = new Set(
+        ceoIndex.map((c) => c.name.toLowerCase().trim()),
       );
+      const annotated = externals.map((p) => {
+        const name = p.name?.trim() ?? '?';
+        const role = coachSet.has(name.toLowerCase())
+          ? '(coach)'
+          : ceoNameSet.has(name.toLowerCase())
+            ? '(CEO)'
+            : '(unknown)';
+        const emailTag = p.user_email ? ` <${p.user_email}>` : '';
+        return `${name}${emailTag} ${role}`;
+      });
+      const dedup = Array.from(new Set(annotated));
       participantsLine = dedup.join(', ');
+      // Only "(coach)" tags = coach-to-coach meeting. Empty / unknown
+      // participants don't trigger this — they could still be a CEO
+      // we just don't have on the roster yet.
+      allParticipantsAreCoaches =
+        externals.length > 0 &&
+        externals.every((p) =>
+          coachSet.has((p.name ?? '').toLowerCase().trim()),
+        );
     }
     topic = payload?.meeting?.topic ?? '';
+  }
+
+  // Hard rule: a Zoom meeting where every participant is a known
+  // coach is a coach-to-coach internal meeting (supervision, peer
+  // check-in, ops sync). Don't burn a Haiku call — and don't risk the
+  // model getting fooled by a CEO name in the topic field. Topic like
+  // "Check-in: Jane Doe" + two coaches in the room means the coaches
+  // are *discussing* Jane Doe, not coaching her.
+  if (allParticipantsAreCoaches) {
+    return { topSuggestion: null, alternatives: [] };
   }
 
   // Compact catalog — no aliases (rarely the deciding signal), no
@@ -221,7 +257,7 @@ async function aiSuggestCeoForRawInput(
 
   const userPrompt = `Match this content to ONE CEO from the roster.
 
-Coaches (NOT candidates — never return a coach as the match):
+Coaches on the platform (NOT candidates — never return a coach as the match):
 ${coachListLine}
 
 CEO roster (uuid · name · email · coach):
@@ -231,17 +267,19 @@ Content
 - Source: ${rawInput.source}
 - Type: ${rawInput.contentType}
 - Submitter: ${submitterName ?? '(no name)'}${submitterEmail ? ` <${submitterEmail}>` : ''}
-${topic ? `- Meeting topic: ${topic}\n` : ''}${participantsLine ? `- Participants (external, non-coach): ${participantsLine}\n` : ''}
+${topic ? `- Meeting topic: ${topic}\n` : ''}${participantsLine ? `- Participants: ${participantsLine}\n` : ''}
 Excerpt (truncated):
 """
 ${excerpt || '(no text content)'}
 """
 
 How to decide:
-- The CEO's name is usually in the meeting topic, the participants list, or the first lines of dialogue.
-- For Tally submissions, look for "Q: name / A: <name>" or "Q: email / A: <email>" patterns in the excerpt, and the submitter line above.
-- If the only people named are coaches (see list above) or fully unknown, return ceoId: null.
-- Pick exactly one top match. Add up to 2 alternatives only if there's genuine ambiguity.
+1. **Participants beat topic.** If a CEO appears in the participants list (annotated "(CEO)"), match to that CEO. The meeting topic can be misleading or stale.
+2. **A name in the topic is NOT a participant.** If the topic says "Check-in: Jane Doe" but Jane Doe is not in the participants list, the coaches are *discussing* Jane, not coaching her — return ceoId: null. Coach-to-coach supervision and peer check-ins frequently use a CEO's name as the meeting label.
+3. **Coach mismatch is a red flag.** If the meeting is hosted by Coach A but the candidate CEO's assigned coach is Coach B, that's almost never a coaching session for that CEO — at most an alternative, never the top match.
+4. **For Tally submissions**, look for "Q: name / A: <name>" or "Q: email / A: <email>" patterns in the excerpt, and use the submitter line above.
+5. **Return ceoId: null** when (a) all participants are coaches, (b) no CEO from the roster is named as a participant or in the dialogue, or (c) the content is fully ambiguous. Don't guess from a topic alone.
+6. Pick exactly one top match. Add up to 2 alternatives only if there's genuine ambiguity.
 
 Return ONLY JSON, no markdown fences:
 { "ceoId": "<uuid from roster or null>", "reason": "≤25 words why", "alternatives": [{ "ceoId": "<uuid>", "reason": "≤20 words" }] }`;

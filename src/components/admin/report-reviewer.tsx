@@ -16,6 +16,7 @@ import {
   Check,
   Copy,
   Download,
+  Eye,
   FileText,
   Loader2,
   Mail,
@@ -23,6 +24,10 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
+  ListChecks,
+  AlertTriangle,
+  TrendingUp,
   Trash2,
   X,
 } from 'lucide-react';
@@ -101,7 +106,15 @@ export function ReportReviewer({
       structured.suggestedResourceIds?.length
     );
 
-  const [tab, setTab] = useState<Tab>('email');
+  // Default to the structured report — that's the source of truth
+  // operators review and approve. The email view is the deliverable
+  // they ship after, so it's the secondary tab. Falls back to 'email'
+  // if the report doesn't have a structured block (older runs, or the
+  // model didn't emit one).
+  const [tab, setTab] = useState<Tab>('report');
+  useEffect(() => {
+    if (!hasReport && tab === 'report') setTab('email');
+  }, [hasReport, tab]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -130,11 +143,11 @@ export function ReportReviewer({
         {data && hasReport && (
           <div className="border-b border-border px-5">
             <div className="inline-flex gap-1">
-              <TabButton active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-3.5 w-3.5" />}>
-                Email
-              </TabButton>
               <TabButton active={tab === 'report'} onClick={() => setTab('report')} icon={<BookOpen className="h-3.5 w-3.5" />}>
                 Structured report
+              </TabButton>
+              <TabButton active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-3.5 w-3.5" />}>
+                Email
               </TabButton>
             </div>
           </div>
@@ -289,9 +302,41 @@ function StructuredReportView({
     return parts.join('\n\n');
   }, [structured, resources.data]);
 
+  // Top-of-report at-a-glance counts so the operator can see the shape
+  // of this cycle's output without scrolling the whole sheet.
+  const winsCount = structured.keyWins?.length ?? 0;
+  const challengesCount = structured.challenges?.length ?? 0;
+  const stepsCount = structured.suggestedNextSteps?.length ?? 0;
+  const resourcesCount = ids.length;
+
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-end">
+    <div className="space-y-4">
+      {/* Stats strip + whole-report copy. Counts give the operator a
+          one-glance sense of "this report has 5 wins, 3 challenges, …"
+          without scrolling. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+          <StatChip
+            icon={<Sparkles className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />}
+            label="wins"
+            count={winsCount}
+          />
+          <StatChip
+            icon={<AlertTriangle className="h-3 w-3 text-amber-600 dark:text-amber-400" />}
+            label="challenges"
+            count={challengesCount}
+          />
+          <StatChip
+            icon={<ListChecks className="h-3 w-3 text-blue-600 dark:text-blue-400" />}
+            label="next steps"
+            count={stepsCount}
+          />
+          <StatChip
+            icon={<BookOpen className="h-3 w-3 text-purple-600 dark:text-purple-400" />}
+            label="resources"
+            count={resourcesCount}
+          />
+        </div>
         <CopyButton content={reportPlainText} label="Copy whole report" />
       </div>
 
@@ -300,6 +345,8 @@ function StructuredReportView({
         reportId={reportId}
         field="progressSummary"
         value={structured.progressSummary ?? ''}
+        tone="neutral"
+        icon={<TrendingUp className="h-3.5 w-3.5" />}
       />
 
       <EditableListSection
@@ -307,6 +354,8 @@ function StructuredReportView({
         reportId={reportId}
         field="keyWins"
         items={structured.keyWins ?? []}
+        tone="green"
+        icon={<Sparkles className="h-3.5 w-3.5" />}
       />
 
       <EditableListSection
@@ -314,6 +363,8 @@ function StructuredReportView({
         reportId={reportId}
         field="challenges"
         items={structured.challenges ?? []}
+        tone="amber"
+        icon={<AlertTriangle className="h-3.5 w-3.5" />}
       />
 
       <EditableProseSection
@@ -321,6 +372,8 @@ function StructuredReportView({
         reportId={reportId}
         field="patternObservations"
         value={structured.patternObservations ?? ''}
+        tone="purple"
+        icon={<Eye className="h-3.5 w-3.5" />}
       />
 
       <EditableListSection
@@ -328,6 +381,8 @@ function StructuredReportView({
         reportId={reportId}
         field="suggestedNextSteps"
         items={structured.suggestedNextSteps ?? []}
+        tone="blue"
+        icon={<ListChecks className="h-3.5 w-3.5" />}
       />
 
       <SuggestedResourcesEditor
@@ -339,6 +394,65 @@ function StructuredReportView({
 
       <GoingDeeperEditor reportId={reportId} initialValue={goingDeeper} />
     </div>
+  );
+}
+
+/** Tone tokens for the structured-report section cards. Each section
+ *  type gets its own subtle accent so the eye can scan the report for
+ *  the kind of content it wants without reading section titles. */
+type SectionTone = 'neutral' | 'green' | 'amber' | 'purple' | 'blue';
+
+const TONE_STYLES: Record<
+  SectionTone,
+  { accent: string; bg: string; titleText: string; iconText: string }
+> = {
+  neutral: {
+    accent: 'border-l-border',
+    bg: 'bg-muted/15',
+    titleText: 'text-foreground',
+    iconText: 'text-muted-foreground',
+  },
+  green: {
+    accent: 'border-l-emerald-500/60',
+    bg: 'bg-emerald-500/5 dark:bg-emerald-500/10',
+    titleText: 'text-emerald-700 dark:text-emerald-400',
+    iconText: 'text-emerald-600 dark:text-emerald-400',
+  },
+  amber: {
+    accent: 'border-l-amber-500/60',
+    bg: 'bg-amber-500/5 dark:bg-amber-500/10',
+    titleText: 'text-amber-700 dark:text-amber-400',
+    iconText: 'text-amber-600 dark:text-amber-400',
+  },
+  purple: {
+    accent: 'border-l-purple-500/60',
+    bg: 'bg-purple-500/5 dark:bg-purple-500/10',
+    titleText: 'text-purple-700 dark:text-purple-400',
+    iconText: 'text-purple-600 dark:text-purple-400',
+  },
+  blue: {
+    accent: 'border-l-blue-500/60',
+    bg: 'bg-blue-500/5 dark:bg-blue-500/10',
+    titleText: 'text-blue-700 dark:text-blue-400',
+    iconText: 'text-blue-600 dark:text-blue-400',
+  },
+};
+
+function StatChip({
+  icon,
+  label,
+  count,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {icon}
+      <span className="font-mono text-foreground/80 tabular-nums">{count}</span>{' '}
+      <span>{label}</span>
+    </span>
   );
 }
 
@@ -624,6 +738,8 @@ function Section({
   content,
   children,
   extraAction,
+  tone = 'neutral',
+  icon,
 }: {
   title: string;
   content: string;
@@ -632,14 +748,26 @@ function Section({
    *  alongside the Copy button. Used by EditableProseSection /
    *  EditableListSection so the editor can sit in the same header. */
   extraAction?: React.ReactNode;
+  tone?: SectionTone;
+  icon?: React.ReactNode;
 }) {
+  const t = TONE_STYLES[tone];
   return (
-    <section>
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          {title}
-        </p>
-        <div className="flex items-center gap-1">
+    <section
+      className={cn(
+        'group rounded-lg border border-l-4 border-border px-3.5 py-3',
+        t.accent,
+        t.bg,
+      )}
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className={cn('flex items-center gap-1.5', t.titleText)}>
+          {icon && <span className={t.iconText}>{icon}</span>}
+          <p className="text-[11px] font-semibold uppercase tracking-wider">
+            {title}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           {extraAction}
           <CopyButton content={content} />
         </div>
@@ -662,11 +790,15 @@ function EditableProseSection({
   reportId,
   field,
   value,
+  tone,
+  icon,
 }: {
   title: string;
   reportId: string;
   field: 'progressSummary' | 'patternObservations';
   value: string;
+  tone?: SectionTone;
+  icon?: React.ReactNode;
 }) {
   const utils = trpc.useUtils();
   const [editing, setEditing] = useState(false);
@@ -692,25 +824,15 @@ function EditableProseSection({
   // into existence via a small "Add" affordance.
   if (!editing && !value.trim()) {
     return (
-      <section>
-        <div className="mb-1.5 flex items-center justify-between gap-2">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {title}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-6 px-2 text-[11px] text-muted-foreground"
-            onClick={() => {
-              setDraft('');
-              setEditing(true);
-            }}
-          >
-            <Plus className="mr-1 h-3 w-3" /> Add
-          </Button>
-        </div>
-      </section>
+      <EmptySectionShell
+        title={title}
+        tone={tone}
+        icon={icon}
+        onAdd={() => {
+          setDraft('');
+          setEditing(true);
+        }}
+      />
     );
   }
 
@@ -719,6 +841,8 @@ function EditableProseSection({
       <Section
         title={title}
         content={value}
+        tone={tone}
+        icon={icon}
         extraAction={
           <Button
             type="button"
@@ -738,7 +862,7 @@ function EditableProseSection({
   }
 
   return (
-    <Section title={title} content={draft} extraAction={null}>
+    <Section title={title} content={draft} tone={tone} icon={icon} extraAction={null}>
       <Textarea
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -787,11 +911,15 @@ function EditableListSection({
   reportId,
   field,
   items,
+  tone,
+  icon,
 }: {
   title: string;
   reportId: string;
   field: 'keyWins' | 'challenges' | 'suggestedNextSteps';
   items: string[];
+  tone?: SectionTone;
+  icon?: React.ReactNode;
 }) {
   const utils = trpc.useUtils();
   const [editing, setEditing] = useState(false);
@@ -824,25 +952,15 @@ function EditableListSection({
 
   if (!editing && items.length === 0) {
     return (
-      <section>
-        <div className="mb-1.5 flex items-center justify-between gap-2">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {title}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-6 px-2 text-[11px] text-muted-foreground"
-            onClick={() => {
-              setDraft('');
-              setEditing(true);
-            }}
-          >
-            <Plus className="mr-1 h-3 w-3" /> Add
-          </Button>
-        </div>
-      </section>
+      <EmptySectionShell
+        title={title}
+        tone={tone}
+        icon={icon}
+        onAdd={() => {
+          setDraft('');
+          setEditing(true);
+        }}
+      />
     );
   }
 
@@ -853,6 +971,8 @@ function EditableListSection({
       <Section
         title={title}
         content={copyContent}
+        tone={tone}
+        icon={icon}
         extraAction={
           <Button
             type="button"
@@ -866,13 +986,13 @@ function EditableListSection({
           </Button>
         }
       >
-        <BulletList items={items} />
+        <BulletList items={items} numbered={field === 'suggestedNextSteps'} />
       </Section>
     );
   }
 
   return (
-    <Section title={title} content={draft} extraAction={null}>
+    <Section title={title} content={draft} tone={tone} icon={icon} extraAction={null}>
       <Textarea
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -924,22 +1044,85 @@ function EditableListSection({
 
 function Prose({ children }: { children: React.ReactNode }) {
   return (
-    <p className="whitespace-pre-wrap rounded-md border border-border bg-muted/20 px-3 py-2 text-[13px] leading-relaxed text-foreground/90">
+    <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
       {children}
     </p>
   );
 }
 
-function BulletList({ items }: { items: string[] }) {
+function BulletList({
+  items,
+  numbered,
+}: {
+  items: string[];
+  numbered?: boolean;
+}) {
   return (
-    <ul className="grid gap-1 rounded-md border border-border bg-muted/20 px-3 py-2 text-[13px] leading-relaxed text-foreground/90">
+    <ul className="grid gap-1.5 text-[13px] leading-relaxed text-foreground/90">
       {items.map((item, i) => (
-        <li key={i} className="flex gap-2">
-          <span className="mt-1 inline-block h-1 w-1 shrink-0 rounded-full bg-foreground/40" />
+        <li key={i} className="flex gap-2.5">
+          {numbered ? (
+            <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-foreground/10 font-mono text-[10px] tabular-nums text-foreground/70">
+              {i + 1}
+            </span>
+          ) : (
+            <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/40" />
+          )}
           <span className="whitespace-pre-wrap">{item}</span>
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Shown when an editable section has no content yet. Same chrome as
+ * a populated Section (tone-tinted card + icon) but with a single
+ * "Add" CTA in the body — gives the operator a clear way to fill in
+ * a missing block from the AI without losing the visual rhythm of
+ * the report.
+ */
+function EmptySectionShell({
+  title,
+  tone = 'neutral',
+  icon,
+  onAdd,
+}: {
+  title: string;
+  tone?: SectionTone;
+  icon?: React.ReactNode;
+  onAdd: () => void;
+}) {
+  const t = TONE_STYLES[tone];
+  return (
+    <section
+      className={cn(
+        'rounded-lg border border-l-4 border-dashed border-border px-3.5 py-3',
+        t.accent,
+        'bg-background/40',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className={cn('flex items-center gap-1.5 text-muted-foreground')}>
+          {icon && <span className={t.iconText}>{icon}</span>}
+          <p className="text-[11px] font-semibold uppercase tracking-wider">
+            {title}
+          </p>
+          <span className="text-[11px] italic text-muted-foreground/70">
+            · empty
+          </span>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          onClick={onAdd}
+        >
+          <Plus className="mr-1 h-3 w-3" /> Add
+        </Button>
+      </div>
+    </section>
   );
 }
 

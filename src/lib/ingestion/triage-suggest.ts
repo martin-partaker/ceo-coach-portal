@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '@/db';
 import { ceos, ceoEmailAliases, coaches, cycles, type RawInput } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { INGESTION_CONFIG } from './config';
 
 const anthropic = new Anthropic();
 
@@ -196,14 +197,34 @@ async function aiSuggestCeoForRawInput(
       // Annotate each participant with their resolved role so the model
       // doesn't have to cross-reference against the coach list itself.
       // Names are normalised to lowercase for the lookup since Zoom
-      // capitalisation varies.
+      // capitalisation varies. We treat someone as a coach when EITHER:
+      //   - their name matches a row in the coaches table, or
+      //   - their email is on an internal domain (e.g. @partaker.com).
+      // The email path catches supervisors/ops folks who aren't in the
+      // coaches table but are clearly internal — which is exactly the
+      // case that broke the all-coaches detection earlier.
       const coachSet = new Set(coachNames.map((n) => n.toLowerCase().trim()));
       const ceoNameSet = new Set(
         ceoIndex.map((c) => c.name.toLowerCase().trim()),
       );
+      const internalDomains = INGESTION_CONFIG.internalEmailDomains.map((d) =>
+        d.toLowerCase(),
+      );
+      const isInternalEmail = (email: string | undefined | null) => {
+        const e = email?.toLowerCase().trim();
+        if (!e) return false;
+        const at = e.lastIndexOf('@');
+        if (at < 0) return false;
+        const domain = e.slice(at + 1);
+        return internalDomains.some((d) => domain === d || domain.endsWith(`.${d}`));
+      };
+      const isCoachLike = (p: { name?: string; user_email?: string }) =>
+        coachSet.has((p.name ?? '').toLowerCase().trim()) ||
+        isInternalEmail(p.user_email);
+
       const annotated = externals.map((p) => {
         const name = p.name?.trim() ?? '?';
-        const role = coachSet.has(name.toLowerCase())
+        const role = isCoachLike(p)
           ? '(coach)'
           : ceoNameSet.has(name.toLowerCase())
             ? '(CEO)'
@@ -213,14 +234,12 @@ async function aiSuggestCeoForRawInput(
       });
       const dedup = Array.from(new Set(annotated));
       participantsLine = dedup.join(', ');
-      // Only "(coach)" tags = coach-to-coach meeting. Empty / unknown
-      // participants don't trigger this — they could still be a CEO
-      // we just don't have on the roster yet.
+      // Coach-to-coach meeting = every external participant is
+      // coach-like (in coaches table OR internal email domain). Unknown
+      // participants block the short-circuit since they could still be
+      // a CEO we just don't have on the roster yet.
       allParticipantsAreCoaches =
-        externals.length > 0 &&
-        externals.every((p) =>
-          coachSet.has((p.name ?? '').toLowerCase().trim()),
-        );
+        externals.length > 0 && externals.every(isCoachLike);
     }
     topic = payload?.meeting?.topic ?? '';
   }

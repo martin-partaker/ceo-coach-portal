@@ -38,6 +38,12 @@ export interface RosterReadiness {
   weekly: { done: boolean; ai: boolean };
   tx: { done: boolean; ai: boolean };
   actions: { done: boolean; ai: boolean };
+  /** KPIs are *adaptive* — they only count toward the readiness gate
+   *  when a prior cycle for the same CEO logged some, signalling this
+   *  CEO's coach actually tracks metrics. `expected=false` collapses
+   *  the slot (auto-done, hidden in the UI) so we don't introduce a
+   *  blocker that no one's been treating as one. */
+  kpi: { done: boolean; ai: boolean; expected: boolean };
 }
 
 export interface RosterSubmission {
@@ -98,6 +104,13 @@ function deriveReadiness(args: {
   actionCount: number;
   actionAiCount: number;
   actionReviewedCount: number;
+  /** Number of cycle_kpi_values rows recorded for this cycle. */
+  kpiCount: number;
+  /** True when a prior cycle for this CEO already logged at least one
+   *  KPI row. We only gate readiness on KPIs once the coach has shown
+   *  they treat KPIs as part of the practice — otherwise the row is
+   *  collapsed (`expected=false`, `done=true`). */
+  priorCycleHadKpis: boolean;
 }): RosterReadiness {
   const {
     ceoTenXGoal,
@@ -107,6 +120,8 @@ function deriveReadiness(args: {
     actionCount,
     actionAiCount,
     actionReviewedCount,
+    kpiCount,
+    priorCycleHadKpis,
   } = args;
   const goals = !!cycle.monthlyGoals?.trim();
   const reflect = !!cycle.monthlyReflection?.trim();
@@ -119,6 +134,13 @@ function deriveReadiness(args: {
     weekly: { done: weeklyCount >= 3, ai: false },
     tx: { done: transcriptCount > 0, ai: false },
     actions: { done: actionsDone, ai: actionCount > 0 && actionAiCount > 0 },
+    kpi: {
+      // When KPIs are expected: pass once at least one row is logged.
+      // Otherwise the slot is auto-done so it never gates phase=ready.
+      done: !priorCycleHadKpis || kpiCount > 0,
+      ai: false,
+      expected: priorCycleHadKpis,
+    },
   };
 }
 
@@ -271,6 +293,24 @@ export const rosterRouter = createTRPCRouter({
       .from(reports)
       .where(inArray(reports.cycleId, allCycles.map((c) => c.id)));
 
+    // Count KPI values per cycle in one shot — feeds the readiness gate
+    // (a cycle is "KPIs done" once it has ≥ 1 value, but only when a
+    // prior cycle for the same CEO already had at least one).
+    const kpiValueRows = allCycles.length === 0
+      ? []
+      : await ctx.db
+          .select({
+            cycleId: cycleKpiValues.cycleId,
+            count: sql<number>`count(*)`,
+          })
+          .from(cycleKpiValues)
+          .where(inArray(cycleKpiValues.cycleId, allCycles.map((c) => c.id)))
+          .groupBy(cycleKpiValues.cycleId);
+    const kpiCountByCycle = new Map<string, number>();
+    for (const r of kpiValueRows) {
+      kpiCountByCycle.set(r.cycleId, Number(r.count));
+    }
+
     // raw_inputs already carries ceoId directly — no join needed.
     const rawForCycles = await ctx.db
       .select()
@@ -314,6 +354,14 @@ export const rosterRouter = createTRPCRouter({
     // 4. Group cycles by ceoId and assemble final shape, applying derived
     //    membership: an input belongs to a cycle if its primary cycleId
     //    matches OR its effective date sits inside the cycle's window.
+    //
+    //    Track per-CEO whether any prior cycle has logged KPIs. The
+    //    readiness slot for KPIs only gates new cycles once the coach
+    //    has demonstrated they treat KPIs as part of the practice for
+    //    that CEO. `allCycles` is already sorted by periodStart asc, so
+    //    walking once and updating the flag after each cycle gives the
+    //    correct "before this cycle" semantics.
+    const ceoHadKpisBefore = new Map<string, boolean>();
     const cyclesByCeo = new Map<string, RosterCycle[]>();
     for (const cy of allCycles) {
       const ceo = ceoRows.find((r) => r.ceo.id === cy.ceoId)?.ceo;
@@ -393,9 +441,13 @@ export const rosterRouter = createTRPCRouter({
 
       const report = reportByCycle.get(cy.id) ?? null;
 
+      const priorCycleHadKpis = ceoHadKpisBefore.get(cy.ceoId) ?? false;
+      const kpiCount = kpiCountByCycle.get(cy.id) ?? 0;
       const readiness = deriveReadiness({
         ceoTenXGoal,
         cycle: cy,
+        priorCycleHadKpis,
+        kpiCount,
         weeklyCount,
         transcriptCount,
         actionCount: actions.total,
@@ -409,6 +461,13 @@ export const rosterRouter = createTRPCRouter({
         reportGeneratedAt: report?.generatedAt ?? null,
         now,
       });
+
+      // Update the running "this CEO has logged KPIs at some point"
+      // flag *after* deriving readiness so the current cycle's gate
+      // reflects only prior cycles.
+      if (kpiCount > 0) {
+        ceoHadKpisBefore.set(cy.ceoId, true);
+      }
 
       const list = cyclesByCeo.get(cy.ceoId) ?? [];
       list.push({
@@ -1096,6 +1155,101 @@ export const rosterRouter = createTRPCRouter({
       }
 
       return { ok: true, count: resolved.length };
+    }),
+
+  /**
+   * Archive (soft-delete) a KPI definition. Sets archivedAt = now()
+   * which hides the definition from the editor + new prompts/PDFs but
+   * keeps the historical cycle_kpi_values intact, so old reports still
+   * resolve their numbers. Coach-scope guard mirrors updateCycle.
+   */
+  archiveKpiDefinition: protectedProcedure
+    .input(z.object({ definitionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [def] = await ctx.db
+        .select()
+        .from(ceoKpiDefinitions)
+        .where(eq(ceoKpiDefinitions.id, input.definitionId))
+        .limit(1);
+      if (!def) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (!isUnscopedAdmin(ctx)) {
+        const [ceo] = await ctx.db
+          .select({ coachId: ceos.coachId })
+          .from(ceos)
+          .where(eq(ceos.id, def.ceoId))
+          .limit(1);
+        if (!ceo || ceo.coachId !== ctx.coach.id) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+      }
+
+      await ctx.db
+        .update(ceoKpiDefinitions)
+        .set({ archivedAt: new Date() })
+        .where(eq(ceoKpiDefinitions.id, input.definitionId));
+      return { ok: true };
+    }),
+
+  /**
+   * Restore an archived KPI definition. The unarchived disclosure in
+   * the editor offers this so a coach can recover a metric they
+   * accidentally archived.
+   */
+  unarchiveKpiDefinition: protectedProcedure
+    .input(z.object({ definitionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [def] = await ctx.db
+        .select()
+        .from(ceoKpiDefinitions)
+        .where(eq(ceoKpiDefinitions.id, input.definitionId))
+        .limit(1);
+      if (!def) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (!isUnscopedAdmin(ctx)) {
+        const [ceo] = await ctx.db
+          .select({ coachId: ceos.coachId })
+          .from(ceos)
+          .where(eq(ceos.id, def.ceoId))
+          .limit(1);
+        if (!ceo || ceo.coachId !== ctx.coach.id) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+      }
+
+      await ctx.db
+        .update(ceoKpiDefinitions)
+        .set({ archivedAt: null })
+        .where(eq(ceoKpiDefinitions.id, input.definitionId));
+      return { ok: true };
+    }),
+
+  /**
+   * List archived KPI definitions for a CEO so the editor can offer
+   * unarchive. Coach-scope guard mirrors updateCycle.
+   */
+  listArchivedKpiDefinitions: protectedProcedure
+    .input(z.object({ ceoId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!isUnscopedAdmin(ctx) && ceo.coachId !== ctx.coach.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+      return ctx.db
+        .select()
+        .from(ceoKpiDefinitions)
+        .where(
+          and(
+            eq(ceoKpiDefinitions.ceoId, input.ceoId),
+            sql`${ceoKpiDefinitions.archivedAt} is not null`,
+          ),
+        )
+        .orderBy(asc(ceoKpiDefinitions.label));
     }),
 
   /**

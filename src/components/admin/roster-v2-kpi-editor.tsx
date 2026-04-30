@@ -5,17 +5,22 @@ import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
+  ArchiveRestore,
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   Check,
   CornerDownRight,
   Loader2,
   Plus,
-  Trash2,
+  Settings2,
+  Archive,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { KpiKind } from '@/db/schema';
+import { KpiSparkline } from './roster-v2-kpi-sparkline';
 
 /* ─────────────────── Types from cycleDetail ─────────────────── */
 
@@ -82,6 +87,14 @@ function rowsFromKpis(kpis: KpiCellData[]): EditorRow[] {
   }));
 }
 
+const KIND_OPTIONS: Array<{ id: KpiKind; label: string }> = [
+  { id: 'number', label: 'Number' },
+  { id: 'currency', label: 'Currency ($)' },
+  { id: 'percent', label: 'Percent (%)' },
+  { id: 'count', label: 'Count' },
+  { id: 'text', label: 'Text' },
+];
+
 /**
  * Inline KPI editor for the cycle workspace.
  *
@@ -103,10 +116,12 @@ function rowsFromKpis(kpis: KpiCellData[]): EditorRow[] {
  */
 export function CycleKpiEditor({
   cycleId,
+  ceoId,
   kpis,
   priorCycleLabel = null,
 }: {
   cycleId: string;
+  ceoId: string;
   kpis: KpiCellData[];
   priorCycleLabel?: string | null;
 }) {
@@ -181,8 +196,32 @@ export function CycleKpiEditor({
       { _id: synthId(), label: '', value: '', kind: 'text' },
     ]);
   }
+  function moveRow(id: string, delta: 1 | -1) {
+    setRows((prev) => {
+      const i = prev.findIndex((r) => r._id === id);
+      if (i < 0) return prev;
+      const j = i + delta;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }
+
+  // Archive instead of hard-delete: the definition keeps its history
+  // for old reports, just disappears from the editor + new prompts.
+  // Falls back to client-only removal if the row was never persisted.
+  const archive = trpc.roster.archiveKpiDefinition.useMutation({
+    onSuccess: () => {
+      utils.roster.cycleDetail.invalidate({ cycleId });
+    },
+  });
   function removeRow(id: string) {
+    const row = rows.find((r) => r._id === id);
     setRows((prev) => prev.filter((r) => r._id !== id));
+    if (row?.definitionId) {
+      archive.mutate({ definitionId: row.definitionId });
+    }
   }
   function copyFromPrior() {
     setRows(
@@ -234,19 +273,28 @@ export function CycleKpiEditor({
         </p>
       ) : (
         <div className="grid gap-1.5">
-          {rows.map((row) => {
+          {rows.map((row, idx) => {
             const prior =
               (row.definitionId && priorByDef.get(row.definitionId)) ||
               (row.label.trim() &&
                 priorByLabel.get(row.label.trim().toLowerCase())) ||
               null;
+            const series =
+              (row.definitionId &&
+                kpis.find((k) => k.definition.id === row.definitionId)?.series) ||
+              [];
             return (
               <KpiRowEditor
                 key={row._id}
                 row={row}
                 prior={prior}
+                series={series}
+                isFirst={idx === 0}
+                isLast={idx === rows.length - 1}
                 onPatch={(patch) => patchRow(row._id, patch)}
                 onRemove={() => removeRow(row._id)}
+                onMoveUp={() => moveRow(row._id, -1)}
+                onMoveDown={() => moveRow(row._id, 1)}
               />
             );
           })}
@@ -286,6 +334,91 @@ export function CycleKpiEditor({
           </span>
         </div>
       )}
+
+      <ArchivedDisclosure cycleId={cycleId} ceoId={ceoId} />
+    </div>
+  );
+}
+
+function ArchivedDisclosure({ cycleId, ceoId }: { cycleId: string; ceoId: string }) {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const archived = trpc.roster.listArchivedKpiDefinitions.useQuery(
+    { ceoId },
+    { enabled: open, staleTime: 30_000 },
+  );
+  const unarchive = trpc.roster.unarchiveKpiDefinition.useMutation({
+    onSuccess: () => {
+      utils.roster.listArchivedKpiDefinitions.invalidate({ ceoId });
+      utils.roster.cycleDetail.invalidate({ cycleId });
+    },
+  });
+
+  const count = archived.data?.length ?? 0;
+  // Hide the disclosure entirely when there's nothing to restore — no
+  // need to advertise an empty section.
+  if (open === false && count === 0 && !archived.isLoading) {
+    // Probe once to know whether to show the toggle at all.
+  }
+
+  return (
+    <div className="px-1 pt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground/80 hover:text-foreground"
+      >
+        {open ? (
+          <ChevronDown className="h-2.5 w-2.5" />
+        ) : (
+          <ChevronUp className="h-2.5 w-2.5 rotate-90" />
+        )}
+        Archived KPIs{count > 0 ? ` (${count})` : ''}
+      </button>
+      {open && (
+        <div className="mt-2 grid gap-1.5 rounded-md border border-dashed border-border bg-muted/10 p-2">
+          {archived.isLoading && (
+            <span className="text-[10px] text-muted-foreground">Loading…</span>
+          )}
+          {!archived.isLoading && count === 0 && (
+            <span className="text-[10px] italic text-muted-foreground">
+              No archived KPIs.
+            </span>
+          )}
+          {(archived.data ?? []).map((def) => (
+            <div
+              key={def.id}
+              className="flex items-center justify-between gap-2 text-xs"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium">{def.label}</div>
+                {def.archivedAt && (
+                  <div className="text-[10px] text-muted-foreground">
+                    archived{' '}
+                    {new Date(def.archivedAt).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </div>
+                )}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[11px]"
+                onClick={() =>
+                  unarchive.mutate({ definitionId: def.id })
+                }
+                disabled={unarchive.isPending}
+              >
+                <ArchiveRestore className="mr-1 h-3 w-3" /> Restore
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -295,14 +428,25 @@ export function CycleKpiEditor({
 const KpiRowEditor = memo(function KpiRowEditor({
   row,
   prior,
+  series,
+  isFirst,
+  isLast,
   onPatch,
   onRemove,
+  onMoveUp,
+  onMoveDown,
 }: {
   row: EditorRow;
   prior: { value: string; trend: string | null; note: string | null } | null;
+  series: Array<{ value: string }>;
+  isFirst: boolean;
+  isLast: boolean;
   onPatch: (patch: Partial<EditorRow>) => void;
   onRemove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const autoTrend = useMemo(() => deriveTrend(prior?.value, row.value), [prior, row.value]);
   const stickyTrendRef = useRef<boolean>(!!row.trend);
   useEffect(() => {
@@ -317,54 +461,178 @@ const KpiRowEditor = memo(function KpiRowEditor({
     onPatch({ trend: t });
   }
 
+  // Progress against target — only meaningful when both current value
+  // and target parse as numbers. Capped at [0, 100].
+  const progress = useMemo(() => {
+    const cur = parseNumeric(row.value);
+    const tgt = parseNumeric(row.target);
+    if (cur === null || tgt === null || tgt === 0) return null;
+    const pct = Math.max(0, Math.min(100, (cur / tgt) * 100));
+    return { pct, cur, tgt };
+  }, [row.value, row.target]);
+
   return (
-    <div
-      className="grid items-start gap-2 rounded-md border border-border bg-muted/10 px-2 py-1.5"
-      style={{ gridTemplateColumns: '180px 1fr 110px 1fr 28px' }}
-    >
-      <Input
-        value={row.label}
-        onChange={(e) => onPatch({ label: e.target.value })}
-        placeholder="Label (e.g. Revenue)"
-        className="h-7 text-xs"
-      />
-      <div className="grid gap-1">
+    <div className="grid gap-1.5 rounded-md border border-border bg-muted/10 px-2 py-1.5">
+      <div
+        className="grid items-start gap-2"
+        style={{ gridTemplateColumns: '20px 180px 1fr 110px 96px 28px 28px' }}
+      >
+        {/* Reorder column — up/down stacked vertically. */}
+        <div className="flex flex-col">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={isFirst}
+            aria-label="Move up"
+            className={cn(
+              'h-3 text-muted-foreground transition-colors',
+              isFirst ? 'opacity-30' : 'hover:text-foreground',
+            )}
+          >
+            <ChevronUp className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={isLast}
+            aria-label="Move down"
+            className={cn(
+              'h-3 text-muted-foreground transition-colors',
+              isLast ? 'opacity-30' : 'hover:text-foreground',
+            )}
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        </div>
+
         <Input
-          value={row.value}
-          onChange={(e) => onPatch({ value: e.target.value })}
-          placeholder="Value (e.g. $5.2M)"
+          value={row.label}
+          onChange={(e) => onPatch({ label: e.target.value })}
+          placeholder="Label (e.g. Revenue)"
           className="h-7 text-xs"
         />
-        {prior && (
-          <span className="px-1 text-[10px] text-muted-foreground">
-            ↳ was <span className="font-mono">{prior.value}</span> last cycle
-          </span>
-        )}
+        <div className="grid gap-1">
+          <Input
+            value={row.value}
+            onChange={(e) => onPatch({ value: e.target.value })}
+            placeholder="Value (e.g. $5.2M)"
+            className="h-7 text-xs"
+          />
+          {prior && (
+            <span className="px-1 text-[10px] text-muted-foreground">
+              ↳ was <span className="font-mono">{prior.value}</span> last cycle
+            </span>
+          )}
+          {progress && (
+            <ProgressBar pct={progress.pct} target={row.target ?? ''} />
+          )}
+        </div>
+        <TrendButtons value={row.trend} derived={autoTrend} onChange={setTrend} />
+        <div className="flex items-center justify-center pt-0.5">
+          <KpiSparkline series={series} width={84} height={20} />
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+          onClick={() => setSettingsOpen((v) => !v)}
+          aria-label="KPI settings"
+          aria-expanded={settingsOpen}
+        >
+          <Settings2 className="h-3 w-3" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+          onClick={onRemove}
+          aria-label="Archive KPI"
+        >
+          <Archive className="h-3 w-3" />
+        </Button>
       </div>
-      <TrendButtons
-        value={row.trend}
-        derived={autoTrend}
-        onChange={setTrend}
-      />
-      <Input
-        value={row.note ?? ''}
-        onChange={(e) => onPatch({ note: e.target.value })}
-        placeholder="Note (optional)"
-        className="h-7 text-xs"
-      />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-        onClick={onRemove}
-        aria-label="Remove KPI"
-      >
-        <Trash2 className="h-3 w-3" />
-      </Button>
+
+      {settingsOpen && (
+        <div className="grid gap-2 rounded border border-border bg-background px-2.5 py-2 text-xs">
+          <div className="grid gap-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Note
+            </span>
+            <Input
+              value={row.note ?? ''}
+              onChange={(e) => onPatch({ note: e.target.value })}
+              placeholder="Optional context for this measurement"
+              className="h-7 text-xs"
+            />
+          </div>
+          <div
+            className="grid gap-2"
+            style={{ gridTemplateColumns: '1fr 1fr 1fr' }}
+          >
+            <div className="grid gap-1.5">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Kind
+              </span>
+              <select
+                value={row.kind ?? 'text'}
+                onChange={(e) =>
+                  onPatch({ kind: e.target.value as KpiKind })
+                }
+                className="h-7 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                {KIND_OPTIONS.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-1.5">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Unit
+              </span>
+              <Input
+                value={row.unit ?? ''}
+                onChange={(e) => onPatch({ unit: e.target.value })}
+                placeholder="e.g. $, %, customers"
+                className="h-7 text-xs"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Target
+              </span>
+              <Input
+                value={row.target ?? ''}
+                onChange={(e) => onPatch({ target: e.target.value })}
+                placeholder="e.g. $10M"
+                className="h-7 text-xs"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
+
+function ProgressBar({ pct, target }: { pct: number; target: string }) {
+  return (
+    <div className="grid gap-0.5 px-1">
+      <div className="relative h-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-emerald-500 transition-[width] dark:bg-emerald-400"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="text-[10px] text-muted-foreground tabular-nums">
+        {pct.toFixed(0)}% of <span className="font-mono">{target}</span> target
+      </span>
+    </div>
+  );
+}
 
 function TrendButtons({
   value,

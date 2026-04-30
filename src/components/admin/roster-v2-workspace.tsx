@@ -160,8 +160,17 @@ function CycleBody({
   const detail = trpc.roster.cycleDetail.useQuery({ cycleId: cycle.id });
   const data = detail.data;
 
-  const totalReady = Object.values(cycle.readiness).filter((r) => r.done).length;
-  const totalSlots = 6;
+  // Count slots that actually gate readiness for THIS cycle. The KPI
+  // slot is conditional — it only counts when `expected=true`, which
+  // happens after a prior cycle has logged at least one KPI for this
+  // CEO. Otherwise the slot is collapsed (hidden in the UI, ignored
+  // here) so the fraction stays meaningful.
+  const allSlots = Object.entries(cycle.readiness).filter(([key, slot]) => {
+    if (key === 'kpi') return 'expected' in slot && slot.expected;
+    return true;
+  });
+  const totalSlots = allSlots.length;
+  const totalReady = allSlots.filter(([, slot]) => slot.done).length;
   const isReady = totalReady === totalSlots;
 
   const [editCycleOpen, setEditCycleOpen] = useState(false);
@@ -531,6 +540,7 @@ function CycleBody({
           {data ? (
             <CycleKpiEditor
               cycleId={cycle.id}
+              ceoId={ceo.id}
               kpis={data.kpis ?? []}
               priorCycleLabel={data.priorCycleLabel ?? null}
             />
@@ -997,17 +1007,32 @@ function ReadinessCard({
   });
   // Order mirrors the left-hand form's top-to-bottom flow so the
   // operator's eye sweeps the same sequence on both columns: the 10x
-  // banner is at the top of the page, then Inputs (transcript + weekly
-  // journals), then Synthesis (monthly goals + reflection), then the
-  // Action Items section last.
-  const items: Array<{ key: keyof RosterCycle['readiness']; label: string }> = [
+  // banner is at the top of the page, then Inputs (transcript +
+  // weekly journals + KPIs when expected), then Synthesis (monthly
+  // goals + reflection), then Action Items.
+  //
+  // KPIs are *adaptive*: the slot is hidden entirely when no prior
+  // cycle for this CEO has logged any. Once a cycle has logged KPIs
+  // even once, all later cycles surface the slot as a gate.
+  const allItems: Array<{
+    key: keyof RosterCycle['readiness'];
+    label: string;
+    conditional?: boolean;
+  }> = [
     { key: 'tenx', label: '10x goal' },
     { key: 'tx', label: 'Zoom transcript' },
     { key: 'weekly', label: 'Weekly journals (≥3)' },
+    { key: 'kpi', label: 'KPIs', conditional: true },
     { key: 'goals', label: 'Monthly goals' },
     { key: 'reflect', label: 'Monthly reflection' },
     { key: 'actions', label: 'Action items reviewed' },
   ];
+
+  const items = allItems.filter((i) => {
+    if (!i.conditional) return true;
+    const slot = cycle.readiness[i.key];
+    return 'expected' in slot && slot.expected;
+  });
 
   const missingLabels = items
     .filter((i) => !cycle.readiness[i.key].done)

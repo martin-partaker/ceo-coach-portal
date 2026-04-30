@@ -39,12 +39,23 @@ export interface CycleReportPdfData {
   coach: {
     name: string;
   } | null;
+  /** AI-emitted "structured report" block (preferred when present). */
   report: {
     progressSummary?: string;
     keyWins?: string[];
     challenges?: string[];
     patternObservations?: string;
     suggestedNextSteps?: string[];
+  };
+  /** AI-emitted "email view" block. Used as a fallback for any
+   *  structured field that wasn't returned, plus the standalone
+   *  "Key Insight" section the structured shape doesn't model. */
+  email: {
+    opening?: string;
+    wins_and_progress?: string;
+    honest_feedback?: string;
+    key_insight?: string;
+    commitments?: string;
   };
   generatedAt: Date | null;
 }
@@ -143,16 +154,58 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
   if (period) subtitleParts.push(`Reporting Period: ${period}`);
   if (data.coach?.name) subtitleParts.push(`Coach: ${data.coach.name}`);
 
-  const wins = (data.report.keyWins ?? []).filter((s) => s.trim());
-  const challenges = (data.report.challenges ?? []).filter((s) => s.trim());
-  const nextSteps = (data.report.suggestedNextSteps ?? []).filter((s) => s.trim());
+  // Resolve each section by preferring the structured.* field, then
+  // falling back to whatever's in the email view. Older reports or runs
+  // where the model didn't emit the `report` block still produce a full
+  // PDF this way instead of just a Goal Summary + footer.
+  const progressText =
+    data.report.progressSummary?.trim() || data.email.opening?.trim() || '';
+  const wins = (data.report.keyWins ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const winsText = wins.length === 0
+    ? parseBullets(data.email.wins_and_progress)
+    : wins;
+  const winsParagraph =
+    wins.length === 0 && winsText.length === 0
+      ? data.email.wins_and_progress?.trim() || ''
+      : '';
+
+  const challenges = (data.report.challenges ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const challengesText =
+    challenges.length === 0
+      ? parseBullets(data.email.honest_feedback)
+      : challenges;
+  const challengesParagraph =
+    challenges.length === 0 && challengesText.length === 0
+      ? data.email.honest_feedback?.trim() || ''
+      : '';
+  const patternsText = data.report.patternObservations?.trim() || '';
+
+  const keyInsight = data.email.key_insight?.trim() || '';
+
+  const nextSteps = (data.report.suggestedNextSteps ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const nextStepsText =
+    nextSteps.length === 0
+      ? parseBullets(data.email.commitments)
+      : nextSteps;
+  const nextStepsParagraph =
+    nextSteps.length === 0 && nextStepsText.length === 0
+      ? data.email.commitments?.trim() || ''
+      : '';
+
   const hasGoalSection =
     !!data.ceo.tenXGoal?.trim() || !!data.cycle.monthlyGoals?.trim();
-  const hasProgressSection = !!data.report.progressSummary?.trim();
-  const hasWinsSection = wins.length > 0;
+  const hasProgressSection = !!progressText;
+  const hasWinsSection = winsText.length > 0 || !!winsParagraph;
   const hasChallengesSection =
-    challenges.length > 0 || !!data.report.patternObservations?.trim();
-  const hasNextStepsSection = nextSteps.length > 0;
+    challengesText.length > 0 || !!challengesParagraph || !!patternsText;
+  const hasKeyInsightSection = !!keyInsight;
+  const hasNextStepsSection = nextStepsText.length > 0 || !!nextStepsParagraph;
 
   return (
     <Document
@@ -191,9 +244,9 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         {hasProgressSection && (
           <>
             <Text style={styles.sectionTitle}>
-              {hasGoalSection ? '2. ' : '1. '}Progress Assessment
+              {sectionNumber(hasGoalSection)} Progress Assessment
             </Text>
-            <Paragraphs text={data.report.progressSummary!.trim()} />
+            <Paragraphs text={progressText} />
             <View style={styles.divider} />
           </>
         )}
@@ -203,9 +256,10 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             <Text style={styles.sectionTitle}>
               {sectionNumber(hasGoalSection, hasProgressSection)} Key Wins
             </Text>
-            {wins.map((w, i) => (
+            {winsText.map((w, i) => (
               <BulletItem key={i} body={w} />
             ))}
+            {winsParagraph && <Paragraphs text={winsParagraph} />}
             <View style={styles.divider} />
           </>
         )}
@@ -220,19 +274,36 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               )}{' '}
               Challenges & Patterns
             </Text>
-            {challenges.map((c, i) => (
+            {challengesText.map((c, i) => (
               <BulletItem key={i} body={c} />
             ))}
-            {data.report.patternObservations?.trim() && (
+            {challengesParagraph && <Paragraphs text={challengesParagraph} />}
+            {patternsText && (
               <View style={styles.paragraph}>
                 <Text>
                   <Text style={styles.paragraphLabel}>
                     Pattern observations:{' '}
                   </Text>
-                  {data.report.patternObservations.trim()}
+                  {patternsText}
                 </Text>
               </View>
             )}
+            <View style={styles.divider} />
+          </>
+        )}
+
+        {hasKeyInsightSection && (
+          <>
+            <Text style={styles.sectionTitle}>
+              {sectionNumber(
+                hasGoalSection,
+                hasProgressSection,
+                hasWinsSection,
+                hasChallengesSection,
+              )}{' '}
+              Key Insight
+            </Text>
+            <Paragraphs text={keyInsight} />
             <View style={styles.divider} />
           </>
         )}
@@ -245,16 +316,14 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
                 hasProgressSection,
                 hasWinsSection,
                 hasChallengesSection,
+                hasKeyInsightSection,
               )}{' '}
               Recommended Next Steps
             </Text>
-            {nextSteps.map((step, i) => (
-              <BulletItem
-                key={i}
-                glyph={`${i + 1}.`}
-                body={step}
-              />
+            {nextStepsText.map((step, i) => (
+              <BulletItem key={i} glyph={`${i + 1}.`} body={step} />
             ))}
+            {nextStepsParagraph && <Paragraphs text={nextStepsParagraph} />}
           </>
         )}
 
@@ -277,6 +346,30 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
 function sectionNumber(...precedingPresent: boolean[]): string {
   const idx = precedingPresent.filter(Boolean).length + 1;
   return `${idx}.`;
+}
+
+/**
+ * Pull bullet-shaped lines out of email-style text. The model often
+ * returns wins/feedback/commitments as plain text with `*`, `-`, `•`,
+ * or `1.` prefixes, sometimes mixed with prose. We try to extract
+ * just the bullet items; if there aren't any clear bullets, callers
+ * fall back to rendering the whole thing as a paragraph.
+ */
+function parseBullets(text: string | undefined): string[] {
+  if (!text) return [];
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const bullets: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^(?:[•\-*]|\d+[.)])\s+(.+)$/);
+    if (m) {
+      // Strip stray trailing markdown emphasis markers — they don't
+      // render as emphasis in our PDF and look like noise.
+      bullets.push(m[1].replace(/\*\*/g, '').trim());
+    }
+  }
+  // If the text is one prose blob with no markers, return [] so the
+  // caller renders it as a paragraph instead of a single fake bullet.
+  return bullets;
 }
 
 function BulletItem({

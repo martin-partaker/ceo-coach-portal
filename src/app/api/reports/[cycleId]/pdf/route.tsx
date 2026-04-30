@@ -14,6 +14,16 @@ import {
 export const dynamic = 'force-dynamic';
 
 interface ReportJson {
+  // Email view — used as a fallback when the structured `report`
+  // block wasn't returned (older reports), and to drive the standalone
+  // "Key Insight" PDF section that the structured shape doesn't model.
+  opening?: string;
+  wins_and_progress?: string;
+  honest_feedback?: string;
+  key_insight?: string;
+  commitments?: string;
+  closing?: string;
+  // Structured report view (preferred when present).
   report?: {
     progressSummary?: string;
     keyWins?: string[];
@@ -144,6 +154,13 @@ export async function GET(
     },
     coach: assignedCoach ? { name: assignedCoach.name } : null,
     report: json?.report ?? {},
+    email: {
+      opening: json?.opening,
+      wins_and_progress: json?.wins_and_progress,
+      honest_feedback: json?.honest_feedback,
+      key_insight: json?.key_insight,
+      commitments: json?.commitments,
+    },
     generatedAt: latestReport.generatedAt ?? null,
   };
 

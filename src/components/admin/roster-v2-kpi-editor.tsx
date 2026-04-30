@@ -5,18 +5,15 @@ import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
+  Archive,
   ArchiveRestore,
-  ArrowDown,
-  ArrowRight,
-  ArrowUp,
+  Check,
   ChevronDown,
   ChevronUp,
-  Check,
   CornerDownRight,
   Loader2,
   Plus,
   Settings2,
-  Archive,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { KpiKind } from '@/db/schema';
@@ -64,12 +61,6 @@ interface EditorRow {
 }
 
 const SAVE_DEBOUNCE_MS = 600;
-const TREND_OPTIONS: Array<{ id: 'up' | 'down' | 'flat'; Icon: typeof ArrowUp; tone: string }> = [
-  { id: 'up', Icon: ArrowUp, tone: 'text-emerald-600 dark:text-emerald-400' },
-  { id: 'flat', Icon: ArrowRight, tone: 'text-muted-foreground' },
-  { id: 'down', Icon: ArrowDown, tone: 'text-destructive' },
-];
-
 let _idCounter = 0;
 const synthId = () => `new-${Date.now().toString(36)}-${(_idCounter++).toString(36)}`;
 
@@ -448,18 +439,29 @@ const KpiRowEditor = memo(function KpiRowEditor({
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const autoTrend = useMemo(() => deriveTrend(prior?.value, row.value), [prior, row.value]);
-  const stickyTrendRef = useRef<boolean>(!!row.trend);
+
+  // Auto-derive trend silently. We removed the user-facing trend
+  // selector — it was visually competing with the reorder chevrons and
+  // people kept misreading it as another reorder control. Trend is now
+  // an output of the value/prior comparison, not an input. For
+  // non-numeric KPIs where the math doesn't apply, trend stays
+  // undefined; the prompt still gets the value, just without a
+  // direction signal.
   useEffect(() => {
-    if (!stickyTrendRef.current && autoTrend && autoTrend !== row.trend) {
+    if (autoTrend !== row.trend) {
       onPatch({ trend: autoTrend });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoTrend]);
 
-  function setTrend(t: 'up' | 'down' | 'flat' | undefined) {
-    stickyTrendRef.current = t !== undefined;
-    onPatch({ trend: t });
-  }
+  // Δ% between prior and current — surfaced in the hint line so the
+  // coach can read trajectory at a glance without a separate widget.
+  const deltaPct = useMemo(() => {
+    const a = parseNumeric(prior?.value);
+    const b = parseNumeric(row.value);
+    if (a === null || b === null || a === 0) return null;
+    return ((b - a) / Math.abs(a)) * 100;
+  }, [prior, row.value]);
 
   // Progress against target — only meaningful when both current value
   // and target parse as numbers. Capped at [0, 100].
@@ -471,11 +473,24 @@ const KpiRowEditor = memo(function KpiRowEditor({
     return { pct, cur, tgt };
   }, [row.value, row.target]);
 
+  // Build the value-input placeholder: when no current value AND we
+  // have a prior, surface "Last: $4.2M" right inside the field so the
+  // coach can see the anchor without looking elsewhere.
+  const valuePlaceholder = prior?.value
+    ? `Last: ${prior.value}`
+    : 'Value (e.g. $5.2M)';
+
   return (
     <div className="grid gap-1.5 rounded-md border border-border bg-muted/10 px-2 py-1.5">
       <div
         className="grid items-start gap-2"
-        style={{ gridTemplateColumns: '20px 180px 1fr 110px 96px 28px 28px' }}
+        style={{
+          // No trend column — trend is auto-derived below the value.
+          // Value gets 2fr, label gets 1fr, sparkline shrinks a bit so
+          // the value input is always the dominant cell.
+          gridTemplateColumns:
+            '20px minmax(0, 1fr) minmax(0, 2fr) 84px 28px 28px',
+        }}
       >
         {/* Reorder column — up/down stacked vertically. */}
         <div className="flex flex-col">
@@ -511,25 +526,60 @@ const KpiRowEditor = memo(function KpiRowEditor({
           placeholder="Label (e.g. Revenue)"
           className="h-7 text-xs"
         />
-        <div className="grid gap-1">
-          <Input
-            value={row.value}
-            onChange={(e) => onPatch({ value: e.target.value })}
-            placeholder="Value (e.g. $5.2M)"
-            className="h-7 text-xs"
-          />
+        <div className="grid min-w-0 gap-1">
+          <div className="relative">
+            <Input
+              value={row.value}
+              onChange={(e) => onPatch({ value: e.target.value })}
+              placeholder={valuePlaceholder}
+              className="h-7 pr-9 text-xs"
+            />
+            {/* Auto-derived trend indicator — passive. Keeps the
+                direction signal visible without competing with the
+                reorder chevrons. Hidden when there's no derivation
+                possible (non-numeric or first cycle). */}
+            {autoTrend && row.value.trim() && (
+              <span
+                className={cn(
+                  'pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs',
+                  autoTrend === 'up' &&
+                    'text-emerald-600 dark:text-emerald-400',
+                  autoTrend === 'down' &&
+                    'text-destructive',
+                  autoTrend === 'flat' && 'text-muted-foreground',
+                )}
+                aria-label={`Trend ${autoTrend}`}
+              >
+                {autoTrend === 'up' ? '▲' : autoTrend === 'down' ? '▼' : '–'}
+              </span>
+            )}
+          </div>
           {prior && (
             <span className="px-1 text-[10px] text-muted-foreground">
               ↳ was <span className="font-mono">{prior.value}</span> last cycle
+              {deltaPct !== null && row.value.trim() && (
+                <>
+                  {' '}
+                  <span
+                    className={cn(
+                      'font-mono tabular-nums',
+                      deltaPct > 0.5 && 'text-emerald-600 dark:text-emerald-400',
+                      deltaPct < -0.5 && 'text-destructive',
+                    )}
+                  >
+                    ({deltaPct >= 0 ? '+' : ''}
+                    {deltaPct.toFixed(deltaPct > 100 ? 0 : 1)}%)
+                  </span>
+                </>
+              )}
             </span>
           )}
           {progress && (
             <ProgressBar pct={progress.pct} target={row.target ?? ''} />
           )}
         </div>
-        <TrendButtons value={row.trend} derived={autoTrend} onChange={setTrend} />
         <div className="flex items-center justify-center pt-0.5">
-          <KpiSparkline series={series} width={84} height={20} />
+          <KpiSparkline series={series} width={72} height={20} />
         </div>
         <Button
           type="button"
@@ -634,43 +684,6 @@ function ProgressBar({ pct, target }: { pct: number; target: string }) {
   );
 }
 
-function TrendButtons({
-  value,
-  derived,
-  onChange,
-}: {
-  value: EditorRow['trend'];
-  derived: EditorRow['trend'];
-  onChange: (t: 'up' | 'down' | 'flat' | undefined) => void;
-}) {
-  return (
-    <div className="inline-flex items-center gap-0.5 rounded border border-border bg-background p-0.5">
-      {TREND_OPTIONS.map(({ id, Icon, tone }) => {
-        const active = value === id;
-        const isDerived = !value && derived === id;
-        return (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onChange(active ? undefined : id)}
-            className={cn(
-              'inline-flex h-5 w-7 items-center justify-center rounded-sm transition-colors',
-              active
-                ? 'bg-foreground text-background'
-                : isDerived
-                  ? 'bg-muted/60 ' + tone
-                  : 'text-muted-foreground hover:bg-muted',
-            )}
-            aria-label={`Trend ${id}${isDerived ? ' (auto)' : ''}`}
-            aria-pressed={active}
-          >
-            <Icon className="h-3 w-3" />
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /* ─────────────────────── Helpers ─────────────────────── */
 

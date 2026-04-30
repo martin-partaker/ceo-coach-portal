@@ -40,6 +40,7 @@ import { CycleEditDialog } from './roster-v2-cycle-edit-dialog';
 import { CycleCreateDialog } from './roster-v2-cycle-create-dialog';
 import { NotesEditor } from './roster-v2-notes-editor';
 import { CycleFieldEditor } from './roster-v2-cycle-field-editor';
+import { CycleKpiEditor } from './roster-v2-kpi-editor';
 import { ActionItemsEditableList } from './roster-v2-action-items';
 import { PromptInspector } from './prompt-inspector';
 import { ManualTranscriptDialog } from './manual-transcript-dialog';
@@ -507,6 +508,29 @@ function CycleBody({
                 }
               />
             )
+          ) : (
+            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
+          )}
+        </InputSlot>
+
+        <InputSlot
+          title="KPIs / Metrics"
+          status={
+            (data?.cycle.kpis?.length ?? 0) > 0 ? 'done' : 'optional'
+          }
+          summary={
+            (data?.cycle.kpis?.length ?? 0) > 0
+              ? `${data?.cycle.kpis?.length} metric${
+                  (data?.cycle.kpis?.length ?? 0) === 1 ? '' : 's'
+                } logged`
+              : undefined
+          }
+        >
+          {data ? (
+            <CycleKpiEditor
+              cycleId={cycle.id}
+              initialKpis={data.cycle.kpis ?? []}
+            />
           ) : (
             <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
           )}

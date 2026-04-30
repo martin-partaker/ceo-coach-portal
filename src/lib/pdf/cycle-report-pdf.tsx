@@ -35,6 +35,15 @@ export interface CycleReportPdfData {
     periodEnd: string | null;
     monthlyGoals: string | null;
     monthlyReflection: string | null;
+    /** Quantitative KPI snapshots for the cycle. When present we render
+     *  a small table at the top of Progress Assessment so the metrics
+     *  are visible at a glance instead of buried in prose. */
+    kpis?: Array<{
+      label: string;
+      value: string;
+      trend?: 'up' | 'down' | 'flat';
+      note?: string;
+    }>;
   };
   coach: {
     name: string;
@@ -126,7 +135,53 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: '#777',
   },
+  kpiGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  kpiCell: {
+    flexBasis: '32%',
+    flexGrow: 1,
+    padding: 8,
+    border: '0.5pt solid #d1d5db',
+    borderRadius: 4,
+    backgroundColor: '#fafafa',
+  },
+  kpiLabel: {
+    fontSize: 9,
+    color: '#555',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  kpiValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  kpiValue: {
+    fontSize: 14,
+    fontFamily: 'Helvetica-Bold',
+  },
+  kpiTrendUp: { color: '#15803d', fontSize: 10, fontFamily: 'Helvetica-Bold' },
+  kpiTrendDown: { color: '#b91c1c', fontSize: 10, fontFamily: 'Helvetica-Bold' },
+  kpiTrendFlat: { color: '#6b7280', fontSize: 10, fontFamily: 'Helvetica-Bold' },
+  kpiNote: {
+    fontSize: 9,
+    color: '#555',
+    marginTop: 2,
+  },
 });
+
+const TREND_GLYPH = { up: '▲', down: '▼', flat: '•' } as const;
+const TREND_STYLE = {
+  up: styles.kpiTrendUp,
+  down: styles.kpiTrendDown,
+  flat: styles.kpiTrendFlat,
+} as const;
 
 function formatPeriod(periodStart: string | null, periodEnd: string | null): string | null {
   if (!periodStart || !periodEnd) return null;
@@ -198,9 +253,15 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
       ? data.email.commitments?.trim() || ''
       : '';
 
+  const kpis = (data.cycle.kpis ?? []).filter(
+    (k) => k.label.trim() && k.value.trim(),
+  );
+
   const hasGoalSection =
     !!data.ceo.tenXGoal?.trim() || !!data.cycle.monthlyGoals?.trim();
-  const hasProgressSection = !!progressText;
+  // Progress section now renders if there's prose OR KPIs — a cycle
+  // with only KPIs (no narrative yet) still gets its own section.
+  const hasProgressSection = !!progressText || kpis.length > 0;
   const hasWinsSection = winsText.length > 0 || !!winsParagraph;
   const hasChallengesSection =
     challengesText.length > 0 || !!challengesParagraph || !!patternsText;
@@ -246,7 +307,20 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             <Text style={styles.sectionTitle}>
               {sectionNumber(hasGoalSection)} Progress Assessment
             </Text>
-            <Paragraphs text={progressText} />
+            {kpis.length > 0 && (
+              <View style={styles.kpiGrid}>
+                {kpis.map((k, i) => (
+                  <KpiCell
+                    key={`${k.label}-${i}`}
+                    label={k.label}
+                    value={k.value}
+                    trend={k.trend}
+                    note={k.note}
+                  />
+                ))}
+              </View>
+            )}
+            {progressText && <Paragraphs text={progressText} />}
             <View style={styles.divider} />
           </>
         )}
@@ -370,6 +444,29 @@ function parseBullets(text: string | undefined): string[] {
   // If the text is one prose blob with no markers, return [] so the
   // caller renders it as a paragraph instead of a single fake bullet.
   return bullets;
+}
+
+function KpiCell({
+  label,
+  value,
+  trend,
+  note,
+}: {
+  label: string;
+  value: string;
+  trend?: 'up' | 'down' | 'flat';
+  note?: string;
+}) {
+  return (
+    <View style={styles.kpiCell}>
+      <Text style={styles.kpiLabel}>{label}</Text>
+      <View style={styles.kpiValueRow}>
+        <Text style={styles.kpiValue}>{value}</Text>
+        {trend && <Text style={TREND_STYLE[trend]}>{TREND_GLYPH[trend]}</Text>}
+      </View>
+      {note?.trim() && <Text style={styles.kpiNote}>{note.trim()}</Text>}
+    </View>
+  );
 }
 
 function BulletItem({

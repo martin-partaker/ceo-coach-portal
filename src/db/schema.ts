@@ -50,11 +50,25 @@ export const cycles = pgTable('cycles', {
   monthlyGoals: text('monthly_goals'),
   monthlyReflection: text('monthly_reflection'),
   additionalContext: text('additional_context'),
+  // Quantitative KPI snapshots for the cycle. Spec ("KPI/metric updates")
+  // calls these out as a first-class CEO input. Stored as JSONB so the
+  // shape stays flexible (label, value, optional trend, optional note);
+  // the typed surface lives on `Kpi` below and on the cycles router input.
+  kpis: jsonb('kpis').$type<CycleKpi[]>().notNull().default([]),
   transcriptSkipped: boolean('transcript_skipped').notNull().default(false),
   monthlyGoalsAiSuggested: boolean('monthly_goals_ai_suggested').notNull().default(false),
   monthlyReflectionAiSuggested: boolean('monthly_reflection_ai_suggested').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
+
+/** Single KPI row stored in `cycles.kpis`. Trend is optional so a coach
+ *  who's just listing a metric without context isn't forced to pick. */
+export interface CycleKpi {
+  label: string;
+  value: string;
+  trend?: 'up' | 'down' | 'flat';
+  note?: string;
+}
 
 export const journalEntries = pgTable('journal_entries', {
   id: uuid('id').primaryKey().defaultRandom(),

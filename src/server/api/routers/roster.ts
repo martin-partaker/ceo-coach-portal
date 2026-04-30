@@ -713,6 +713,19 @@ export const rosterRouter = createTRPCRouter({
         additionalContext: z.string().nullable().optional(),
         monthlyGoals: z.string().nullable().optional(),
         monthlyReflection: z.string().nullable().optional(),
+        // Quantitative KPI snapshots — full replace on each save (the
+        // workspace editor sends the whole list back, including blanks
+        // filtered out client-side).
+        kpis: z
+          .array(
+            z.object({
+              label: z.string().min(1),
+              value: z.string().min(1),
+              trend: z.enum(['up', 'down', 'flat']).optional(),
+              note: z.string().optional(),
+            }),
+          )
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -751,6 +764,7 @@ export const rosterRouter = createTRPCRouter({
         set.monthlyReflection = input.monthlyReflection;
         set.monthlyReflectionAiSuggested = false;
       }
+      if (input.kpis !== undefined) set.kpis = input.kpis;
 
       // Sanity: if both dates supplied, end must be ≥ start
       if (set.periodStart && set.periodEnd && set.periodStart > set.periodEnd) {

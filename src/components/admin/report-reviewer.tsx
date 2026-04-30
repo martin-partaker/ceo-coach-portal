@@ -19,12 +19,14 @@ import {
   FileText,
   Loader2,
   Mail,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
   Trash2,
   X,
 } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -293,44 +295,40 @@ function StructuredReportView({
         <CopyButton content={reportPlainText} label="Copy whole report" />
       </div>
 
-      {structured.progressSummary && (
-        <Section title="Progress Summary" content={structured.progressSummary}>
-          <Prose>{structured.progressSummary}</Prose>
-        </Section>
-      )}
+      <EditableProseSection
+        title="Progress Summary"
+        reportId={reportId}
+        field="progressSummary"
+        value={structured.progressSummary ?? ''}
+      />
 
-      {structured.keyWins && structured.keyWins.length > 0 && (
-        <Section
-          title="Key Wins"
-          content={structured.keyWins.map((w) => `- ${w}`).join('\n')}
-        >
-          <BulletList items={structured.keyWins} />
-        </Section>
-      )}
+      <EditableListSection
+        title="Key Wins"
+        reportId={reportId}
+        field="keyWins"
+        items={structured.keyWins ?? []}
+      />
 
-      {structured.challenges && structured.challenges.length > 0 && (
-        <Section
-          title="Challenges & Constraints"
-          content={structured.challenges.map((c) => `- ${c}`).join('\n')}
-        >
-          <BulletList items={structured.challenges} />
-        </Section>
-      )}
+      <EditableListSection
+        title="Challenges & Constraints"
+        reportId={reportId}
+        field="challenges"
+        items={structured.challenges ?? []}
+      />
 
-      {structured.patternObservations && (
-        <Section title="Pattern Observations" content={structured.patternObservations}>
-          <Prose>{structured.patternObservations}</Prose>
-        </Section>
-      )}
+      <EditableProseSection
+        title="Pattern Observations"
+        reportId={reportId}
+        field="patternObservations"
+        value={structured.patternObservations ?? ''}
+      />
 
-      {structured.suggestedNextSteps && structured.suggestedNextSteps.length > 0 && (
-        <Section
-          title="Suggested Next Steps"
-          content={structured.suggestedNextSteps.map((s) => `- ${s}`).join('\n')}
-        >
-          <BulletList items={structured.suggestedNextSteps} />
-        </Section>
-      )}
+      <EditableListSection
+        title="Suggested Next Steps"
+        reportId={reportId}
+        field="suggestedNextSteps"
+        items={structured.suggestedNextSteps ?? []}
+      />
 
       <SuggestedResourcesEditor
         reportId={reportId}
@@ -625,10 +623,15 @@ function Section({
   title,
   content,
   children,
+  extraAction,
 }: {
   title: string;
   content: string;
   children: React.ReactNode;
+  /** Slot for a per-section affordance (e.g. an Edit pencil) rendered
+   *  alongside the Copy button. Used by EditableProseSection /
+   *  EditableListSection so the editor can sit in the same header. */
+  extraAction?: React.ReactNode;
 }) {
   return (
     <section>
@@ -636,10 +639,286 @@ function Section({
         <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
           {title}
         </p>
-        <CopyButton content={content} />
+        <div className="flex items-center gap-1">
+          {extraAction}
+          <CopyButton content={content} />
+        </div>
       </div>
       {children}
     </section>
+  );
+}
+
+/* ─────────────────── Editable structured-report sections ──────────────────
+ * Each editable section has the same look as its readonly counterpart
+ * (Section + Prose / BulletList) plus a pencil affordance in the header.
+ * Click pencil → swap render to Textarea → Save / Cancel. Save sends
+ * the field back through `reports.update`, which re-derives `rawText`
+ * server-side so the Email tab and PDF stay coherent.
+ */
+
+function EditableProseSection({
+  title,
+  reportId,
+  field,
+  value,
+}: {
+  title: string;
+  reportId: string;
+  field: 'progressSummary' | 'patternObservations';
+  value: string;
+}) {
+  const utils = trpc.useUtils();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  // Keep draft in sync if the upstream value changes (e.g. caller
+  // re-fetched after a regenerate) and we're not actively editing.
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  const update = trpc.reports.update.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.reports.getForCycle.invalidate(),
+        utils.roster.cycleSummary.invalidate(),
+      ]);
+      setEditing(false);
+    },
+  });
+
+  // Don't render an empty readonly section — but still allow editing
+  // into existence via a small "Add" affordance.
+  if (!editing && !value.trim()) {
+    return (
+      <section>
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {title}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-[11px] text-muted-foreground"
+            onClick={() => {
+              setDraft('');
+              setEditing(true);
+            }}
+          >
+            <Plus className="mr-1 h-3 w-3" /> Add
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <Section
+        title={title}
+        content={value}
+        extraAction={
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+            onClick={() => setEditing(true)}
+            aria-label={`Edit ${title}`}
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
+        }
+      >
+        <Prose>{value}</Prose>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title={title} content={draft} extraAction={null}>
+      <Textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={Math.max(4, Math.min(14, draft.split('\n').length + 1))}
+        className="text-[13px] leading-relaxed"
+        autoFocus
+      />
+      {update.error && (
+        <p className="mt-2 text-[11px] text-destructive">{update.error.message}</p>
+      )}
+      <div className="mt-2 flex justify-end gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={() => {
+            setDraft(value);
+            setEditing(false);
+          }}
+          disabled={update.isPending}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={() => update.mutate({ reportId, [field]: draft })}
+          disabled={update.isPending || draft === value}
+        >
+          {update.isPending ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <Check className="mr-1 h-3 w-3" />
+          )}
+          Save
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+function EditableListSection({
+  title,
+  reportId,
+  field,
+  items,
+}: {
+  title: string;
+  reportId: string;
+  field: 'keyWins' | 'challenges' | 'suggestedNextSteps';
+  items: string[];
+}) {
+  const utils = trpc.useUtils();
+  const [editing, setEditing] = useState(false);
+  // Edit-mode draft is one bullet per line, with a leading "- " stripped
+  // for cleaner editing. We re-split on save.
+  const initialDraft = useMemo(() => items.join('\n'), [items]);
+  const [draft, setDraft] = useState(initialDraft);
+
+  useEffect(() => {
+    if (!editing) setDraft(initialDraft);
+  }, [initialDraft, editing]);
+
+  const update = trpc.reports.update.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.reports.getForCycle.invalidate(),
+        utils.roster.cycleSummary.invalidate(),
+      ]);
+      setEditing(false);
+    },
+  });
+
+  function save() {
+    const next = draft
+      .split('\n')
+      .map((l) => l.replace(/^[-*•]\s*/, '').trim())
+      .filter(Boolean);
+    update.mutate({ reportId, [field]: next });
+  }
+
+  if (!editing && items.length === 0) {
+    return (
+      <section>
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {title}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-[11px] text-muted-foreground"
+            onClick={() => {
+              setDraft('');
+              setEditing(true);
+            }}
+          >
+            <Plus className="mr-1 h-3 w-3" /> Add
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  const copyContent = items.map((i) => `- ${i}`).join('\n');
+
+  if (!editing) {
+    return (
+      <Section
+        title={title}
+        content={copyContent}
+        extraAction={
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+            onClick={() => setEditing(true)}
+            aria-label={`Edit ${title}`}
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
+        }
+      >
+        <BulletList items={items} />
+      </Section>
+    );
+  }
+
+  return (
+    <Section title={title} content={draft} extraAction={null}>
+      <Textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={Math.max(4, Math.min(14, draft.split('\n').length + 1))}
+        placeholder="One bullet per line"
+        className="text-[13px] leading-relaxed"
+        autoFocus
+      />
+      <p className="mt-1 text-[10px] text-muted-foreground">
+        One bullet per line. Leading <span className="font-mono">-</span> /
+        <span className="font-mono"> *</span> /
+        <span className="font-mono"> •</span> are stripped on save.
+      </p>
+      {update.error && (
+        <p className="mt-2 text-[11px] text-destructive">{update.error.message}</p>
+      )}
+      <div className="mt-2 flex justify-end gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={() => {
+            setDraft(initialDraft);
+            setEditing(false);
+          }}
+          disabled={update.isPending}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={save}
+          disabled={update.isPending || draft === initialDraft}
+        >
+          {update.isPending ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <Check className="mr-1 h-3 w-3" />
+          )}
+          Save
+        </Button>
+      </div>
+    </Section>
   );
 }
 

@@ -18,7 +18,15 @@ export async function buildPrompt({
   cycle: Cycle;
   ceo: Ceo;
   coachName: string;
-  previousReports: Array<{ cycleLabel: string; rawText: string }>;
+  /** Each prior report contributes its raw email body (for continuity)
+   *  and — when present — the structured patternObservations field so
+   *  the model can write *cross-cycle* patterns rather than reinventing
+   *  them from this month's data alone. */
+  previousReports: Array<{
+    cycleLabel: string;
+    rawText: string;
+    patternObservations?: string | null;
+  }>;
 }) {
   // Fetch curriculum from DB. Two layers:
   //   - `framework` rows go into the system prompt as the coach's
@@ -131,6 +139,32 @@ export async function buildPrompt({
         .join('\n\n---\n\n')
     : '(none yet — this is the first coaching email generated for this CEO. As more cycles are completed, every previously generated coaching email will appear here so you can build on prior themes, language, and commitments.)';
 
+  // Prior cycles' structured `patternObservations`, surfaced as their
+  // own block so the model can deliberately compare/contrast across
+  // months instead of fishing for them inside long email bodies.
+  const priorPatterns = previousReports
+    .map((r) => ({ label: r.cycleLabel, text: (r.patternObservations ?? '').trim() }))
+    .filter((r) => r.text.length > 0);
+  const priorPatternsText = priorPatterns.length > 0
+    ? priorPatterns.map((p) => `#### ${p.label}\n${p.text}`).join('\n\n---\n\n')
+    : '(no prior pattern observations recorded yet — base patternObservations on this cycle alone, and say so explicitly.)';
+
+  // Quantitative KPI snapshots logged for this cycle. Stored as
+  // structured rows (label / value / trend / note) so the prompt can
+  // surface them as a clean block rather than burying them in prose.
+  const kpiRows = (cycle.kpis ?? []).filter(
+    (k) => k.label?.trim() && k.value?.trim(),
+  );
+  const kpiText = kpiRows.length > 0
+    ? kpiRows
+        .map((k) => {
+          const trend = k.trend ? ` (${k.trend})` : '';
+          const note = k.note?.trim() ? ` — ${k.note.trim()}` : '';
+          return `- **${k.label.trim()}**: ${k.value.trim()}${trend}${note}`;
+        })
+        .join('\n')
+    : '(no KPIs recorded for this cycle)';
+
   const systemPrompt = `You are writing a personalised coaching update email on behalf of a coach named ${coachName} to their CEO client named ${ceo.name}. This email is sent after each coaching cycle to make the CEO feel heard, understood, and motivated.
 
 ## Your role
@@ -149,6 +183,9 @@ ${curriculumText}
 - **Anchor the email in named concepts from the Framework Reference.** Where a CEO's situation maps to a concept (Olympic Day Planner, champion proof, the 3 life domains, identity-based change, the say-do gap, the commitment loop, the constraints model), name the concept inline. Don't just summarise behaviour — connect it back to the framework so the email teaches as it reflects.
 - Keep the email scannable: short paragraphs, bold for emphasis, bullet points for action items.
 - End with clear next commitments and encouragement.
+- **Close \`commitments\` (and \`suggestedNextSteps\` in the report) with a one-line nudge that the CEO and coach should discuss these at the next monthly coaching session.** This reinforces that the email is a starting point for the conversation, not the final word.
+- When KPIs are provided, weave them into \`progressSummary\` and \`wins_and_progress\` with their numbers; don't invent metrics that aren't in the inputs.
+- When prior pattern observations are provided, your \`patternObservations\` should explicitly compare to them (carrying forward, evolving, resolving) instead of treating this cycle as standalone.
 - No diagnostic or therapeutic language. No legal, medical, or mental health claims.
 
 ## Suggested Resources catalog
@@ -200,6 +237,9 @@ ${journalText}
 ### Monthly Reflection
 ${cycle.monthlyReflection?.trim() || '(not provided)'}
 
+### KPIs / Metric Updates
+${kpiText}
+
 ### Zoom Session Transcript
 ${transcriptText}
 ${cycle.additionalContext?.trim() ? `
@@ -208,6 +248,9 @@ ${cycle.additionalContext}
 ` : ''}
 ### Previous Coaching Emails (for continuity across cycles, oldest → newest)
 ${previousReportsText}
+
+### Prior Pattern Observations (cross-cycle context for patternObservations)
+${priorPatternsText}
 ${missingWarning}
 
 Write the coaching update email now.`;

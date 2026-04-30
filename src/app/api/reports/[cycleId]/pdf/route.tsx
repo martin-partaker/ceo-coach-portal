@@ -151,6 +151,7 @@ export async function GET(
       periodEnd: cycle.periodEnd ?? null,
       monthlyGoals: cycle.monthlyGoals ?? null,
       monthlyReflection: cycle.monthlyReflection ?? null,
+      kpis: cycle.kpis ?? [],
     },
     coach: assignedCoach ? { name: assignedCoach.name } : null,
     report: json?.report ?? {},

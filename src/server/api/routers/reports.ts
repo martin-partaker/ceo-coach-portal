@@ -118,7 +118,17 @@ async function loadPreviousReports(
   ctx: { db: typeof import('@/db').db },
   ceoId: string,
   currentCycleId: string,
-): Promise<Array<{ cycleLabel: string; rawText: string }>> {
+): Promise<
+  Array<{
+    cycleLabel: string;
+    rawText: string;
+    /** The structured `report.patternObservations` from this cycle's
+     *  saved contentJson (when present). The prompt surfaces these as
+     *  their own block so the model can compare/contrast across months
+     *  rather than re-reading them out of long email bodies. */
+    patternObservations?: string | null;
+  }>
+> {
   const [currentCycle] = await ctx.db
     .select()
     .from(cycles)
@@ -146,7 +156,11 @@ async function loadPreviousReports(
     .filter(isPrior)
     .sort((a, b) => (sortKey(a) < sortKey(b) ? -1 : 1));
 
-  const out: Array<{ cycleLabel: string; rawText: string }> = [];
+  const out: Array<{
+    cycleLabel: string;
+    rawText: string;
+    patternObservations?: string | null;
+  }> = [];
   for (const c of priorCyclesOldestFirst) {
     const [r] = await ctx.db
       .select()
@@ -154,7 +168,16 @@ async function loadPreviousReports(
       .where(eq(reports.cycleId, c.id))
       .orderBy(desc(reports.generatedAt))
       .limit(1);
-    if (r) out.push({ cycleLabel: c.label, rawText: r.rawText });
+    if (r) {
+      const json = r.contentJson as
+        | { report?: { patternObservations?: string | null } }
+        | null;
+      out.push({
+        cycleLabel: c.label,
+        rawText: r.rawText,
+        patternObservations: json?.report?.patternObservations ?? null,
+      });
+    }
   }
   return out;
 }
@@ -412,6 +435,14 @@ export const reportsRouter = createTRPCRouter({
         subject_line: z.string().optional(),
         // Curated resource id list (replaces the stored array entirely).
         suggestedResourceIds: z.array(z.string().uuid()).max(10).optional(),
+        // Structured report fields — same edit-in-place treatment as the
+        // email keys. Coach can tweak the AI's narrative without having
+        // to regenerate the whole report.
+        progressSummary: z.string().optional(),
+        keyWins: z.array(z.string()).optional(),
+        challenges: z.array(z.string()).optional(),
+        patternObservations: z.string().optional(),
+        suggestedNextSteps: z.array(z.string()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -448,6 +479,25 @@ export const reportsRouter = createTRPCRouter({
           ...(next.report ?? {}),
           suggestedResourceIds: validIds,
         };
+      }
+
+      // Structured report edits. We replace each field outright when
+      // present so a coach can clear a section by sending an empty
+      // string / array.
+      const structuredKeys = [
+        'progressSummary',
+        'keyWins',
+        'challenges',
+        'patternObservations',
+        'suggestedNextSteps',
+      ] as const;
+      for (const k of structuredKeys) {
+        if (input[k] !== undefined) {
+          next.report = {
+            ...(next.report ?? {}),
+            [k]: input[k],
+          };
+        }
       }
 
       const rawText = contentJsonToRawText(next);

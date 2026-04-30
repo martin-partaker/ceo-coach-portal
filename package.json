@@ -37,6 +37,7 @@
     "dotenv": "^17.2.2",
     "drizzle-orm": "^0.45.1",
     "geist": "^1.7.0",
+    "jszip": "^3.10.1",
     "lucide-react": "^1.7.0",
     "marked": "^18.0.2",
     "next": "^16.1.6",

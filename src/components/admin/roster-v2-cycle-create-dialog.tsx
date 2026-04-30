@@ -46,8 +46,12 @@ export function CycleCreateDialog({ ceoId, ceoName, open, onOpenChange, onCreate
   const [periodEnd, setPeriodEnd] = useState(defaults.end);
 
   const create = trpc.roster.createCycle.useMutation({
-    onSuccess: (cycle) => {
-      utils.roster.cycleSummary.invalidate();
+    // Await the cycleSummary invalidation BEFORE flipping the active tab.
+    // Otherwise the row's "reset active id when not in cycles list" effect
+    // fires before the new cycle has loaded and snaps us back to the old
+    // tab. Awaiting keeps the workspace's tab strip honest.
+    onSuccess: async (cycle) => {
+      await utils.roster.cycleSummary.invalidate();
       onCreated?.(cycle.id);
       onOpenChange(false);
       // Re-prime defaults for the next time

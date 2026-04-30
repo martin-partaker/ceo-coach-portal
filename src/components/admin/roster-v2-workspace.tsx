@@ -314,14 +314,14 @@ function CycleBody({
               label="No transcript for this session"
               cta={
                 <div className="flex items-center gap-1">
-                  <Button
+                  {/* <Button
                     size="sm"
                     variant="outline"
                     className="h-6 px-2 text-[11px]"
                     onClick={() => setZoomImportOpen(true)}
                   >
                     <Download className="mr-1 h-3 w-3" /> Import from Zoom
-                  </Button>
+                  </Button> */}
                   <Button
                     size="sm"
                     variant="outline"
@@ -342,14 +342,14 @@ function CycleBody({
           onOpenChange={setPasteTranscriptOpen}
         />
 
-        <ZoomImportDialog
+        {/* <ZoomImportDialog
           cycleId={cycle.id}
           ceoId={ceo.id}
           hasZoomEmail={hasZoomEmail}
           existingTranscripts={data?.transcripts ?? []}
           open={zoomImportOpen}
           onOpenChange={setZoomImportOpen}
-        />
+        /> */}
 
         <InputSlot
           title="Weekly Journals"
@@ -461,26 +461,18 @@ function CycleBody({
           }
         >
           {data ? (
-            cycle.readiness.goals.done || cycle.readiness.goals.ai ? (
-              <CycleFieldEditor
-                cycleId={cycle.id}
-                field="monthlyGoals"
-                initialValue={data.cycle.monthlyGoals}
-                ai={cycle.readiness.goals.ai}
-                rows={6}
-              />
-            ) : (
-              <EmptyHint
-                label="No monthly goals captured yet"
-                cta={
-                  <PrefillButton
-                    cycleId={cycle.id}
-                    field="monthlyGoals"
-                    label="AI prefill from journals + transcript"
-                  />
-                }
-              />
-            )
+            // Always render the editor — the coach can type goals
+            // directly without needing to "AI prefill" first. The
+            // editor's footer carries its own Re-generate button so
+            // the AI path is still one click away.
+            <CycleFieldEditor
+              cycleId={cycle.id}
+              field="monthlyGoals"
+              initialValue={data.cycle.monthlyGoals}
+              ai={cycle.readiness.goals.ai}
+              rows={6}
+              placeholder="Type the monthly goals & commitments — or hit Re-generate to draft from the journals + transcript."
+            />
           ) : (
             <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
           )}
@@ -497,26 +489,14 @@ function CycleBody({
           }
         >
           {data ? (
-            cycle.readiness.reflect.done || cycle.readiness.reflect.ai ? (
-              <CycleFieldEditor
-                cycleId={cycle.id}
-                field="monthlyReflection"
-                initialValue={data.cycle.monthlyReflection}
-                ai={cycle.readiness.reflect.ai}
-                rows={8}
-              />
-            ) : (
-              <EmptyHint
-                label="No reflection captured yet"
-                cta={
-                  <PrefillButton
-                    cycleId={cycle.id}
-                    field="monthlyReflection"
-                    label="AI prefill from journals + transcript"
-                  />
-                }
-              />
-            )
+            <CycleFieldEditor
+              cycleId={cycle.id}
+              field="monthlyReflection"
+              initialValue={data.cycle.monthlyReflection}
+              ai={cycle.readiness.reflect.ai}
+              rows={8}
+              placeholder="Type the monthly reflection — or hit Re-generate to draft from the journals + transcript."
+            />
           ) : (
             <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
           )}
@@ -1137,7 +1117,7 @@ function ReadinessCard({
               {generate.isPending
                 ? 'Generating…'
                 : isReady
-                  ? 'Generate Email'
+                  ? 'Generate monthly report'
                   : 'Generate with gaps'}
             </Button>
             {generate.error && (

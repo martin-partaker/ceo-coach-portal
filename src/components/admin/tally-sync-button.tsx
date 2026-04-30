@@ -73,34 +73,7 @@ export function TallySyncButton() {
   const busy = sync.isPending;
 
   return (
-    <div className="flex flex-col items-end gap-1.5">
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            'inline-flex items-center gap-1 text-[11px] tabular-nums',
-            cronErrors.length > 0
-              ? 'text-amber-600 dark:text-amber-400'
-              : 'text-muted-foreground',
-          )}
-        >
-          <Clock className="h-3 w-3" />
-          Last sync: {formatRelative(lastSuccess)}
-        </span>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => sync.mutate()}
-          disabled={busy}
-        >
-          {busy ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {busy ? 'Syncing…' : 'Sync now'}
-        </Button>
-      </div>
-
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5">
       {result && !sync.isPending && <SyncSummary result={result} />}
 
       {sync.error && (
@@ -109,6 +82,31 @@ export function TallySyncButton() {
           {sync.error.message}
         </span>
       )}
+
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 text-[11px] tabular-nums',
+          cronErrors.length > 0
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-muted-foreground',
+        )}
+      >
+        <Clock className="h-3 w-3" />
+        Last sync: {formatRelative(lastSuccess)}
+      </span>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => sync.mutate()}
+        disabled={busy}
+      >
+        {busy ? (
+          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+        )}
+        {busy ? 'Syncing…' : 'Sync now'}
+      </Button>
     </div>
   );
 }

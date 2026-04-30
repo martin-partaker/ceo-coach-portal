@@ -7,8 +7,16 @@ import {
   View,
   StyleSheet,
   Font,
+  Svg,
+  Polyline,
+  Circle,
+  Line,
+  // SVG-scoped <Text> — share the name with our layout `<Text>` above
+  // so we alias it. Used for chart axis + point labels.
+  Text as PdfSvgText,
 } from '@react-pdf/renderer';
 import * as React from 'react';
+import { MarkdownPdf } from '@/lib/markdown/render-pdf';
 
 /**
  * The PDF mirrors example-output/10x_sample monthly summary_Tipton Mills.pdf —
@@ -43,6 +51,11 @@ export interface CycleReportPdfData {
       value: string;
       trend?: 'up' | 'down' | 'flat';
       note?: string;
+      /** Numeric history across the trailing cycles, oldest → newest,
+       *  current cycle last. Each entry pairs a cycle short label
+       *  (rendered on the chart's x-axis) with its parsed numeric
+       *  value. Hidden when fewer than 2 entries are available. */
+      history?: Array<{ label: string; value: number }>;
     }>;
   };
   coach: {
@@ -93,9 +106,9 @@ const styles = StyleSheet.create({
     lineHeight: 1.5,
   },
   divider: {
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#9ca3af',
-    marginVertical: 16,
+    borderBottomWidth: 0.4,
+    borderBottomColor: '#e5e7eb',
+    marginVertical: 18,
   },
   sectionTitle: {
     fontSize: 16,
@@ -169,6 +182,9 @@ const styles = StyleSheet.create({
   kpiTrendUp: { color: '#15803d', fontSize: 10, fontFamily: 'Helvetica-Bold' },
   kpiTrendDown: { color: '#b91c1c', fontSize: 10, fontFamily: 'Helvetica-Bold' },
   kpiTrendFlat: { color: '#6b7280', fontSize: 10, fontFamily: 'Helvetica-Bold' },
+  kpiSpark: {
+    marginTop: 4,
+  },
   kpiNote: {
     fontSize: 9,
     color: '#555',
@@ -215,27 +231,23 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
   // PDF this way instead of just a Goal Summary + footer.
   const progressText =
     data.report.progressSummary?.trim() || data.email.opening?.trim() || '';
+
+  // Lists from the structured block render as bullets directly. When
+  // we fall back to email-view text (older reports), the markdown
+  // renderer parses bullets and prose mixed together, so we just hand
+  // the raw text in.
   const wins = (data.report.keyWins ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
-  const winsText = wins.length === 0
-    ? parseBullets(data.email.wins_and_progress)
-    : wins;
-  const winsParagraph =
-    wins.length === 0 && winsText.length === 0
-      ? data.email.wins_and_progress?.trim() || ''
-      : '';
+  const winsFallback =
+    wins.length === 0 ? (data.email.wins_and_progress?.trim() || '') : '';
 
   const challenges = (data.report.challenges ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
-  const challengesText =
+  const challengesFallback =
     challenges.length === 0
-      ? parseBullets(data.email.honest_feedback)
-      : challenges;
-  const challengesParagraph =
-    challenges.length === 0 && challengesText.length === 0
-      ? data.email.honest_feedback?.trim() || ''
+      ? (data.email.honest_feedback?.trim() || '')
       : '';
   const patternsText = data.report.patternObservations?.trim() || '';
 
@@ -244,14 +256,8 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
   const nextSteps = (data.report.suggestedNextSteps ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
-  const nextStepsText =
-    nextSteps.length === 0
-      ? parseBullets(data.email.commitments)
-      : nextSteps;
-  const nextStepsParagraph =
-    nextSteps.length === 0 && nextStepsText.length === 0
-      ? data.email.commitments?.trim() || ''
-      : '';
+  const nextStepsFallback =
+    nextSteps.length === 0 ? (data.email.commitments?.trim() || '') : '';
 
   const kpis = (data.cycle.kpis ?? []).filter(
     (k) => k.label.trim() && k.value.trim(),
@@ -262,11 +268,11 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
   // Progress section now renders if there's prose OR KPIs — a cycle
   // with only KPIs (no narrative yet) still gets its own section.
   const hasProgressSection = !!progressText || kpis.length > 0;
-  const hasWinsSection = winsText.length > 0 || !!winsParagraph;
+  const hasWinsSection = wins.length > 0 || !!winsFallback;
   const hasChallengesSection =
-    challengesText.length > 0 || !!challengesParagraph || !!patternsText;
+    challenges.length > 0 || !!challengesFallback || !!patternsText;
   const hasKeyInsightSection = !!keyInsight;
-  const hasNextStepsSection = nextStepsText.length > 0 || !!nextStepsParagraph;
+  const hasNextStepsSection = nextSteps.length > 0 || !!nextStepsFallback;
 
   return (
     <Document
@@ -278,24 +284,27 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         <Text style={styles.title}>
           Monthly Progress Summary — {data.ceo.name}
         </Text>
-        <Text style={styles.subtitle}>{subtitleParts.join(' | ')}</Text>
+        <Text style={styles.subtitle}>{subtitleParts.join(' · ')}</Text>
         <View style={styles.divider} />
 
         {hasGoalSection && (
           <>
             <Text style={styles.sectionTitle}>1. Goal Summary</Text>
             {data.ceo.tenXGoal?.trim() && (
-              <BulletItem
-                label="10x Goal:"
-                body={data.ceo.tenXGoal.trim()}
-              />
+              <View style={styles.bulletRow}>
+                <Text style={styles.bulletGlyph}>•</Text>
+                <View style={styles.bulletBody}>
+                  <Text>
+                    <Text style={styles.paragraphLabel}>10x Goal: </Text>
+                  </Text>
+                  <MarkdownPdf text={data.ceo.tenXGoal.trim()} />
+                </View>
+              </View>
             )}
             {data.cycle.monthlyGoals?.trim() && (
               <View style={styles.paragraph}>
-                <Text>
-                  <Text style={styles.paragraphLabel}>Monthly goals: </Text>
-                  {data.cycle.monthlyGoals.trim()}
-                </Text>
+                <Text style={styles.paragraphLabel}>Monthly goals</Text>
+                <MarkdownPdf text={data.cycle.monthlyGoals.trim()} />
               </View>
             )}
             <View style={styles.divider} />
@@ -316,11 +325,12 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
                     value={k.value}
                     trend={k.trend}
                     note={k.note}
+                    history={k.history}
                   />
                 ))}
               </View>
             )}
-            {progressText && <Paragraphs text={progressText} />}
+            {progressText && <MarkdownPdf text={progressText} />}
             <View style={styles.divider} />
           </>
         )}
@@ -330,10 +340,13 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             <Text style={styles.sectionTitle}>
               {sectionNumber(hasGoalSection, hasProgressSection)} Key Wins
             </Text>
-            {winsText.map((w, i) => (
-              <BulletItem key={i} body={w} />
-            ))}
-            {winsParagraph && <Paragraphs text={winsParagraph} />}
+            {wins.length > 0 ? (
+              wins.map((w, i) => (
+                <BulletItem key={i} body={w} />
+              ))
+            ) : (
+              <MarkdownPdf text={winsFallback} />
+            )}
             <View style={styles.divider} />
           </>
         )}
@@ -348,18 +361,17 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               )}{' '}
               Challenges & Patterns
             </Text>
-            {challengesText.map((c, i) => (
-              <BulletItem key={i} body={c} />
-            ))}
-            {challengesParagraph && <Paragraphs text={challengesParagraph} />}
+            {challenges.length > 0 ? (
+              challenges.map((c, i) => (
+                <BulletItem key={i} body={c} />
+              ))
+            ) : (
+              <MarkdownPdf text={challengesFallback} />
+            )}
             {patternsText && (
               <View style={styles.paragraph}>
-                <Text>
-                  <Text style={styles.paragraphLabel}>
-                    Pattern observations:{' '}
-                  </Text>
-                  {patternsText}
-                </Text>
+                <Text style={styles.paragraphLabel}>Pattern observations</Text>
+                <MarkdownPdf text={patternsText} />
               </View>
             )}
             <View style={styles.divider} />
@@ -377,7 +389,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               )}{' '}
               Key Insight
             </Text>
-            <Paragraphs text={keyInsight} />
+            <MarkdownPdf text={keyInsight} />
             <View style={styles.divider} />
           </>
         )}
@@ -394,10 +406,13 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               )}{' '}
               Recommended Next Steps
             </Text>
-            {nextStepsText.map((step, i) => (
-              <BulletItem key={i} glyph={`${i + 1}.`} body={step} />
-            ))}
-            {nextStepsParagraph && <Paragraphs text={nextStepsParagraph} />}
+            {nextSteps.length > 0 ? (
+              nextSteps.map((step, i) => (
+                <BulletItem key={i} glyph={`${i + 1}.`} body={step} />
+              ))
+            ) : (
+              <MarkdownPdf text={nextStepsFallback} />
+            )}
           </>
         )}
 
@@ -422,40 +437,18 @@ function sectionNumber(...precedingPresent: boolean[]): string {
   return `${idx}.`;
 }
 
-/**
- * Pull bullet-shaped lines out of email-style text. The model often
- * returns wins/feedback/commitments as plain text with `*`, `-`, `•`,
- * or `1.` prefixes, sometimes mixed with prose. We try to extract
- * just the bullet items; if there aren't any clear bullets, callers
- * fall back to rendering the whole thing as a paragraph.
- */
-function parseBullets(text: string | undefined): string[] {
-  if (!text) return [];
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const bullets: string[] = [];
-  for (const line of lines) {
-    const m = line.match(/^(?:[•\-*]|\d+[.)])\s+(.+)$/);
-    if (m) {
-      // Strip stray trailing markdown emphasis markers — they don't
-      // render as emphasis in our PDF and look like noise.
-      bullets.push(m[1].replace(/\*\*/g, '').trim());
-    }
-  }
-  // If the text is one prose blob with no markers, return [] so the
-  // caller renders it as a paragraph instead of a single fake bullet.
-  return bullets;
-}
-
 function KpiCell({
   label,
   value,
   trend,
   note,
+  history,
 }: {
   label: string;
   value: string;
   trend?: 'up' | 'down' | 'flat';
   note?: string;
+  history?: Array<{ label: string; value: number }>;
 }) {
   return (
     <View style={styles.kpiCell}>
@@ -464,8 +457,163 @@ function KpiCell({
         <Text style={styles.kpiValue}>{value}</Text>
         {trend && <Text style={TREND_STYLE[trend]}>{TREND_GLYPH[trend]}</Text>}
       </View>
+      {history && history.length >= 2 && (
+        <ProgressChart history={history} trend={trend} />
+      )}
       {note?.trim() && <Text style={styles.kpiNote}>{note.trim()}</Text>}
     </View>
+  );
+}
+
+/**
+ * Compact value formatter. "5,000,000" → "5M". Used for the y-axis
+ * labels and the dotted point labels so they fit beside each marker
+ * without overflowing the tile.
+ */
+function formatChartValue(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  if (Number.isInteger(n)) return n.toString();
+  return n.toFixed(1).replace(/\.0$/, '');
+}
+
+/**
+ * Per-KPI trend chart. Renders a small line chart with:
+ *   - polyline through the historical points (trend-coloured)
+ *   - a dot at every point (current cycle's dot is filled and slightly
+ *     larger so it reads as "where we ended up")
+ *   - the formatted value above each dot
+ *   - the cycle short label under each dot
+ *   - a faint top/bottom grid line + min/max y-axis labels
+ *
+ * Stays inside the existing 50%-width KPI tile. Hidden by the caller
+ * when there are fewer than 2 data points (a single value can't show
+ * a trend and the labels become misleading).
+ */
+function ProgressChart({
+  history,
+  trend,
+}: {
+  history: Array<{ label: string; value: number }>;
+  trend?: 'up' | 'down' | 'flat';
+}) {
+  const width = 168;
+  const chartH = 56;
+  const labelTopH = 12;
+  const labelBottomH = 12;
+  const padLeft = 26; // room for y-axis labels
+  const padRight = 8;
+  const height = labelTopH + chartH + labelBottomH;
+
+  const color =
+    trend === 'up'
+      ? '#15803d'
+      : trend === 'down'
+        ? '#b91c1c'
+        : trend === 'flat'
+          ? '#6b7280'
+          : '#2563eb';
+
+  const values = history.map((h) => h.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || Math.max(Math.abs(max), 1);
+  const innerW = width - padLeft - padRight;
+
+  const coords = history.map((h, i) => {
+    const x = history.length === 1
+      ? padLeft + innerW / 2
+      : padLeft + (i / (history.length - 1)) * innerW;
+    const y = labelTopH + chartH - ((h.value - min) / range) * chartH;
+    return { x, y, value: h.value, label: h.label };
+  });
+  const pointStr = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const lastIndex = coords.length - 1;
+
+  return (
+    <View style={styles.kpiSpark}>
+      <Svg width={width} height={height}>
+        {/* y-axis grid lines (top + bottom of the plot) */}
+        <Line x1={padLeft} y1={labelTopH} x2={width - padRight} y2={labelTopH} stroke="#e5e7eb" strokeWidth={0.5} />
+        <Line x1={padLeft} y1={labelTopH + chartH} x2={width - padRight} y2={labelTopH + chartH} stroke="#e5e7eb" strokeWidth={0.5} />
+
+        {/* y-axis min/max labels */}
+        <SvgText x={padLeft - 3} y={labelTopH + 4} textAnchor="end">{formatChartValue(max)}</SvgText>
+        <SvgText x={padLeft - 3} y={labelTopH + chartH} textAnchor="end">{formatChartValue(min)}</SvgText>
+
+        {/* line + points */}
+        <Polyline points={pointStr} stroke={color} strokeWidth={1.4} fill="none" />
+        {coords.map((c, i) => {
+          const isLast = i === lastIndex;
+          return (
+            <Circle
+              key={i}
+              cx={c.x}
+              cy={c.y}
+              r={isLast ? 2.5 : 1.8}
+              fill={isLast ? color : '#ffffff'}
+              stroke={color}
+              strokeWidth={isLast ? 0 : 1}
+            />
+          );
+        })}
+
+        {/* x-axis cycle labels — one under each point */}
+        {coords.map((c, i) => (
+          <SvgText
+            key={`x-${i}`}
+            x={c.x}
+            y={labelTopH + chartH + 9}
+            textAnchor="middle"
+          >
+            {c.label}
+          </SvgText>
+        ))}
+
+        {/* current point's value, called out above the marker */}
+        <SvgText
+          x={coords[lastIndex].x}
+          y={Math.max(8, coords[lastIndex].y - 4)}
+          textAnchor="middle"
+          color={color}
+        >
+          {formatChartValue(coords[lastIndex].value)}
+        </SvgText>
+      </Svg>
+    </View>
+  );
+}
+
+/**
+ * Wrapper around `<Text>` that lays text inside an `<Svg>`. We can't
+ * import `Text` from `@react-pdf/renderer` here because we already
+ * import the layout `<Text>` for prose; SVG text uses the same name in
+ * the @react-pdf SVG primitives, so we keep it scoped via an alias.
+ */
+function SvgText({
+  x,
+  y,
+  textAnchor,
+  color,
+  children,
+}: {
+  x: number;
+  y: number;
+  textAnchor?: 'start' | 'middle' | 'end';
+  color?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <PdfSvgText
+      x={x}
+      y={y}
+      textAnchor={textAnchor ?? 'middle'}
+      style={{ fontSize: 7, fill: color ?? '#6b7280', fontFamily: 'Helvetica' }}
+    >
+      {children}
+    </PdfSvgText>
   );
 }
 
@@ -482,31 +630,10 @@ function BulletItem({
     <View style={styles.bulletRow}>
       <Text style={styles.bulletGlyph}>{glyph}</Text>
       <View style={styles.bulletBody}>
-        <Text>
-          {label && <Text style={styles.paragraphLabel}>{label} </Text>}
-          {body}
-        </Text>
+        {label && <Text style={styles.paragraphLabel}>{label} </Text>}
+        <MarkdownPdf text={body} />
       </View>
     </View>
-  );
-}
-
-/**
- * Render text that may contain blank-line paragraph breaks. The model
- * tends to split progressSummary into a couple of paragraphs, so we
- * preserve that by rendering each one as its own <Text>.
- */
-function Paragraphs({ text }: { text: string }) {
-  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (paras.length === 0) return null;
-  return (
-    <>
-      {paras.map((p, i) => (
-        <View key={i} style={styles.paragraph}>
-          <Text>{p}</Text>
-        </View>
-      ))}
-    </>
   );
 }
 

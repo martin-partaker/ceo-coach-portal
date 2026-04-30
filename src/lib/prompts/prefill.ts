@@ -2,17 +2,21 @@ import 'server-only';
 import { db } from '@/db';
 import { cycles, reports } from '@/db/schema';
 import { eq, desc } from 'drizzle-orm';
-import type { Cycle, Ceo } from '@/db/schema';
+import type { Cycle, Ceo, JournalEntry } from '@/db/schema';
 
 export async function buildPrefillPrompt({
   cycle,
   ceo,
   transcriptText,
+  journals,
   additionalContext,
 }: {
   cycle: Cycle;
   ceo: Ceo;
   transcriptText: string;
+  /** Weekly journal entries within this cycle, ordered as the caller wants
+   *  them rendered (typically ascending by week / date). */
+  journals?: JournalEntry[];
   additionalContext?: string;
 }) {
   // Get previous cycle's context
@@ -71,6 +75,19 @@ Return a JSON object with exactly these keys:
 
 Return ONLY the JSON object, no markdown fences, no extra text.`;
 
+  const journalText =
+    journals && journals.length > 0
+      ? journals
+          .map((j) => {
+            const header =
+              j.title?.trim() ||
+              `Week ${j.weekNumber}`;
+            const body = j.content?.trim() || '(empty)';
+            return `### ${header}\n${body}`;
+          })
+          .join('\n\n')
+      : '';
+
   const userPrompt = `## CEO Profile
 - Name: ${ceo.name}
 - 10x Goal: ${ceo.tenXGoal?.trim() || '(not set)'}
@@ -83,11 +100,16 @@ ${previousEmail}
 ` : ''}
 ## Current Session Transcript
 ${transcriptText || '(no transcript available)'}
-${additionalContext?.trim() ? `
+${journalText ? `
+## Weekly Journals (this cycle)
+${journalText}
+` : ''}${additionalContext?.trim() ? `
 ## Additional Context (notes, emails, etc.)
 ${additionalContext}
 ` : ''}
-Extract the monthly goals and reflection from this session now.`;
+Extract the monthly goals and reflection from this session now. Pull from
+the transcript AND the weekly journals — journals often contain the CEO's
+own framing of progress and commitments that the transcript doesn't surface.`;
 
   return { systemPrompt, userPrompt };
 }

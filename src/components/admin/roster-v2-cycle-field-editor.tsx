@@ -15,6 +15,10 @@ interface Props {
   initialValue: string | null;
   ai?: boolean;
   rows?: number;
+  /** Placeholder shown when the field is empty. Defaults to a generic
+   *  hint; callers pass field-specific copy that nudges the operator
+   *  to either type or hit Re-generate. */
+  placeholder?: string;
 }
 
 const SAVE_DEBOUNCE_MS = 800;
@@ -34,6 +38,7 @@ export function CycleFieldEditor({
   initialValue,
   ai,
   rows = 6,
+  placeholder,
 }: Props) {
   const utils = trpc.useUtils();
   const [value, setValue] = useState(initialValue ?? '');
@@ -108,6 +113,7 @@ export function CycleFieldEditor({
         onChange={(e) => setValue(e.target.value)}
         rows={rows}
         disabled={busy}
+        placeholder={placeholder}
         className={cn(
           'whitespace-pre-wrap text-[12px] leading-relaxed',
           ai &&

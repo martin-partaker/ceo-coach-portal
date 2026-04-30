@@ -19,7 +19,9 @@ import {
   Pencil,
   ShieldCheck,
   Trash2,
+  ChevronRight,
 } from 'lucide-react';
+import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import { cn } from '@/lib/utils';
 import type { RosterCeoSummary } from '@/server/api/routers/roster';
 import { CreateCoachDialog } from './create-coach-dialog';
@@ -75,6 +77,20 @@ export function RosterV2Page({
   // Coaches don't get manager mode — pin to roster regardless of state.
   const effectiveMode: Mode = isAdmin ? mode : 'roster';
   const [openCeoId, setOpenCeoId] = useState<string | null>(null);
+  // Per-coach collapse state for the admin Roster v2. Default is "all
+  // collapsed" so the page opens as a flat list of coaches and the
+  // operator drills in deliberately. While there's a search query
+  // every group force-expands so matches are visible.
+  const [expandedCoachIds, setExpandedCoachIds] = useState<Set<string>>(new Set());
+  const isSearching = query.trim().length > 0;
+  function toggleCoachExpanded(id: string) {
+    setExpandedCoachIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const summaries = useMemo<RosterCeoSummary[]>(() => data ?? [], [data]);
 
@@ -290,6 +306,8 @@ export function RosterV2Page({
               onToggle={(id) => setOpenCeoId(openCeoId === id ? null : id)}
               renderExpanded={renderExpanded}
               currentCoachId={currentCoachId}
+              expanded={isSearching || expandedCoachIds.has(coach.id)}
+              onToggleExpand={() => toggleCoachExpanded(coach.id)}
             />
           ))}
           {unassignedRows.length > 0 && (
@@ -299,6 +317,8 @@ export function RosterV2Page({
               openCeoId={openCeoId}
               onToggle={(id) => setOpenCeoId(openCeoId === id ? null : id)}
               renderExpanded={renderExpanded}
+              expanded={isSearching || expandedCoachIds.has('__unassigned__')}
+              onToggleExpand={() => toggleCoachExpanded('__unassigned__')}
             />
           )}
         </div>
@@ -366,6 +386,8 @@ function CoachGroup({
   onToggle,
   renderExpanded,
   currentCoachId,
+  expanded,
+  onToggleExpand,
 }: {
   coach: NonNullable<RosterCeoSummary['coach']>;
   rows: RosterCeoSummary[];
@@ -374,57 +396,179 @@ function CoachGroup({
   onToggle: (id: string) => void;
   renderExpanded?: React.ComponentProps<typeof RosterV2Row>['renderExpanded'];
   currentCoachId: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const isSelf = currentCoachId === coach.id;
+  // Compact summary across this coach's CEOs so the collapsed header
+  // still tells the operator something useful at a glance: how many
+  // CEOs they have and how many cycles need attention right now.
+  const phaseCounts = useMemo(() => {
+    let ready = 0;
+    let generated = 0;
+    let gathering = 0;
+    let sent = 0;
+    let idle = 0;
+    let noCycle = 0;
+    for (const r of rows) {
+      const last = r.cycles[r.cycles.length - 1];
+      if (!last) {
+        noCycle++;
+        continue;
+      }
+      if (last.phase === 'ready') ready++;
+      else if (last.phase === 'generated') generated++;
+      else if (last.phase === 'gathering') gathering++;
+      else if (last.phase === 'sent') sent++;
+      else idle++;
+    }
+    return { ready, generated, gathering, sent, idle, noCycle };
+  }, [rows]);
+
   return (
-    <div>
-      {/* Coach header */}
-      <div className="mb-1 flex items-center gap-2 px-1 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-        <span className="font-mono text-foreground/80">{coach.name}</span>
-        <span>·</span>
-        <span className="font-mono">
-          {rows.length} CEO{rows.length === 1 ? '' : 's'}
-        </span>
-        {coach.isSuperAdmin && (
-          <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-1.5 py-0.5 text-[9px] normal-case text-purple-700 dark:text-purple-400">
-            <ShieldCheck className="h-2.5 w-2.5" /> admin
+    <div className="overflow-hidden rounded-lg border border-border bg-background">
+      <CoachHeader
+        coach={coach}
+        ceoCount={rows.length}
+        phaseCounts={phaseCounts}
+        isSelf={isSelf}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      />
+      {expanded && (
+        <div className="border-t border-border">
+          {rows.length === 0 ? (
+            <div className="flex items-center gap-3 px-4 py-4 text-[12px] text-muted-foreground">
+              <span className="italic">No CEOs assigned to this coach yet.</span>
+              <span className="flex-1" />
+              <RosterAddCeoDialog
+                coaches={coachOptions}
+                defaultCoachId={coach.id}
+                triggerVariant="ghost"
+                triggerSize="sm"
+                triggerLabel="Add CEO"
+              />
+            </div>
+          ) : (
+            rows.map((r) => (
+              <RosterV2Row
+                key={r.ceo.id}
+                summary={r}
+                coaches={coachOptions}
+                expanded={openCeoId === r.ceo.id}
+                onToggle={() => onToggle(r.ceo.id)}
+                renderExpanded={renderExpanded}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Clickable coach-row header. Shows: chevron, avatar, name + email,
+ * compact stats, badges (admin / you), a labelled Edit button (clear
+ * affordance — the lone "⋯" was confusing operators), and a smaller
+ * dropdown for less-common actions.
+ */
+function CoachHeader({
+  coach,
+  ceoCount,
+  phaseCounts,
+  isSelf,
+  expanded,
+  onToggleExpand,
+}: {
+  coach: NonNullable<RosterCeoSummary['coach']>;
+  ceoCount: number;
+  phaseCounts: {
+    ready: number;
+    generated: number;
+    gathering: number;
+    sent: number;
+    idle: number;
+    noCycle: number;
+  };
+  isSelf: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const summaryParts: string[] = [];
+  if (phaseCounts.ready) summaryParts.push(`${phaseCounts.ready} ready`);
+  if (phaseCounts.generated) summaryParts.push(`${phaseCounts.generated} generated`);
+  if (phaseCounts.gathering) summaryParts.push(`${phaseCounts.gathering} gathering`);
+  if (phaseCounts.idle || phaseCounts.noCycle) {
+    const idle = phaseCounts.idle + phaseCounts.noCycle;
+    summaryParts.push(`${idle} idle`);
+  }
+  const summary = summaryParts.length > 0 ? summaryParts.join(' · ') : null;
+
+  return (
+    <div
+      onClick={onToggleExpand}
+      className={cn(
+        'grid cursor-pointer items-center gap-3 px-4 py-3.5 transition-colors',
+        // Coach headers get a distinct neutral tint so a coach row never
+        // looks like just another CEO row in the list. Uses oklch
+        // mixing to stay theme-aware in both light and dark modes.
+        expanded ? 'bg-muted/55' : 'bg-muted/30 hover:bg-muted/45'
+      )}
+      style={{
+        gridTemplateColumns: '20px auto 1fr auto',
+        borderLeft: '3px solid oklch(58% 0.14 258)',
+      }}
+    >
+      <span
+        className="grid place-items-center text-muted-foreground transition-transform"
+        style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0)' }}
+        aria-hidden
+      >
+        <ChevronRight className="h-4 w-4" />
+      </span>
+
+      <CeoAvatar name={coach.name} avatarUrl={null} size="md" />
+
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          {/* Explicit "Coach" badge — operators were reading the name
+              alone and not realising it was a section header. */}
+          <span
+            className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+            style={{
+              background: 'color-mix(in oklab, oklch(58% 0.14 258), transparent 86%)',
+              color: 'oklch(58% 0.14 258)',
+            }}
+          >
+            Coach
           </span>
-        )}
-        <span className="flex-1" />
-        {isSelf && (
-          <span className="ml-2 rounded-full border border-border px-1.5 py-0.5 text-[9px] normal-case text-muted-foreground/80">
-            you
+          <span className="truncate text-[15px] font-semibold leading-tight">
+            {coach.name}
           </span>
-        )}
-        <CoachActionsMenu coach={coach} ceoCount={rows.length} isSelf={isSelf} />
+          <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+            {coach.email}
+          </span>
+          {coach.isSuperAdmin && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-purple-700 dark:text-purple-400">
+              <ShieldCheck className="h-2.5 w-2.5" /> admin
+            </span>
+          )}
+          {isSelf && (
+            <span className="rounded-full border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground/80">
+              you
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 truncate text-[12px] text-muted-foreground">
+          {ceoCount === 0
+            ? 'No CEOs yet'
+            : `${ceoCount} CEO${ceoCount === 1 ? '' : 's'}${summary ? ` · ${summary}` : ''}`}
+        </div>
       </div>
 
-      {/* Rows */}
-      <div className="overflow-hidden rounded-lg border border-border bg-background">
-        {rows.length === 0 ? (
-          <div className="flex items-center gap-3 px-4 py-4 text-[12px] text-muted-foreground">
-            <span className="italic">No CEOs assigned to this coach yet.</span>
-            <span className="flex-1" />
-            <RosterAddCeoDialog
-              coaches={coachOptions}
-              defaultCoachId={coach.id}
-              triggerVariant="ghost"
-              triggerSize="sm"
-              triggerLabel="Add CEO"
-            />
-          </div>
-        ) : (
-          rows.map((r) => (
-            <RosterV2Row
-              key={r.ceo.id}
-              summary={r}
-              coaches={coachOptions}
-              expanded={openCeoId === r.ceo.id}
-              onToggle={() => onToggle(r.ceo.id)}
-              renderExpanded={renderExpanded}
-            />
-          ))
-        )}
+      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+        <CoachActionsMenu coach={coach} ceoCount={ceoCount} isSelf={isSelf} />
       </div>
     </div>
   );
@@ -443,38 +587,76 @@ function UnassignedGroup({
   openCeoId,
   onToggle,
   renderExpanded,
+  expanded,
+  onToggleExpand,
 }: {
   rows: RosterCeoSummary[];
   coachOptions: Array<{ id: string; name: string; email: string }>;
   openCeoId: string | null;
   onToggle: (id: string) => void;
   renderExpanded?: React.ComponentProps<typeof RosterV2Row>['renderExpanded'];
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   return (
-    <div>
-      <div className="mb-1 flex items-center gap-2 px-1 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-        <span className="font-mono text-foreground/80">Unassigned</span>
-        <span>·</span>
-        <span className="font-mono">
-          {rows.length} CEO{rows.length === 1 ? '' : 's'}
+    <div className="overflow-hidden rounded-lg border border-dashed border-border bg-background">
+      <div
+        onClick={onToggleExpand}
+        className={cn(
+          'grid cursor-pointer items-center gap-3 px-4 py-3.5 transition-colors',
+          expanded ? 'bg-amber-500/10' : 'bg-amber-500/5 hover:bg-amber-500/10'
+        )}
+        style={{
+          gridTemplateColumns: '20px auto 1fr auto',
+          borderLeft: '3px solid oklch(58% 0.13 64)',
+        }}
+      >
+        <span
+          className="grid place-items-center text-muted-foreground transition-transform"
+          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0)' }}
+          aria-hidden
+        >
+          <ChevronRight className="h-4 w-4" />
         </span>
-        <span className="ml-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] normal-case text-amber-700 dark:text-amber-400">
-          needs a coach
-        </span>
-        <span className="flex-1" />
+        <CeoAvatar name="??" avatarUrl={null} size="md" />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span
+              className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+              style={{
+                background: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 86%)',
+                color: 'oklch(58% 0.13 64)',
+              }}
+            >
+              Unassigned
+            </span>
+            <span className="text-[15px] font-semibold leading-tight">
+              No coach yet
+            </span>
+            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400">
+              needs a coach
+            </span>
+          </div>
+          <div className="mt-0.5 truncate text-[12px] text-muted-foreground">
+            {rows.length} CEO{rows.length === 1 ? '' : 's'} waiting to be assigned
+          </div>
+        </div>
+        <span />
       </div>
-      <div className="overflow-hidden rounded-lg border border-dashed border-border bg-background">
-        {rows.map((r) => (
-          <RosterV2Row
-            key={r.ceo.id}
-            summary={r}
-            coaches={coachOptions}
-            expanded={openCeoId === r.ceo.id}
-            onToggle={() => onToggle(r.ceo.id)}
-            renderExpanded={renderExpanded}
-          />
-        ))}
-      </div>
+      {expanded && (
+        <div className="border-t border-border">
+          {rows.map((r) => (
+            <RosterV2Row
+              key={r.ceo.id}
+              summary={r}
+              coaches={coachOptions}
+              expanded={openCeoId === r.ceo.id}
+              onToggle={() => onToggle(r.ceo.id)}
+              renderExpanded={renderExpanded}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -502,21 +684,29 @@ function CoachActionsMenu({
 
   return (
     <>
+      {/* Visible primary action — operators were missing the lone "⋯"
+          when scanning; an explicit "Edit" button clears that up. */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        onClick={() => setEditOpen(true)}
+      >
+        <Pencil className="mr-1.5 h-3 w-3" />
+        Edit
+      </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
             size="sm"
-            className="ml-1 h-6 w-6 p-0 opacity-60 hover:opacity-100"
-            aria-label={`Actions for ${coach.name}`}
+            className="h-7 w-7 p-0 opacity-60 hover:opacity-100"
+            aria-label={`More actions for ${coach.name}`}
           >
             <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuItem onClick={() => setEditOpen(true)}>
-            <Pencil className="mr-2 h-3.5 w-3.5" /> Edit coach
-          </DropdownMenuItem>
           <DropdownMenuItem
             disabled={isSelf || toggleAdmin.isPending}
             onClick={() => toggleAdmin.mutate({ coachId: coach.id })}

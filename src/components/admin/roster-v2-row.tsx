@@ -251,12 +251,22 @@ export function RosterV2Row({
   );
 }
 
-const READINESS_LABELS: Array<{ key: keyof RosterReadiness; label: string }> = [
+// Order mirrors the form: 10x banner → Inputs (transcript, weekly,
+// KPIs when expected) → Synthesis (goals, reflection) → Actions.
+const READINESS_LABELS: Array<{
+  key: keyof RosterReadiness;
+  label: string;
+  /** When true the slot is dropped from the summary entirely if the
+   *  cycle's readiness doesn't expect it (KPIs only kick in once a
+   *  prior cycle has logged some). */
+  conditional?: boolean;
+}> = [
   { key: 'tenx', label: '10x goal' },
+  { key: 'tx', label: 'transcript' },
+  { key: 'weekly', label: 'weekly journals' },
+  { key: 'kpi', label: 'KPIs', conditional: true },
   { key: 'goals', label: 'goals' },
   { key: 'reflect', label: 'reflection' },
-  { key: 'weekly', label: 'weekly journals' },
-  { key: 'tx', label: 'transcript' },
   { key: 'actions', label: 'actions reviewed' },
 ];
 
@@ -265,9 +275,17 @@ function readinessSummary(r: RosterReadiness): {
   total: number;
   missing: string[];
 } {
-  const done = READINESS_LABELS.filter((i) => r[i.key].done).length;
-  const missing = READINESS_LABELS.filter((i) => !r[i.key].done).map((i) => i.label);
-  return { done, total: READINESS_LABELS.length, missing };
+  const items = READINESS_LABELS.filter((i) => {
+    // Conditional slots (KPIs) only count when the readiness object
+    // marks them `expected`. Otherwise they're invisible — no fraction
+    // contribution, no "missing" entry, no row in the readiness card.
+    if (!i.conditional) return true;
+    const slot = r[i.key];
+    return 'expected' in slot && slot.expected;
+  });
+  const done = items.filter((i) => r[i.key].done).length;
+  const missing = items.filter((i) => !r[i.key].done).map((i) => i.label);
+  return { done, total: items.length, missing };
 }
 
 const PHASE_PALETTE: Record<

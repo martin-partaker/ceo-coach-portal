@@ -511,4 +511,132 @@ export const reportsRouter = createTRPCRouter({
         .returning();
       return updated;
     }),
+
+  /**
+   * Re-run the AI for a single section of an existing report. The coach
+   * keeps everything else they've curated and only swaps in a fresh take
+   * on the targeted field. Optional `feedback` lets them say what was
+   * wrong with the current version.
+   *
+   * The model is asked to return the same full JSON shape; we then pluck
+   * out only the requested field and merge it into the persisted report
+   * (re-deriving rawText so the email view stays coherent).
+   */
+  regenerateSection: protectedProcedure
+    .input(
+      z.object({
+        reportId: z.string().uuid(),
+        field: z.enum([
+          'progressSummary',
+          'keyWins',
+          'challenges',
+          'patternObservations',
+          'suggestedNextSteps',
+        ]),
+        feedback: z.string().trim().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const { cycle, ceo } = await loadCycleAndCeo(ctx, report.cycleId);
+      const previousReports = await loadPreviousReports(ctx, ceo.id, cycle.id);
+
+      const [assignedCoach] = ceo.coachId
+        ? await ctx.db
+            .select()
+            .from(coaches)
+            .where(eq(coaches.id, ceo.coachId))
+            .limit(1)
+        : [];
+
+      const { systemPrompt, userPrompt } = await buildPrompt({
+        cycle,
+        ceo,
+        coachName: assignedCoach?.name ?? ctx.coach.name,
+        previousReports,
+      });
+
+      // Hand the model the existing report so it has the surrounding
+      // context (other sections it shouldn't touch, the coach's prior
+      // edits) and ask for a targeted refresh of just the named field.
+      const focusInstruction =
+        `The coach wants a fresh take on ONLY the "${input.field}" section. ` +
+        `Keep the same JSON shape as before, but return your best new content for ` +
+        `that field — the others can be empty placeholders, we'll discard them. ` +
+        (input.feedback
+          ? `\n\nFeedback from the coach:\n${input.feedback}\n\n`
+          : '\n\n') +
+        `Treat the prior contentJson below as the current state. Return the same ` +
+        `JSON format.`;
+
+      const messages: { role: 'user' | 'assistant'; content: string }[] = [
+        { role: 'user', content: userPrompt },
+        {
+          role: 'assistant',
+          content: JSON.stringify(report.contentJson ?? {}),
+        },
+        { role: 'user', content: focusInstruction },
+      ];
+
+      const modelId = 'claude-sonnet-4-20250514';
+      const message = await anthropic.messages.create({
+        model: modelId,
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages,
+      });
+
+      const textBlock = message.content.find((b) => b.type === 'text');
+      if (!textBlock || textBlock.type !== 'text') {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'No text response from AI',
+        });
+      }
+
+      let parsed: GeneratedContent;
+      try {
+        parsed = JSON.parse(textBlock.text);
+      } catch {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to parse AI response as JSON.',
+        });
+      }
+
+      const refreshed = parsed.report?.[input.field];
+      if (refreshed === undefined || refreshed === null) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `AI didn't return content for "${input.field}".`,
+        });
+      }
+
+      // Merge: keep everything except the targeted field, swap that one.
+      const current = (report.contentJson ?? {}) as GeneratedContent;
+      const next: GeneratedContent = {
+        ...current,
+        report: {
+          ...(current.report ?? {}),
+          [input.field]: refreshed,
+        },
+      };
+
+      const rawText = contentJsonToRawText(next);
+      const [updated] = await ctx.db
+        .update(reports)
+        .set({
+          contentJson: next as unknown as Record<string, unknown>,
+          rawText,
+        })
+        .where(eq(reports.id, report.id))
+        .returning();
+      return updated;
+    }),
 });

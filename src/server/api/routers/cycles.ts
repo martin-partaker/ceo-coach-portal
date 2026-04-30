@@ -347,16 +347,25 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      // Get transcripts for this cycle
-      const cycleTranscripts = await ctx.db
-        .select()
-        .from(transcripts)
-        .where(eq(transcripts.cycleId, input.cycleId));
+      // Pull both transcripts and weekly journals — both are valid prefill
+      // sources. We accept either alone; the CEO often journals what they
+      // didn't say out loud in the call.
+      const [cycleTranscripts, cycleJournals] = await Promise.all([
+        ctx.db.select().from(transcripts).where(eq(transcripts.cycleId, input.cycleId)),
+        ctx.db
+          .select()
+          .from(journalEntries)
+          .where(eq(journalEntries.cycleId, input.cycleId))
+          .orderBy(asc(journalEntries.weekNumber)),
+      ]);
 
-      if (cycleTranscripts.length === 0 && !cycle.transcriptSkipped) {
+      const hasTranscript = cycleTranscripts.length > 0;
+      const hasJournals = cycleJournals.some((j) => (j.content ?? '').trim().length > 0);
+
+      if (!hasTranscript && !hasJournals && !cycle.transcriptSkipped) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
-          message: 'Import a transcript first before pre-filling.',
+          message: 'Add a transcript or weekly journal before pre-filling.',
         });
       }
 
@@ -366,6 +375,7 @@ export const cyclesRouter = createTRPCRouter({
         cycle,
         ceo,
         transcriptText,
+        journals: cycleJournals,
         additionalContext: cycle.additionalContext ?? undefined,
       });
 

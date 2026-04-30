@@ -684,6 +684,38 @@ export const rosterRouter = createTRPCRouter({
         (r) => r.matchConfidence != null && r.matchConfidence < 100
       );
 
+      // Most recent prior cycle's KPIs — drives the editor's
+      // "Continue from last cycle" button + per-row "↳ was X last
+      // month" hint. "Prior" = strictly non-overlapping (periodEnd <
+      // this cycle's periodStart) when both have dates; otherwise
+      // falls back to createdAt ordering, mirroring the rule we use
+      // for previous reports.
+      const allCeoCycles = await ctx.db
+        .select({
+          id: cycles.id,
+          periodEnd: cycles.periodEnd,
+          createdAt: cycles.createdAt,
+          kpis: cycles.kpis,
+          label: cycles.label,
+        })
+        .from(cycles)
+        .where(eq(cycles.ceoId, ceo.id));
+      const priorCycleSorted = allCeoCycles
+        .filter((c) => {
+          if (c.id === cycle.id) return false;
+          if (cycle.periodStart && c.periodEnd) {
+            return c.periodEnd < cycle.periodStart;
+          }
+          return c.createdAt.getTime() < cycle.createdAt.getTime();
+        })
+        .sort((a, b) => {
+          const ak = a.periodEnd ?? a.createdAt.toISOString();
+          const bk = b.periodEnd ?? b.createdAt.toISOString();
+          return ak < bk ? 1 : -1;
+        });
+      const priorCycle = priorCycleSorted[0] ?? null;
+      const priorKpis = priorCycle?.kpis ?? [];
+
       return {
         cycle,
         ceo,
@@ -695,6 +727,8 @@ export const rosterRouter = createTRPCRouter({
         rawInputs: cycleRawInputs,
         unconfirmedCount: unconfirmed.length,
         report: latestReport[0] ?? null,
+        priorKpis,
+        priorCycleLabel: priorCycle?.label ?? null,
       };
     }),
 

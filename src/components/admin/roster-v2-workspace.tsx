@@ -467,7 +467,7 @@ function CycleBody({
                   <PrefillButton
                     cycleId={cycle.id}
                     field="monthlyGoals"
-                    label="AI prefill from transcript"
+                    label="AI prefill from journals + transcript"
                   />
                 }
               />
@@ -530,6 +530,8 @@ function CycleBody({
             <CycleKpiEditor
               cycleId={cycle.id}
               initialKpis={data.cycle.kpis ?? []}
+              priorKpis={data.priorKpis ?? []}
+              priorCycleLabel={data.priorCycleLabel ?? null}
             />
           ) : (
             <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>

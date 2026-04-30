@@ -12,7 +12,7 @@ import {
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import { cn } from '@/lib/utils';
 import type { RosterCeoSummary, RosterCycle, RosterReadiness } from '@/server/api/routers/roster';
-import { InlineTimeline } from './roster-v2-timeline';
+import { deriveCycleLabel } from './roster-v2-shared';
 import { RosterReassignCeoDialog } from './roster-reassign-ceo-dialog';
 import { RosterDeleteCeoDialog } from './roster-delete-ceo-dialog';
 import { CeoProfileDrawer } from './ceo-profile-drawer';
@@ -112,7 +112,7 @@ export function RosterV2Row({
           'grid cursor-pointer items-center gap-4 px-4 py-3 transition-colors',
           expanded ? 'bg-muted/30' : 'hover:bg-muted/20'
         )}
-        style={{ gridTemplateColumns: '20px 220px 1fr 130px 140px 36px' }}
+        style={{ gridTemplateColumns: '20px 260px 1fr 140px 36px' }}
       >
         <span
           className="grid place-items-center text-muted-foreground transition-transform"
@@ -132,17 +132,9 @@ export function RosterV2Row({
           </div>
         </div>
 
-        {/* Inline timeline */}
+        {/* Status — phase + cycle + readiness summary, single line */}
         <div className="min-w-0">
-          <InlineTimeline
-            cycles={cycles}
-            highlightCycleId={expanded ? activeCycleId : null}
-          />
-        </div>
-
-        {/* Readiness fraction */}
-        <div className="flex justify-end">
-          <FractionPill cycle={cur} />
+          <StatusLine cycle={cur} />
         </div>
 
         {/* Next action */}
@@ -259,46 +251,117 @@ export function RosterV2Row({
   );
 }
 
-function readinessFraction(r: RosterReadiness): { done: number; total: number } {
-  const items = [r.tenx, r.goals, r.reflect, r.weekly, r.tx, r.actions];
-  return {
-    done: items.filter((i) => i.done).length,
-    total: items.length,
-  };
+const READINESS_LABELS: Array<{ key: keyof RosterReadiness; label: string }> = [
+  { key: 'tenx', label: '10x goal' },
+  { key: 'goals', label: 'goals' },
+  { key: 'reflect', label: 'reflection' },
+  { key: 'weekly', label: 'weekly journals' },
+  { key: 'tx', label: 'transcript' },
+  { key: 'actions', label: 'actions reviewed' },
+];
+
+function readinessSummary(r: RosterReadiness): {
+  done: number;
+  total: number;
+  missing: string[];
+} {
+  const done = READINESS_LABELS.filter((i) => r[i.key].done).length;
+  const missing = READINESS_LABELS.filter((i) => !r[i.key].done).map((i) => i.label);
+  return { done, total: READINESS_LABELS.length, missing };
 }
 
-function FractionPill({ cycle }: { cycle: RosterCycle | null }) {
+const PHASE_PALETTE: Record<
+  RosterCycle['phase'],
+  { dot: string; label: string; tone: 'green' | 'amber' | 'blue' | 'neutral' }
+> = {
+  ready: { dot: 'oklch(55% 0.12 152)', label: 'Ready', tone: 'green' },
+  generated: { dot: 'oklch(58% 0.14 258)', label: 'Generated', tone: 'blue' },
+  gathering: { dot: 'oklch(58% 0.13 64)', label: 'Gathering', tone: 'amber' },
+  sent: { dot: 'oklch(55% 0.12 152)', label: 'Sent', tone: 'neutral' },
+  idle: { dot: 'var(--muted-foreground)', label: 'Idle', tone: 'neutral' },
+};
+
+const TONE_FG: Record<'green' | 'amber' | 'blue' | 'neutral', string> = {
+  green: 'oklch(55% 0.12 152)',
+  amber: 'oklch(58% 0.13 64)',
+  blue: 'oklch(58% 0.14 258)',
+  neutral: 'var(--muted-foreground)',
+};
+
+/**
+ * Single-line status summary for a CEO row. Phase is the headline, then
+ * one supporting fact tailored to the phase: missing-inputs hint when
+ * gathering, "ready to send" when ready, "needs review" when generated,
+ * a relative-age hint when sent. Replaces the old colored-dot timeline
+ * + 7-color legend, which were noise the operator had to decode.
+ */
+function StatusLine({ cycle }: { cycle: RosterCycle | null }) {
   if (!cycle) {
-    return <span className="text-[11px] text-muted-foreground">— no cycle —</span>;
+    return <span className="text-[12px] italic text-muted-foreground">No cycle yet</span>;
   }
-  const { done, total } = readinessFraction(cycle.readiness);
-  const tone = done === total ? 'green' : done === 0 ? 'neutral' : 'amber';
-  const palette: Record<string, { bg: string; fg: string; bd: string }> = {
-    green: {
-      bg: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 88%)',
-      fg: 'oklch(55% 0.12 152)',
-      bd: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 60%)',
-    },
-    amber: {
-      bg: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 90%)',
-      fg: 'oklch(58% 0.13 64)',
-      bd: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 60%)',
-    },
-    neutral: { bg: 'var(--muted)', fg: 'var(--muted-foreground)', bd: 'var(--border)' },
-  };
-  const t = palette[tone];
+  const palette = PHASE_PALETTE[cycle.phase];
+  const cycleLabel = deriveCycleLabel(cycle);
+  const { done, total, missing } = readinessSummary(cycle.readiness);
+
+  let detail: React.ReactNode;
+  if (cycle.phase === 'ready') {
+    detail = (
+      <>
+        all {total} inputs ready · {cycleLabel}
+      </>
+    );
+  } else if (cycle.phase === 'gathering') {
+    const top = missing.slice(0, 2).join(', ');
+    const more = missing.length > 2 ? ` +${missing.length - 2}` : '';
+    detail = (
+      <>
+        {done}/{total} inputs · {cycleLabel} · still need {top}
+        {more}
+      </>
+    );
+  } else if (cycle.phase === 'generated') {
+    const ageDays = cycle.generatedAt
+      ? Math.max(0, Math.floor((Date.now() - new Date(cycle.generatedAt).getTime()) / 86_400_000))
+      : null;
+    detail = (
+      <>
+        Email drafted{ageDays !== null && ` ${ageDays}d ago`} · awaiting your review · {cycleLabel}
+      </>
+    );
+  } else if (cycle.phase === 'sent') {
+    const ageDays = cycle.generatedAt
+      ? Math.max(0, Math.floor((Date.now() - new Date(cycle.generatedAt).getTime()) / 86_400_000))
+      : null;
+    detail = (
+      <>
+        Cycle closed{ageDays !== null && ` · sent ${ageDays}d ago`} · {cycleLabel}
+      </>
+    );
+  } else {
+    detail = (
+      <>
+        No activity yet · {cycleLabel}
+      </>
+    );
+  }
+
   return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[11px]"
-      style={{ background: t.bg, color: t.fg, border: `1px solid ${t.bd}` }}
-    >
-      <span style={{ fontWeight: 500 }}>
-        {done}/{total}
+    <div className="flex min-w-0 items-center gap-2 text-[12.5px]">
+      <span
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+        style={{
+          background: `color-mix(in oklab, ${TONE_FG[palette.tone]}, transparent 88%)`,
+          color: TONE_FG[palette.tone],
+        }}
+      >
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full"
+          style={{ background: palette.dot }}
+        />
+        {palette.label}
       </span>
-      <span style={{ opacity: 0.7 }}>inputs</span>
-      <span style={{ opacity: 0.5 }}>·</span>
-      <span style={{ opacity: 0.7 }}>{cycle.label.split(' ')[0]}</span>
-    </span>
+      <span className="truncate text-[12px] text-muted-foreground">{detail}</span>
+    </div>
   );
 }
 
@@ -311,19 +374,11 @@ function NextAction({
   onReview: () => void;
   onOpenInline: () => void;
 }) {
-  if (!cycle) {
-    return null;
-  }
-  if (cycle.phase === 'sent') {
-    return <span className="font-mono text-[11px] text-muted-foreground">cycle closed</span>;
-  }
-  if (cycle.phase === 'idle') {
-    return (
-      <Button size="sm" variant="ghost" className="h-7 px-2 text-xs">
-        Nudge
-      </Button>
-    );
-  }
+  if (!cycle) return null;
+
+  // Two states get a primary blue CTA — those are the actions the
+  // operator should reach for first when scanning the page. Everything
+  // else gets a low-key ghost button so the eye prioritises the work.
   if (cycle.phase === 'generated') {
     return (
       <Button
@@ -348,7 +403,18 @@ function NextAction({
       </Button>
     );
   }
-  // gathering — passive state, no urgent CTA. The chevron on the left
-  // already expands the row inline, so we don't render a redundant button.
-  return null;
+  if (cycle.phase === 'sent') {
+    return (
+      <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onOpenInline}>
+        View
+      </Button>
+    );
+  }
+  // gathering / idle — open the workspace so the operator can fill in
+  // what's missing.
+  return (
+    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onOpenInline}>
+      Open
+    </Button>
+  );
 }

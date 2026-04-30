@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Loader2, Check, ListChecks, RotateCcw, Trash2, Undo2, Archive, Pencil, AlertCircle } from 'lucide-react';
+import { Loader2, Check, ListChecks, RotateCcw, Trash2, Undo2, Archive, Pencil, AlertCircle, GraduationCap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TriageCard, type TriageCardData } from './triage-card';
 import { MatchToExistingButton } from './match-to-existing-button';
@@ -29,10 +29,17 @@ interface SessionStats {
   overridden: number;
   discarded: number;
   archived: number;
+  internal: number;
   skipped: number;
 }
 
-type Action = 'confirmed' | 'overridden' | 'discarded' | 'archived' | 'skipped';
+type Action =
+  | 'confirmed'
+  | 'overridden'
+  | 'discarded'
+  | 'archived'
+  | 'internal'
+  | 'skipped';
 
 interface ManualPick {
   ceoId: string;
@@ -67,6 +74,7 @@ export function TriageWalkthrough() {
     overridden: 0,
     discarded: 0,
     archived: 0,
+    internal: 0,
     skipped: 0,
   });
   const [totalAtStart, setTotalAtStart] = useState<number | null>(null);
@@ -126,6 +134,7 @@ export function TriageWalkthrough() {
   const assignCycleMutation = trpc.inbox.assignCycle.useMutation();
   const discardMutation = trpc.inbox.discard.useMutation();
   const archiveMutation = trpc.inbox.archive.useMutation();
+  const internalMutation = trpc.inbox.markInternal.useMutation();
   const restoreMutation = trpc.inbox.restore.useMutation();
 
   // Auto-clear toast after 4s
@@ -283,6 +292,25 @@ export function TriageWalkthrough() {
     }
   }, [inHistoryView, currentCardData, markActed, recordAction, archiveMutation, utils]);
 
+  const onMarkInternal = useCallback(async () => {
+    if (inHistoryView || !currentCardData) return;
+    const id = currentCardData.rawInputId;
+    setStats((s) => ({ ...s, internal: s.internal + 1 }));
+    markActed(id);
+    recordAction({
+      rawInputId: id,
+      action: 'internal',
+      prevState: snapshotPrev(currentCardData),
+    });
+    try {
+      await internalMutation.mutateAsync({ rawInputId: id });
+      utils.inbox.pendingCounts.invalidate();
+      utils.inbox.triageQueue.invalidate();
+    } catch (err) {
+      console.error('mark internal failed', err);
+    }
+  }, [inHistoryView, currentCardData, markActed, recordAction, internalMutation, utils]);
+
   const onDiscard = useCallback(async () => {
     if (inHistoryView || !currentCardData) return;
     setDiscardOpen(false);
@@ -346,6 +374,8 @@ export function TriageWalkthrough() {
       confirmed: s.confirmed - (action === 'confirmed' ? 1 : 0),
       overridden: s.overridden - (action === 'overridden' ? 1 : 0),
       discarded: s.discarded - (action === 'discarded' ? 1 : 0),
+      archived: s.archived - (action === 'archived' ? 1 : 0),
+      internal: s.internal - (action === 'internal' ? 1 : 0),
       skipped: s.skipped - (action === 'skipped' ? 1 : 0),
     }));
     setHistory((h) => h.filter((e) => e.rawInputId !== rawInputId));
@@ -376,16 +406,13 @@ export function TriageWalkthrough() {
     }
   }, [historyEntry, restoreMutation, utils]);
 
-  // Confidence tier on the live current — purely advisory for AI suggestions.
-  // A manual pick is always confirmable regardless of AI confidence.
-  const liveTopConfidence = currentLive?.topSuggestion?.confidence ?? 0;
-  const confidenceTier: 'high' | 'medium' | 'low' =
-    liveTopConfidence >= 95 ? 'high' : liveTopConfidence >= 70 ? 'medium' : 'low';
+  // Confirm is enabled whenever we have something to confirm — either
+  // an AI match or an operator-picked CEO. The old confidence-tier
+  // gating is gone now that the suggester returns prose reasons rather
+  // than numeric scores; if the AI is unsure the operator just hits
+  // "Match" / "Pick another" instead of fighting a disabled button.
   const confirmDisabled =
-    inHistoryView ||
-    (manualPick
-      ? false // operator-picked → always confirmable
-      : !currentLive?.topSuggestion || confidenceTier === 'low');
+    inHistoryView || (!manualPick && !currentLive?.topSuggestion);
 
   // Keyboard
   useEffect(() => {
@@ -402,6 +429,9 @@ export function TriageWalkthrough() {
       } else if (e.key.toLowerCase() === 'a') {
         e.preventDefault();
         if (!inHistoryView) onArchive();
+      } else if (e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        if (!inHistoryView) onMarkInternal();
       } else if (e.key.toLowerCase() === 's') {
         e.preventDefault();
         onSkip();
@@ -418,7 +448,7 @@ export function TriageWalkthrough() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [currentCardData, confirmDisabled, inHistoryView, onConfirm, onSkip, onBack, onUndo, onArchive]);
+  }, [currentCardData, confirmDisabled, inHistoryView, onConfirm, onSkip, onBack, onUndo, onArchive, onMarkInternal]);
 
   // ── Render ──
   if (isLoading) {
@@ -449,6 +479,7 @@ export function TriageWalkthrough() {
             Reviewed {total} ·{' '}
             <span className="text-foreground">{stats.confirmed}</span> confirmed ·{' '}
             <span className="text-foreground">{stats.overridden}</span> overridden ·{' '}
+            <span className="text-foreground">{stats.internal}</span> internal ·{' '}
             <span className="text-foreground">{stats.archived}</span> archived ·{' '}
             <span className="text-foreground">{stats.discarded}</span> discarded ·{' '}
             <span className="text-foreground">{stats.skipped}</span> skipped
@@ -460,7 +491,7 @@ export function TriageWalkthrough() {
               onClick={() => {
                 setActedIds(new Set());
                 setSkippedIds(new Set());
-                setStats({ confirmed: 0, overridden: 0, discarded: 0, archived: 0, skipped: 0 });
+                setStats({ confirmed: 0, overridden: 0, discarded: 0, archived: 0, internal: 0, skipped: 0 });
                 setHistory([]);
                 setHistoryOffset(0);
                 setTotalAtStart(null);
@@ -510,8 +541,11 @@ export function TriageWalkthrough() {
           <div>
             <span className="font-medium">Reviewing previous · </span>
             <span className="text-muted-foreground">
-              You {historyEntry.action} this submission ·{' '}
-              {historyOffset} step{historyOffset === 1 ? '' : 's'} back
+              You{' '}
+              {historyEntry.action === 'internal'
+                ? 'marked this internal'
+                : `${historyEntry.action} this submission`}{' '}
+              · {historyOffset} step{historyOffset === 1 ? '' : 's'} back
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -565,10 +599,6 @@ export function TriageWalkthrough() {
               assignCycleMutation.isPending ||
               (currentLive?.matchStatus === 'pending_cycle' && !currentLive.cycleSuggestion)
             }
-            className={cn(
-              confidenceTier === 'high' && 'bg-emerald-600 hover:bg-emerald-700',
-              confidenceTier === 'medium' && 'bg-foreground'
-            )}
           >
             {manualPick
               ? `Confirm → ${manualPick.ceoName}`
@@ -598,6 +628,20 @@ export function TriageWalkthrough() {
               hideTrigger
               onPick={onPickFromDialog}
             />
+          )}
+          {!inHistoryView && currentLive && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onMarkInternal}
+              disabled={internalMutation.isPending}
+              aria-label="Mark as internal coach meeting"
+              className="border-purple-500/30 bg-purple-500/5 text-purple-700 hover:bg-purple-500/10 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
+            >
+              <GraduationCap className="mr-1 h-4 w-4" />
+              Internal
+              <Kbd>I</Kbd>
+            </Button>
           )}
           <Button
             size="sm"
@@ -633,16 +677,6 @@ export function TriageWalkthrough() {
           </Button>
         </div>
       </div>
-
-      {confidenceTier === 'low' &&
-        currentLive?.topSuggestion &&
-        !inHistoryView &&
-        !manualPick && (
-          <p className="text-center text-xs text-muted-foreground">
-            Low-confidence match — Enter is disabled. Use{' '}
-            <Kbd>Tab</Kbd> to pick a CEO yourself.
-          </p>
-        )}
 
       {/* Toast / inline message */}
       {toast && (

@@ -88,83 +88,76 @@ export function ActionItemsEditableList({ cycleId, items, reviewedCount }: Props
   const create = trpc.actionItems.create.useMutation({ onSuccess: invalidateAll });
 
   return (
-    <div className="rounded-lg border border-border bg-background p-3">
-      <div className="mb-2 flex items-center gap-2.5">
-        <span
-          className="inline-block h-2 w-2 rounded-full"
-          style={{ background: allReviewed ? 'oklch(55% 0.12 152)' : 'var(--border)' }}
-        />
-        <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />
-        <div className="text-[13px] font-medium">Action Items</div>
-        {unreviewedCount > 0 && (
-          <span
-            className="rounded-full px-1.5 py-px text-[10px] font-medium"
-            style={{
-              background: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 88%)',
-              color: 'oklch(58% 0.13 64)',
-            }}
-          >
-            {unreviewedCount} to review
-          </span>
-        )}
-        <span className="flex-1" />
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {isEmpty ? 'auto-reviewed (no items)' : `${reviewedCount}/${total} reviewed`}
-        </span>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-6 px-2 text-[11px]"
-          disabled={suggest.isPending}
-          onClick={() => suggest.mutate({ cycleId })}
-          title="Re-extract action items from this cycle's transcripts"
-        >
-          {suggest.isPending ? (
-            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-          ) : (
-            <Sparkles className="mr-1 h-3 w-3" />
+    <div className="grid gap-1.5">
+      {/* Header-row actions live inline now that the outer chrome (title,
+          dot, status) is provided by the wrapping InputSlot. */}
+      {(unreviewedCount > 0 || true) && (
+        <div className="flex items-center gap-1.5 pb-1">
+          {unreviewedCount > 0 && (
+            <span
+              className="rounded-full px-1.5 py-px text-[10px] font-medium"
+              style={{
+                background: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 88%)',
+                color: 'oklch(58% 0.13 64)',
+              }}
+            >
+              {unreviewedCount} to review
+            </span>
           )}
-          Suggest
-        </Button>
-        {!isEmpty && (
+          <span className="flex-1" />
           <Button
             size="sm"
             variant="ghost"
             className="h-6 px-2 text-[11px]"
-            disabled={setAll.isPending}
-            onClick={() => setAll.mutate({ cycleId, reviewed: !allReviewed })}
+            disabled={suggest.isPending}
+            onClick={() => suggest.mutate({ cycleId })}
+            title="Re-extract action items from this cycle's transcripts"
           >
-            {setAll.isPending ? (
+            {suggest.isPending ? (
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
             ) : (
-              <CheckCircle2 className="mr-1 h-3 w-3" />
+              <Sparkles className="mr-1 h-3 w-3" />
             )}
-            {allReviewed ? 'Unreview all' : 'Mark all reviewed'}
+            Suggest
           </Button>
-        )}
-      </div>
+          {!isEmpty && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px]"
+              disabled={setAll.isPending}
+              onClick={() => setAll.mutate({ cycleId, reviewed: !allReviewed })}
+            >
+              {setAll.isPending ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+              )}
+              {allReviewed ? 'Unreview all' : 'Mark all reviewed'}
+            </Button>
+          )}
+        </div>
+      )}
 
-      <div className="grid gap-1.5">
-        {suggest.error && (
-          <p className="text-[11px] text-destructive">{suggest.error.message}</p>
-        )}
+      {suggest.error && (
+        <p className="text-[11px] text-destructive">{suggest.error.message}</p>
+      )}
 
-        {isEmpty && !suggest.isPending && (
-          <div className="flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 text-[12px] text-emerald-700 dark:text-emerald-400">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            No action items — section auto-reviewed.
-          </div>
-        )}
+      {isEmpty && !suggest.isPending && (
+        <div className="flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 text-[12px] text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          No action items — section auto-reviewed.
+        </div>
+      )}
 
-        {sorted.map((a) => (
-          <ActionItemRowEditor key={a.id} cycleId={cycleId} row={a} />
-        ))}
+      {sorted.map((a) => (
+        <ActionItemRowEditor key={a.id} cycleId={cycleId} row={a} />
+      ))}
 
-        <AddActionItemRow
-          onAdd={(payload) => create.mutate({ cycleId, ...payload })}
-          isPending={create.isPending}
-        />
-      </div>
+      <AddActionItemRow
+        onAdd={(payload) => create.mutate({ cycleId, ...payload })}
+        isPending={create.isPending}
+      />
     </div>
   );
 }

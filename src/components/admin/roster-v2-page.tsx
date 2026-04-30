@@ -28,7 +28,6 @@ import { RosterV2Row } from './roster-v2-row';
 import { RosterEditCoachDialog } from './roster-edit-coach-dialog';
 import { RosterDeleteCoachDialog } from './roster-delete-coach-dialog';
 import { AddCeoDialog } from '@/components/ceos/add-ceo-dialog';
-import { CONTENT_TYPE_DOT, CONTENT_TYPE_LABEL } from './roster-v2-shared';
 
 type Mode = 'roster' | 'manager';
 
@@ -305,13 +304,8 @@ export function RosterV2Page({
         </div>
       ) : (
         // Coach surface: skip the per-coach grouping (there's only one
-        // coach — themselves) and render a flat list of CEO rows. The
-        // Legend lives just above the list so the dot colors used in
-        // the timeline strip aren't a mystery.
+        // coach — themselves) and render a flat list of CEO rows.
         <div>
-          <div className="mb-1 flex items-center justify-end gap-3 px-1 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-            <Legend />
-          </div>
           <div className="overflow-hidden rounded-lg border border-border bg-background">
             {filteredSummaries.map((r) => (
               <RosterV2Row
@@ -393,7 +387,6 @@ function CoachGroup({
           </span>
         )}
         <span className="flex-1" />
-        <Legend />
         {isSelf && (
           <span className="ml-2 rounded-full border border-border px-1.5 py-0.5 text-[9px] normal-case text-muted-foreground/80">
             you
@@ -465,7 +458,6 @@ function UnassignedGroup({
           needs a coach
         </span>
         <span className="flex-1" />
-        <Legend />
       </div>
       <div className="overflow-hidden rounded-lg border border-dashed border-border bg-background">
         {rows.map((r) => (
@@ -559,32 +551,3 @@ function CoachActionsMenu({
   );
 }
 
-function Legend() {
-  // Show every content type the timeline can plot — collapse the
-  // 10x_goal/goal_worksheet pair (both green) and the
-  // self_assessment/support_feedback/coach_note/fallback_doc cluster
-  // (all the same neutral purple) into single legend entries so the
-  // chip count stays manageable.
-  const items: Array<{ key: string; label: string }> = [
-    { key: 'weekly_journal', label: CONTENT_TYPE_LABEL.weekly_journal },
-    { key: 'monthly_journal', label: CONTENT_TYPE_LABEL.monthly_journal },
-    { key: 'transcript', label: CONTENT_TYPE_LABEL.transcript },
-    { key: 'intake', label: CONTENT_TYPE_LABEL.intake },
-    { key: 'goal_worksheet', label: '10x' },
-    { key: 'self_assessment', label: 'Other' },
-    { key: 'unknown', label: 'Unknown' },
-  ];
-  return (
-    <span className="hidden items-center gap-3 md:inline-flex">
-      {items.map((i) => (
-        <span key={i.key} className="inline-flex items-center gap-1 normal-case">
-          <span
-            className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: CONTENT_TYPE_DOT[i.key] }}
-          />
-          <span className="font-mono text-[10px] text-muted-foreground/80">{i.label}</span>
-        </span>
-      ))}
-    </span>
-  );
-}

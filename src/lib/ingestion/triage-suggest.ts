@@ -1,6 +1,9 @@
+import Anthropic from '@anthropic-ai/sdk';
 import { db } from '@/db';
 import { ceos, ceoEmailAliases, coaches, cycles, type RawInput } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+
+const anthropic = new Anthropic();
 
 export interface TriageSuggestion {
   ceoId: string;
@@ -10,7 +13,10 @@ export interface TriageSuggestion {
   /** Null when the suggested CEO is in the Unassigned bucket. */
   coachId: string | null;
   coachName: string | null;
-  confidence: number; // 0-100
+  /** Kept on the type for compatibility with older callers. The new
+   *  AI-driven suggester doesn't surface a numeric score — operators
+   *  trusted prose explanations more than percentages. */
+  confidence: number;
   reasoning: string;
 }
 
@@ -45,77 +51,15 @@ export interface PendingRowSuggestions {
   textSnippet: string;
   meetingTopic: string | null;
   participantsSummary: string | null;
-  /** Verdict from the LLM classifier (Zoom only) — surfaces in the triage card as a hint. */
+  /** Verdict from the LLM classifier (Zoom only). Kept on the row data
+   *  for completeness — the simplified triage card no longer surfaces it
+   *  as a separate block; the AI's CEO match reason is the single source
+   *  of "AI says X". */
   classification: ClassifierLite | null;
   matchStatus: string;
-  // The big ones:
   topSuggestion: TriageSuggestion | null;
   alternatives: TriageSuggestion[];
   cycleSuggestion: TriageCycleSuggestion | null;
-}
-
-const PUNCT_RX = /[.,;:!?_'"`()\[\]{}<>\/\\|@#&*+=~^-]/g;
-
-function normalizeText(s: string): string {
-  return s.normalize('NFC').toLowerCase().replace(PUNCT_RX, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function tokens(s: string): string[] {
-  return normalizeText(s).split(' ').filter(Boolean);
-}
-
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const prev = new Array<number>(b.length + 1);
-  const curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
-  }
-  return prev[b.length];
-}
-
-function levenshteinRatio(a: string, b: string): number {
-  if (!a.length && !b.length) return 1;
-  return 1 - levenshtein(a, b) / Math.max(a.length, b.length);
-}
-
-function tokenSetRatio(a: string, b: string): number {
-  const ta = new Set(tokens(a));
-  const tb = new Set(tokens(b));
-  if (ta.size === 0 && tb.size === 0) return 1;
-  const intersection = new Set([...ta].filter((x) => tb.has(x)));
-  const union = new Set([...ta, ...tb]);
-  return intersection.size / union.size;
-}
-
-function scoreNameMatch(candidate: string, ceoName: string): number {
-  const candTokens = tokens(candidate);
-  const ceoTokens = tokens(ceoName);
-  if (candTokens.length === 0 || ceoTokens.length === 0) return 0;
-
-  const firstCand = candTokens[0];
-  const firstCeo = ceoTokens[0];
-  const lastCand = candTokens[candTokens.length - 1];
-  const lastCeo = ceoTokens[ceoTokens.length - 1];
-
-  const firstRatio = levenshteinRatio(firstCand, firstCeo);
-  const tsr = tokenSetRatio(candidate, ceoName);
-
-  if (candTokens.length === 1) return Math.max(firstRatio * 0.95, tsr);
-  if (ceoTokens.length === 1) return Math.max(firstRatio, tsr);
-
-  const lastRatio = levenshteinRatio(lastCand, lastCeo);
-  if (firstCand === firstCeo && lastCand === lastCeo) return 1;
-  const combined = (firstRatio + lastRatio) / 2;
-  return Math.max(combined, tsr);
 }
 
 interface CeoWithAliases {
@@ -142,7 +86,7 @@ async function loadCeoIndex(): Promise<CeoWithAliases[]> {
       coachName: coaches.name,
     })
     .from(ceos)
-    .innerJoin(coaches, eq(ceos.coachId, coaches.id));
+    .leftJoin(coaches, eq(ceos.coachId, coaches.id));
 
   const aliases = await db
     .select({ ceoId: ceoEmailAliases.ceoId, email: ceoEmailAliases.email })
@@ -155,133 +99,203 @@ async function loadCeoIndex(): Promise<CeoWithAliases[]> {
   }
 
   return rows.map((r) => ({
-    ...r,
+    id: r.id,
+    name: r.name,
+    email: r.email,
+    avatarUrl: r.avatarUrl,
+    coachId: r.coachId,
+    coachName: r.coachName,
     aliases: aliasesByCeo.get(r.id) ?? [],
   }));
 }
 
-interface ScoredCeo {
-  ceo: CeoWithAliases;
-  score: number;
-  reasoningParts: string[];
-}
-
-function scoreCeoForSubmission(args: {
-  ceo: CeoWithAliases;
-  submitterEmail: string | null;
-  submitterName: string | null;
-}): ScoredCeo {
-  const { ceo, submitterEmail, submitterName } = args;
-  let bestScore = 0;
-  const reasoningParts: string[] = [];
-
-  // Email-based scoring
-  if (submitterEmail) {
-    const [submitLocal, submitDomain] = submitterEmail.split('@');
-
-    for (const alias of ceo.aliases) {
-      const [aliasLocal, aliasDomain] = alias.split('@');
-
-      // Exact local + close domain → likely typo
-      if (submitLocal === aliasLocal && submitDomain && aliasDomain) {
-        const domainRatio = levenshteinRatio(submitDomain, aliasDomain);
-        if (domainRatio > 0.7 && domainRatio < 1) {
-          const score = 0.85 + domainRatio * 0.1;
-          if (score > bestScore) {
-            bestScore = score;
-            reasoningParts.length = 0;
-            reasoningParts.push(`domain typo: ${submitDomain} ≈ ${aliasDomain}`);
-          }
-        }
-      }
-
-      // Same domain + close local
-      if (submitDomain === aliasDomain && submitLocal !== aliasLocal) {
-        const localRatio = levenshteinRatio(submitLocal ?? '', aliasLocal ?? '');
-        if (localRatio > 0.7) {
-          const score = localRatio * 0.8 + 0.1; // same domain bonus
-          if (score > bestScore) {
-            bestScore = score;
-            reasoningParts.length = 0;
-            reasoningParts.push(`same domain, similar address: ${submitLocal} ≈ ${aliasLocal}`);
-          }
-        }
-      }
-
-      // Generic full-string fuzzy
-      const ratio = levenshteinRatio(submitterEmail, alias);
-      if (ratio > 0.85 && ratio > bestScore) {
-        bestScore = ratio;
-        reasoningParts.length = 0;
-        reasoningParts.push(`email very close to ${alias}`);
-      }
-    }
-  }
-
-  // Name-based scoring (additive — boosts a partial email match)
-  if (submitterName && submitterName.length >= 2) {
-    const nameScore = scoreNameMatch(submitterName, ceo.name);
-    if (nameScore > 0.6) {
-      // Combine: if both signals agree, boost; otherwise pick best
-      if (bestScore > 0 && reasoningParts.length > 0) {
-        // We already have an email signal. Boost if name agrees.
-        const combined = Math.min(0.99, bestScore * 0.7 + nameScore * 0.4);
-        bestScore = combined;
-        reasoningParts.push(`name match: "${submitterName}" ↔ "${ceo.name}"`);
-      } else if (nameScore > bestScore) {
-        bestScore = nameScore;
-        reasoningParts.length = 0;
-        reasoningParts.push(`name match: "${submitterName}" ↔ "${ceo.name}"`);
-      }
-    }
-  }
-
-  return { ceo, score: bestScore, reasoningParts };
-}
-
-function toSuggestion(scored: ScoredCeo): TriageSuggestion {
-  return {
-    ceoId: scored.ceo.id,
-    ceoName: scored.ceo.name,
-    ceoEmail: scored.ceo.email,
-    ceoAvatarUrl: scored.ceo.avatarUrl,
-    coachId: scored.ceo.coachId,
-    coachName: scored.ceo.coachName,
-    confidence: Math.round(scored.score * 100),
-    reasoning: scored.reasoningParts.join(' · ') || 'weak signal',
-  };
-}
-
-interface MatchCandidatesShape {
-  reason?: string;
-  email?: string;
-  name?: string;
-}
-interface FuzzyEntry {
-  candidateName?: string;
-  candidateEmail?: string | null;
-  topMatches?: Array<{ ceoId: string; ceoName: string; score: number }>;
+/**
+ * The names of all coaches on the platform. Crucial context for the
+ * matcher because Zoom transcripts of coaching sessions feature both
+ * the coach AND the CEO speaking — without this list the model treats
+ * every named participant as a candidate. Cached per call site.
+ */
+async function loadCoachNames(): Promise<string[]> {
+  const rows = await db.select({ name: coaches.name }).from(coaches);
+  return rows.map((r) => r.name).filter(Boolean);
 }
 
 /**
- * Compute suggestions for a single pending raw_input. Reads from existing
- * matchCandidates when present (Zoom fuzzy already ran during ingest) and
- * falls back to fresh global scoring for Tally rows.
- *
- * Special case: pending_cycle rows already have a CEO matched — the
- * "suggestion" is just confirming that CEO (high confidence) so the operator
- * can move on to the cycle assignment in the same card.
+ * Haiku occasionally wraps JSON output in ```json … ``` fences despite
+ * the prompt saying "JSON only". Strip them before parsing so we don't
+ * lose the suggestion to a syntax error.
  */
-export async function suggestForPendingRow(
+function stripJsonFences(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]+?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function buildSuggestion(
+  ceo: CeoWithAliases | undefined,
+  reason: string | undefined,
+): TriageSuggestion | null {
+  if (!ceo) return null;
+  return {
+    ceoId: ceo.id,
+    ceoName: ceo.name,
+    ceoEmail: ceo.email,
+    ceoAvatarUrl: ceo.avatarUrl,
+    coachId: ceo.coachId,
+    coachName: ceo.coachName,
+    confidence: 0,
+    reasoning: (reason ?? '').trim(),
+  };
+}
+
+/**
+ * Ask Haiku which CEO from the roster this raw input belongs to. The
+ * model sees: content excerpt, submitter email/name, Zoom participants
+ * + topic when present, and the full roster (id + name + email +
+ * aliases + coach). It returns one CEO id + a short prose reason, plus
+ * up to two alternatives if there's reasonable ambiguity. Cheap by
+ * design — small prompt, small max_tokens.
+ */
+async function aiSuggestCeoForRawInput(
   rawInput: RawInput,
-  ceoIndex?: CeoWithAliases[]
+  ceoIndex: CeoWithAliases[],
+  coachNames: string[],
 ): Promise<{
   topSuggestion: TriageSuggestion | null;
   alternatives: TriageSuggestion[];
 }> {
-  // pending_cycle: CEO already matched, the work is to pick a cycle
+  if (ceoIndex.length === 0) {
+    return { topSuggestion: null, alternatives: [] };
+  }
+
+  const candidates = rawInput.matchCandidates as
+    | { email?: string; name?: string }
+    | null;
+  const submitterEmail = candidates?.email ?? null;
+  const submitterName = candidates?.name ?? null;
+
+  let topic = '';
+  let participantsLine = '';
+  if (rawInput.source === 'zoom') {
+    const payload = rawInput.payloadJson as {
+      meeting?: { topic?: string };
+      participants?: Array<{
+        name?: string;
+        user_email?: string;
+        internal_user?: boolean;
+      }>;
+    } | null;
+    const externals = (payload?.participants ?? []).filter((p) => !p.internal_user);
+    if (externals.length > 0) {
+      const dedup = Array.from(
+        new Set(
+          externals.map(
+            (p) => `${p.name ?? '?'}${p.user_email ? ` <${p.user_email}>` : ''}`,
+          ),
+        ),
+      );
+      participantsLine = dedup.join(', ');
+    }
+    topic = payload?.meeting?.topic ?? '';
+  }
+
+  // Compact catalog — no aliases (rarely the deciding signal), no
+  // explicit `id=` prefix (the model copies UUIDs reliably without it).
+  const catalog = ceoIndex
+    .map((c) => {
+      const email = c.email ? ` · ${c.email}` : '';
+      const coach = c.coachName ? ` · coach: ${c.coachName}` : ' · unassigned';
+      return `- ${c.id} · ${c.name}${email}${coach}`;
+    })
+    .join('\n');
+
+  const coachListLine =
+    coachNames.length > 0
+      ? coachNames.map((n) => `"${n}"`).join(', ')
+      : '(none)';
+
+  // Tight content excerpt. The CEO's name is almost always in the first
+  // few hundred chars (Zoom: opening dialogue, Tally: first Q/A pair),
+  // so 1500 is plenty and keeps us well under rate limits.
+  const excerpt = (rawInput.textContent ?? '').slice(0, 1500).trim();
+
+  const userPrompt = `Match this content to ONE CEO from the roster.
+
+Coaches (NOT candidates — never return a coach as the match):
+${coachListLine}
+
+CEO roster (uuid · name · email · coach):
+${catalog}
+
+Content
+- Source: ${rawInput.source}
+- Type: ${rawInput.contentType}
+- Submitter: ${submitterName ?? '(no name)'}${submitterEmail ? ` <${submitterEmail}>` : ''}
+${topic ? `- Meeting topic: ${topic}\n` : ''}${participantsLine ? `- Participants (external, non-coach): ${participantsLine}\n` : ''}
+Excerpt (truncated):
+"""
+${excerpt || '(no text content)'}
+"""
+
+How to decide:
+- The CEO's name is usually in the meeting topic, the participants list, or the first lines of dialogue.
+- For Tally submissions, look for "Q: name / A: <name>" or "Q: email / A: <email>" patterns in the excerpt, and the submitter line above.
+- If the only people named are coaches (see list above) or fully unknown, return ceoId: null.
+- Pick exactly one top match. Add up to 2 alternatives only if there's genuine ambiguity.
+
+Return ONLY JSON, no markdown fences:
+{ "ceoId": "<uuid from roster or null>", "reason": "≤25 words why", "alternatives": [{ "ceoId": "<uuid>", "reason": "≤20 words" }] }`;
+
+  let parsed: {
+    ceoId?: string | null;
+    reason?: string;
+    alternatives?: Array<{ ceoId?: string; reason?: string }>;
+  };
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 384,
+      messages: [{ role: 'user', content: userPrompt }],
+    });
+    const block = message.content.find((b) => b.type === 'text');
+    if (!block || block.type !== 'text') {
+      return { topSuggestion: null, alternatives: [] };
+    }
+    parsed = JSON.parse(stripJsonFences(block.text));
+  } catch (err) {
+    // Soft-fail: surface no suggestion, operator picks manually. We log
+    // server-side so a degraded path is visible in ops.
+    console.error('aiSuggestCeoForRawInput failed:', err);
+    return { topSuggestion: null, alternatives: [] };
+  }
+
+  const byId = new Map(ceoIndex.map((c) => [c.id, c]));
+  const top = buildSuggestion(byId.get(parsed.ceoId ?? ''), parsed.reason);
+  const alts = (parsed.alternatives ?? [])
+    .map((a) => buildSuggestion(byId.get(a.ceoId ?? ''), a.reason))
+    .filter((x): x is TriageSuggestion => x !== null && (!top || x.ceoId !== top.ceoId))
+    .slice(0, 2);
+
+  return { topSuggestion: top, alternatives: alts };
+}
+
+/**
+ * Compute suggestions for a single pending raw_input.
+ *   - `pending_cycle`: CEO is already known by exact email; the work is
+ *     to pick a cycle. Short-circuit so we don't spend an LLM call.
+ *   - everything else: ask Haiku to pick a CEO from the roster.
+ */
+export async function suggestForPendingRow(
+  rawInput: RawInput,
+  ceoIndex?: CeoWithAliases[],
+  coachNames?: string[],
+): Promise<{
+  topSuggestion: TriageSuggestion | null;
+  alternatives: TriageSuggestion[];
+}> {
+  const idx = ceoIndex ?? (await loadCeoIndex());
+
   if (rawInput.matchStatus === 'pending_cycle' && rawInput.ceoId) {
-    const idx = ceoIndex ?? (await loadCeoIndex());
     const ceo = idx.find((c) => c.id === rawInput.ceoId);
     if (ceo) {
       return {
@@ -294,126 +308,41 @@ export async function suggestForPendingRow(
           coachName: ceo.coachName,
           confidence: 100,
           reasoning:
-            'CEO matched by exact email. No cycle covers this date — pick one below.',
+            'CEO matched by exact email — pick a cycle below.',
         },
         alternatives: [],
       };
     }
   }
 
-  const candidates = rawInput.matchCandidates;
-
-  // Zoom path: re-compute fuzzy scores fresh at triage time using the
-  // current matcher logic, so improvements to scoreNameMatch immediately
-  // affect what the operator sees (without re-ingesting).
-  if (rawInput.source === 'zoom') {
-    const payload = rawInput.payloadJson as {
-      participants?: Array<{ name?: string; internal_user?: boolean; user_email?: string }>;
-    } | null;
-    const externals = (payload?.participants ?? []).filter(
-      (p) => !p.internal_user && p.name?.trim()
-    );
-    if (externals.length > 0) {
-      const candidateName = externals[0].name!;
-      const idx = ceoIndex ?? (await loadCeoIndex());
-
-      // Search across ALL CEOs, not just the meeting host's roster. Reasons:
-      //  - Auto-created coaches (e.g. Steve Taylor just spun up by a Zoom
-      //    backfill) have no CEOs in their roster yet, so a roster-scoped
-      //    search returns nothing.
-      //  - A CEO's primary coach record may live under a different coach
-      //    than the one hosting today's meeting (e.g. Martin manually
-      //    created Nicole Cooper under his roster, but Steve is now
-      //    coaching her). Operator picks by visual confirmation; coach
-      //    name is shown on each suggestion to disambiguate.
-      // Boost: CEOs that ARE in the host's roster get a tiny score bump
-      // so they sort first when scores are tied.
-      const scored = idx
-        .map((ceo) => {
-          const baseScore = scoreNameMatch(candidateName, ceo.name);
-          const inRoster = ceo.coachId === rawInput.coachId;
-          return {
-            ceo,
-            score: inRoster ? Math.min(1, baseScore + 0.05) : baseScore,
-          };
-        })
-        .filter((s) => s.score >= 0.3)
-        .sort((a, b) => b.score - a.score);
-
-      if (scored.length > 0) {
-        const mapped: TriageSuggestion[] = scored.slice(0, 4).map((s) => ({
-          ceoId: s.ceo.id,
-          ceoName: s.ceo.name,
-          ceoEmail: s.ceo.email,
-          ceoAvatarUrl: s.ceo.avatarUrl,
-          coachId: s.ceo.coachId,
-          coachName: s.ceo.coachName,
-          confidence: Math.round(s.score * 100),
-          reasoning: `name match: "${candidateName}" ↔ "${s.ceo.name}"`,
-        }));
-        return { topSuggestion: mapped[0], alternatives: mapped.slice(1, 4) };
-      }
-    }
-  }
-
-  // Legacy fallback for older Zoom rows whose matchCandidates is an array
-  // (kept for safety; the live recompute path above should cover all cases
-  // where coachId + payload are present).
-  if (Array.isArray(candidates)) {
-    const fuzzy = candidates as unknown as FuzzyEntry[];
-    const top = fuzzy[0]?.topMatches ?? [];
-    if (top.length > 0) {
-      const idx = ceoIndex ?? (await loadCeoIndex());
-      const candidateName = fuzzy[0].candidateName ?? '';
-      const mapped: TriageSuggestion[] = top
-        .map((m) => {
-          const ceo = idx.find((c) => c.id === m.ceoId);
-          if (!ceo) return null;
-          return {
-            ceoId: ceo.id,
-            ceoName: ceo.name,
-            ceoEmail: ceo.email,
-            ceoAvatarUrl: ceo.avatarUrl,
-            coachId: ceo.coachId,
-            coachName: ceo.coachName,
-            confidence: Math.round(m.score * 100),
-            reasoning: `name match: "${candidateName}" ↔ "${ceo.name}"`,
-          };
-        })
-        .filter((x): x is TriageSuggestion => x !== null);
-
-      return {
-        topSuggestion: mapped[0] ?? null,
-        alternatives: mapped.slice(1, 4),
-      };
-    }
-  }
-
-  // Tally path: compute from submitter email + name across the whole index.
-  const obj = candidates as MatchCandidatesShape | null;
-  const submitterEmail = obj?.email?.toLowerCase().trim() ?? null;
-  const submitterName = obj?.name?.trim() ?? null;
-
-  if (!submitterEmail && !submitterName) {
-    return { topSuggestion: null, alternatives: [] };
-  }
-
-  const idx = ceoIndex ?? (await loadCeoIndex());
-  const scored = idx.map((ceo) =>
-    scoreCeoForSubmission({ ceo, submitterEmail, submitterName })
-  );
-  scored.sort((a, b) => b.score - a.score);
-
-  const meaningful = scored.filter((s) => s.score >= 0.3);
-  if (meaningful.length === 0) {
-    return { topSuggestion: null, alternatives: [] };
-  }
-
-  return {
-    topSuggestion: toSuggestion(meaningful[0]),
-    alternatives: meaningful.slice(1, 4).map(toSuggestion),
-  };
+  const names = coachNames ?? (await loadCoachNames());
+  return aiSuggestCeoForRawInput(rawInput, idx, names);
 }
+
+/**
+ * Run an async mapper over a list with a fixed concurrency. Used by
+ * the triage queue so we don't slam Anthropic with N parallel calls
+ * and trip the per-minute rate limit. Order of results matches input.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+export { loadCoachNames };
 
 /**
  * Cycle suggestion for a (ceoId, occurredAt) pair — reused by the triage UI.

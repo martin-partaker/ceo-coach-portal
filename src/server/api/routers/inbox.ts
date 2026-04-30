@@ -21,6 +21,8 @@ import {
   suggestForPendingRow,
   suggestCycleFor,
   loadCeoIndexCached,
+  loadCoachNames,
+  mapWithConcurrency,
   type PendingRowSuggestions,
 } from '@/lib/ingestion/triage-suggest';
 import { coaches as coachesTbl } from '@/db/schema';
@@ -79,6 +81,10 @@ const STATUS_VALUES = [
   'pending_classification',
   'discarded',
   'archived',
+  // Internal coach meetings (e.g. mentoring / training sessions between
+  // two coaches). Off the triage queue, not projected, but distinct from
+  // 'archived' so we can browse them separately.
+  'internal',
 ] as const;
 
 const CONTENT_TYPES = [
@@ -210,19 +216,41 @@ export const inboxRouter = createTRPCRouter({
         : [];
     const coachById = new Map(coachRows.map((c) => [c.id, c.name]));
 
-    // Pre-load the CEO index once (avoids N round-trips inside the loop).
-    const ceoIndex = await loadCeoIndexCached();
+    // Pre-load the CEO + coach indexes once (avoids N round-trips
+    // inside the loop and lets every row pass the same coach list to
+    // the AI matcher).
+    const [ceoIndex, coachNames] = await Promise.all([
+      loadCeoIndexCached(),
+      loadCoachNames(),
+    ]);
+
+    // Run AI suggestions with bounded concurrency — Anthropic enforces
+    // a 50k input-token-per-minute limit on this org and a fully
+    // parallel fan-out trips it on big triage queues. 4 in flight at a
+    // time gives us most of the speedup with no rate-limit drops.
+    const suggestions = await mapWithConcurrency(rows, 4, (r) =>
+      suggestForPendingRow(r, ceoIndex, coachNames),
+    );
+
+    // Cycle suggestions are tiny DB reads; do them in parallel too.
+    const cycleSuggestions = await Promise.all(
+      rows.map((r, i) => {
+        const top = suggestions[i].topSuggestion;
+        return top
+          ? suggestCycleFor({ ceoId: top.ceoId, occurredAt: r.occurredAt })
+          : Promise.resolve(null);
+      })
+    );
 
     const out: PendingRowSuggestions[] = [];
-    for (const r of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
       const candidates = r.matchCandidates as { email?: string; name?: string } | null;
       const fuzzyArr =
         Array.isArray(r.matchCandidates) && (r.matchCandidates as Array<{ candidateName?: string; candidateEmail?: string | null }>)[0]
           ? (r.matchCandidates as Array<{ candidateName?: string; candidateEmail?: string | null }>)
           : null;
 
-      // Fallback: extract email/name from the original Tally payload when
-      // matchCandidates is null (rows ingested before we started preserving it).
       const payloadFallback = extractFromTallyPayload(r.payloadJson);
       const submitterEmail =
         candidates?.email ?? fuzzyArr?.[0]?.candidateEmail ?? payloadFallback.email ?? null;
@@ -239,16 +267,6 @@ export const inboxRouter = createTRPCRouter({
         meeting?: { topic?: string };
       } | null;
 
-      const { topSuggestion, alternatives } = await suggestForPendingRow(r, ceoIndex);
-
-      let cycleSuggestion = null;
-      if (topSuggestion) {
-        cycleSuggestion = await suggestCycleFor({
-          ceoId: topSuggestion.ceoId,
-          occurredAt: r.occurredAt,
-        });
-      }
-
       out.push({
         rawInputId: r.id,
         source: r.source,
@@ -262,15 +280,18 @@ export const inboxRouter = createTRPCRouter({
         textSnippet: (r.textContent ?? '').slice(0, 8000),
         meetingTopic: payload?.meeting?.topic ?? null,
         participantsSummary: classification?.participantsSummary ?? null,
+        // Classifier verdict isn't surfaced in the simplified card, but
+        // we keep it on the row so future debugging / future UIs can
+        // still reach it without a re-ingest.
         classification: (r.classification ?? null) as {
           meetingType?: string;
           includeInMonthlySummary?: boolean;
           includeReason?: string;
         } | null,
         matchStatus: r.matchStatus,
-        topSuggestion,
-        alternatives,
-        cycleSuggestion,
+        topSuggestion: suggestions[i].topSuggestion,
+        alternatives: suggestions[i].alternatives,
+        cycleSuggestion: cycleSuggestions[i],
       });
     }
 
@@ -668,6 +689,32 @@ export const inboxRouter = createTRPCRouter({
         .update(rawInputs)
         .set({
           matchStatus: 'archived',
+          resolvedAt: new Date(),
+          resolvedBy: ctx.coach.id,
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+      return { ok: true };
+    }),
+
+  /**
+   * Mark a raw input as an internal coach meeting (mentoring / training
+   * between two coaches, no CEO involved). Off the triage queue and never
+   * projected. Recoverable via the inbox if it was a mistake.
+   */
+  markInternal: adminProcedure
+    .input(z.object({ rawInputId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          matchStatus: 'internal',
           resolvedAt: new Date(),
           resolvedBy: ctx.coach.id,
         })

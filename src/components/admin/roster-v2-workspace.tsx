@@ -15,12 +15,9 @@ import {
 } from '@/components/ui/dialog';
 import {
   Loader2,
-  FileText,
   Mail,
   Pencil,
   AlertTriangle,
-  Check,
-  CheckCircle2,
   Plus,
   Sparkles,
   RefreshCw,
@@ -38,13 +35,7 @@ import type {
   RosterCeoSummary,
   RosterCycle,
 } from '@/server/api/routers/roster';
-import { CONTENT_TYPE_DOT, CONTENT_TYPE_LABEL, fmtShortDate, PHASE_DOT, dayOffset, relativeDay, deriveCycleLabel } from './roster-v2-shared';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { CONTENT_TYPE_DOT, fmtShortDate, PHASE_DOT, deriveCycleLabel } from './roster-v2-shared';
 import { CycleEditDialog } from './roster-v2-cycle-edit-dialog';
 import { CycleCreateDialog } from './roster-v2-cycle-create-dialog';
 import { NotesEditor } from './roster-v2-notes-editor';
@@ -222,9 +213,6 @@ function CycleBody({
           </button>
         </div>
 
-        {/* Day-precise mini timeline */}
-        <CycleSubmissionsStrip cycle={cycle} />
-
         <CycleEditDialog
           cycle={{
             id: cycle.id,
@@ -266,45 +254,75 @@ function CycleBody({
           </div>
         )}
 
-        {/* Input slots */}
+        {/* Inputs supergroup — raw data the AI will read */}
+        <SuperGroup
+          title="Inputs"
+          fraction={`${[cycle.readiness.tx.done, cycle.readiness.weekly.done].filter(Boolean).length}/2`}
+        >
         <InputSlot
-          icon="zoom"
           title="Zoom Transcript"
           status={cycle.readiness.tx.done ? 'done' : 'empty'}
-          right={
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 px-2 text-[11px]"
-                onClick={() => setZoomImportOpen(true)}
-              >
-                <Download className="mr-1 h-3 w-3" /> Import from Zoom
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 px-2 text-[11px]"
-                onClick={() => setPasteTranscriptOpen(true)}
-              >
-                <FilePlus className="mr-1 h-3 w-3" /> Paste text
-              </Button>
-            </div>
+          summary={
+            data?.transcripts[0]
+              ? `${data.transcripts[0].zoomMeetingId ? 'Zoom' : 'Manual'}${data.transcripts[0].recordedAt ? ` · ${fmtShortDate(new Date(data.transcripts[0].recordedAt).toISOString().slice(0, 10))}` : ''}${data.transcripts[0].duration ? ` · ${data.transcripts[0].duration} min` : ''} · ${(data.transcripts[0].content ?? '').length.toLocaleString()} chars`
+              : undefined
           }
         >
           {data?.transcripts.length ? (
-            data.transcripts.map((t) => (
-              <ExpandableEntry
-                key={t.id}
-                title={t.title || 'Untitled meeting'}
-                sub={`${t.zoomMeetingId ? 'Zoom' : 'Manual'}${t.recordedAt ? ` · ${fmtShortDate(new Date(t.recordedAt).toISOString().slice(0, 10))}` : ''}${t.duration ? ` · ${t.duration} min` : ''}`}
-                dotColor={CONTENT_TYPE_DOT.transcript}
-                content={t.content}
-                meta={`${(t.content ?? '').length.toLocaleString()} chars`}
-              />
-            ))
+            <>
+              {data.transcripts.map((t) => (
+                <ExpandableEntry
+                  key={t.id}
+                  title={t.title || 'Untitled meeting'}
+                  sub={`${t.zoomMeetingId ? 'Zoom' : 'Manual'}${t.recordedAt ? ` · ${fmtShortDate(new Date(t.recordedAt).toISOString().slice(0, 10))}` : ''}${t.duration ? ` · ${t.duration} min` : ''}`}
+                  dotColor={CONTENT_TYPE_DOT.transcript}
+                  content={t.content}
+                  meta={`${(t.content ?? '').length.toLocaleString()} chars`}
+                />
+              ))}
+              <div className="flex items-center gap-1 pt-0.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px] text-muted-foreground"
+                  onClick={() => setPasteTranscriptOpen(true)}
+                >
+                  <FilePlus className="mr-1 h-3 w-3" /> Paste another
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px] text-muted-foreground"
+                  onClick={() => setZoomImportOpen(true)}
+                >
+                  <Download className="mr-1 h-3 w-3" /> Re-import
+                </Button>
+              </div>
+            </>
           ) : (
-            <EmptyHint label="No transcript for this session" />
+            <EmptyHint
+              label="No transcript for this session"
+              cta={
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setZoomImportOpen(true)}
+                  >
+                    <Download className="mr-1 h-3 w-3" /> Import from Zoom
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setPasteTranscriptOpen(true)}
+                  >
+                    <FilePlus className="mr-1 h-3 w-3" /> Paste text
+                  </Button>
+                </div>
+              }
+            />
           )}
         </InputSlot>
 
@@ -324,51 +342,6 @@ function CycleBody({
         />
 
         <InputSlot
-          icon="note"
-          title="Extra Notes & Context"
-          status={data?.cycle.additionalContext?.trim() ? 'done' : 'optional'}
-        >
-          {data ? (
-            <NotesEditor cycleId={cycle.id} initialValue={data.cycle.additionalContext} />
-          ) : (
-            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
-          )}
-        </InputSlot>
-
-        <InputSlot
-          icon="goals"
-          title="Monthly Goals & Commitments"
-          status={cycle.readiness.goals.done ? 'done' : 'empty'}
-          aiSuggested={cycle.readiness.goals.ai}
-        >
-          {data ? (
-            cycle.readiness.goals.done || cycle.readiness.goals.ai ? (
-              <CycleFieldEditor
-                cycleId={cycle.id}
-                field="monthlyGoals"
-                initialValue={data.cycle.monthlyGoals}
-                ai={cycle.readiness.goals.ai}
-                rows={6}
-              />
-            ) : (
-              <EmptyHint
-                label="No monthly goals captured yet"
-                cta={
-                  <PrefillButton
-                    cycleId={cycle.id}
-                    field="monthlyGoals"
-                    label="AI prefill from transcript"
-                  />
-                }
-              />
-            )
-          ) : (
-            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
-          )}
-        </InputSlot>
-
-        <InputSlot
-          icon="weekly"
           title="Weekly Journals"
           status={
             cycle.readiness.weekly.done
@@ -376,6 +349,11 @@ function CycleBody({
               : (data?.journals.length ?? 0) > 0
                 ? 'partial'
                 : 'empty'
+          }
+          summary={
+            (data?.journals.length ?? 0) > 0
+              ? `${data?.journals.length ?? 0} filed`
+              : undefined
           }
           countLabel={`${data?.journals.length ?? 0} filed`}
         >
@@ -440,10 +418,73 @@ function CycleBody({
         />
 
         <InputSlot
-          icon="reflect"
+          title="Extra Notes & Context"
+          status={data?.cycle.additionalContext?.trim() ? 'done' : 'optional'}
+          summary={
+            data?.cycle.additionalContext?.trim()
+              ? `${data.cycle.additionalContext.length.toLocaleString()} chars`
+              : undefined
+          }
+        >
+          {data ? (
+            <NotesEditor cycleId={cycle.id} initialValue={data.cycle.additionalContext} />
+          ) : (
+            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
+          )}
+        </InputSlot>
+        </SuperGroup>
+
+        {/* Synthesis supergroup — what you concluded for the AI to use */}
+        <SuperGroup
+          title="Synthesis"
+          fraction={`${[cycle.readiness.goals.done, cycle.readiness.reflect.done, cycle.readiness.actions.done].filter(Boolean).length}/3`}
+        >
+
+        <InputSlot
+          title="Monthly Goals & Commitments"
+          status={cycle.readiness.goals.done ? 'done' : 'empty'}
+          aiSuggested={cycle.readiness.goals.ai}
+          summary={
+            cycle.readiness.goals.done && data?.cycle.monthlyGoals
+              ? `${data.cycle.monthlyGoals.length.toLocaleString()} chars${cycle.readiness.goals.ai ? ' · AI' : ''}`
+              : undefined
+          }
+        >
+          {data ? (
+            cycle.readiness.goals.done || cycle.readiness.goals.ai ? (
+              <CycleFieldEditor
+                cycleId={cycle.id}
+                field="monthlyGoals"
+                initialValue={data.cycle.monthlyGoals}
+                ai={cycle.readiness.goals.ai}
+                rows={6}
+              />
+            ) : (
+              <EmptyHint
+                label="No monthly goals captured yet"
+                cta={
+                  <PrefillButton
+                    cycleId={cycle.id}
+                    field="monthlyGoals"
+                    label="AI prefill from transcript"
+                  />
+                }
+              />
+            )
+          ) : (
+            <div className="px-1 text-[11px] text-muted-foreground">Loading…</div>
+          )}
+        </InputSlot>
+
+        <InputSlot
           title="Monthly Reflection"
           status={cycle.readiness.reflect.done ? 'done' : 'empty'}
           aiSuggested={cycle.readiness.reflect.ai}
+          summary={
+            cycle.readiness.reflect.done && data?.cycle.monthlyReflection
+              ? `${data.cycle.monthlyReflection.length.toLocaleString()} chars${cycle.readiness.reflect.ai ? ' · AI' : ''}`
+              : undefined
+          }
         >
           {data ? (
             cycle.readiness.reflect.done || cycle.readiness.reflect.ai ? (
@@ -472,6 +513,7 @@ function CycleBody({
         </InputSlot>
 
         <ActionItemsSlot cycleId={cycle.id} data={data} />
+        </SuperGroup>
       </div>
 
       {/* Right rail */}
@@ -498,95 +540,6 @@ function CycleBody({
   );
 }
 
-function CycleSubmissionsStrip({ cycle }: { cycle: RosterCycle }) {
-  if (!cycle.periodStart || !cycle.periodEnd) return null;
-  const start = new Date(cycle.periodStart);
-  const end = new Date(cycle.periodEnd);
-  const span = (end.getTime() - start.getTime()) / 86_400_000;
-  if (span <= 0) return null;
-  const today = new Date();
-  return (
-    <TooltipProvider delayDuration={150}>
-      <div className="relative h-7 rounded border border-border bg-background px-1.5">
-        <div className="absolute left-2 top-1.5 font-mono text-[10px] text-muted-foreground">
-          {fmtShortDate(cycle.periodStart)}
-        </div>
-        <div className="absolute right-2 top-1.5 font-mono text-[10px] text-muted-foreground">
-          {fmtShortDate(cycle.periodEnd)}
-        </div>
-        {cycle.submissions.map((s) => {
-          const sd = new Date(s.occurredAt);
-          const offset = (sd.getTime() - start.getTime()) / 86_400_000;
-          const pct = (offset / span) * 100;
-          if (pct < 0 || pct > 100) return null;
-          const color = CONTENT_TYPE_DOT[s.type] ?? 'var(--muted-foreground)';
-          const unconfirmed = s.status.includes('unconfirmed');
-          return (
-            <Tooltip key={s.rawInputId}>
-              <TooltipTrigger asChild>
-                <span
-                  className="absolute cursor-help"
-                  style={{
-                    left: `${pct}%`,
-                    top: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    background: unconfirmed ? 'transparent' : color,
-                    border: `1.5px solid ${color}`,
-                  }}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-[260px]">
-                <SubmissionTooltip submission={s} today={today} />
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </div>
-    </TooltipProvider>
-  );
-}
-
-/**
- * Compact tooltip body shown on hover of a submission dot. Surfaces what
- * the dot actually represents — content type, source (Tally / Zoom), the
- * exact submission date, relative age, and the attachment status — so the
- * operator can decode the timeline without expanding the row.
- */
-function SubmissionTooltip({
-  submission,
-  today,
-}: {
-  submission: RosterCycle['submissions'][number];
-  today: Date;
-}) {
-  const typeLabel = CONTENT_TYPE_LABEL[submission.type] ?? submission.type;
-  const sourceLabel =
-    submission.source === 'zoom'
-      ? 'Zoom'
-      : submission.source === 'tally'
-        ? 'Tally'
-        : submission.source;
-  const date = fmtShortDate(submission.occurredAt.slice(0, 10));
-  const rel = relativeDay(dayOffset(submission.occurredAt, today));
-  const unconfirmed = submission.status.includes('unconfirmed');
-  return (
-    <div className="space-y-0.5">
-      <div className="font-medium">{typeLabel}</div>
-      <div className="font-mono text-[10px] opacity-80">
-        {sourceLabel} · {date} · {rel}
-      </div>
-      {unconfirmed && (
-        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-background/20 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider">
-          unconfirmed — needs review
-        </div>
-      )}
-    </div>
-  );
-}
-
 type CycleDetailData = inferRouterOutputs<AppRouter>['roster']['cycleDetail'];
 
 function ActionItemsSlot({
@@ -598,61 +551,135 @@ function ActionItemsSlot({
 }) {
   const items = (data?.actionItems ?? []) as Parameters<typeof ActionItemsEditableList>[0]['items'];
   const reviewedCount = data?.actionsBucketed.reviewed ?? 0;
+  const total = items.length;
+  const isEmpty = total === 0;
+  const allReviewed = !isEmpty && reviewedCount === total;
+  // Auto-reviewed (zero items) AND fully-reviewed both count as done from
+  // a readiness perspective.
+  const status: 'done' | 'partial' | 'empty' =
+    isEmpty || allReviewed ? 'done' : 'partial';
+  const summary = isEmpty
+    ? 'auto-reviewed (no items)'
+    : `${reviewedCount}/${total} reviewed`;
+
   return (
-    <ActionItemsEditableList
-      cycleId={cycleId}
-      items={items}
-      reviewedCount={reviewedCount}
-    />
+    <InputSlot title="Action Items" status={status} summary={summary}>
+      <ActionItemsEditableList
+        cycleId={cycleId}
+        items={items}
+        reviewedCount={reviewedCount}
+      />
+    </InputSlot>
   );
 }
 
+/**
+ * Re-shaped slot. Drops the per-slot dot (status now lives only in the
+ * right-rail readiness checklist + the summary text). When `summary` is
+ * present and `status === 'done'`, the slot starts collapsed and shows
+ * only its one-liner; click anywhere on the header to expand.
+ */
 function InputSlot({
-  icon,
   title,
   status,
+  summary,
   countLabel,
   children,
   right,
   aiSuggested,
+  forceExpanded,
 }: {
-  icon: 'zoom' | 'note' | 'goals' | 'weekly' | 'reflect' | 'actions';
   title: string;
   status: 'done' | 'empty' | 'partial' | 'optional';
+  /** Single-line description shown in the collapsed header (when done). */
+  summary?: string;
   countLabel?: string;
   children?: React.ReactNode;
+  /** Header-right slot. Only rendered when expanded so it never competes
+   *  with the summary text in the collapsed state. */
   right?: React.ReactNode;
   aiSuggested?: boolean;
+  /** Override the auto-collapse decision, e.g. when the slot is empty. */
+  forceExpanded?: boolean;
 }) {
-  const dotColor = {
-    done: 'oklch(55% 0.12 152)',
-    empty: 'var(--border)',
-    partial: 'oklch(58% 0.13 64)',
-    optional: 'var(--border)',
-  }[status];
-
-  const Icon = {
-    zoom: Mail,
-    note: FileText,
-    goals: Pencil,
-    weekly: FileText,
-    reflect: FileText,
-    actions: Check,
-  }[icon];
+  const collapsible = status === 'done' && !!summary && !forceExpanded;
+  const [expanded, setExpanded] = useState(!collapsible);
+  const isExpanded = forceExpanded || expanded || !collapsible;
 
   return (
-    <div className="rounded-lg border border-border bg-background p-3">
-      <div className="mb-2 flex items-center gap-2.5">
-        <span className="inline-block h-2 w-2 rounded-full" style={{ background: dotColor }} />
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+    <div className="rounded-lg border border-border bg-background">
+      <button
+        type="button"
+        onClick={() => collapsible && setExpanded((e) => !e)}
+        disabled={!collapsible}
+        className={cn(
+          'flex w-full items-center gap-2.5 px-3 py-2 text-left',
+          collapsible && 'cursor-pointer hover:bg-muted/40'
+        )}
+        aria-expanded={isExpanded}
+      >
+        {collapsible ? (
+          isExpanded ? (
+            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+          )
+        ) : (
+          <span className="h-3 w-3 shrink-0" aria-hidden />
+        )}
         <div className="text-[13px] font-medium">{title}</div>
         {aiSuggested && <AiBadge />}
         <span className="flex-1" />
-        {countLabel && <span className="font-mono text-[11px] text-muted-foreground">{countLabel}</span>}
-        {right && <div className="flex items-center gap-1">{right}</div>}
-      </div>
-      <div className="grid gap-1.5">{children}</div>
+        {!isExpanded && summary && (
+          <span className="truncate font-mono text-[11px] text-muted-foreground">
+            {summary}
+          </span>
+        )}
+        {isExpanded && countLabel && (
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {countLabel}
+          </span>
+        )}
+        {isExpanded && right && (
+          <div
+            className="flex items-center gap-1"
+            // Stop the inner buttons from collapsing the slot when clicked.
+            onClick={(e) => e.stopPropagation()}
+          >
+            {right}
+          </div>
+        )}
+      </button>
+      {isExpanded && (
+        <div className="grid gap-1.5 border-t border-border/60 px-3 py-2.5">
+          {children}
+        </div>
+      )}
     </div>
+  );
+}
+
+function SuperGroup({
+  title,
+  fraction,
+  children,
+}: {
+  title: string;
+  fraction: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="mb-1.5 flex items-baseline gap-2 px-1">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {title}
+        </p>
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+          {fraction}
+        </span>
+      </div>
+      <div className="grid gap-2">{children}</div>
+    </section>
   );
 }
 

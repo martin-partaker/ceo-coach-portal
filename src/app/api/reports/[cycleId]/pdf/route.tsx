@@ -175,15 +175,98 @@ export async function GET(
             ),
           );
   const valueByDef = new Map(thisCycleValues.map((v) => [v.definitionId, v]));
+
+  // Pull historical KPI values across this CEO's last few cycles so the
+  // PDF can render a sparkline next to each tile. Limited to 6 points
+  // — enough to show a trend, narrow enough to fit beside the value.
+  const recentCycles = await db
+    .select({ id: cycles.id, periodStart: cycles.periodStart, createdAt: cycles.createdAt, label: cycles.label })
+    .from(cycles)
+    .where(eq(cycles.ceoId, ceo.id))
+    .orderBy(asc(cycles.periodStart), asc(cycles.createdAt));
+  // Truncate to the trailing 6 ending at (and including) the current cycle.
+  const idxOfCurrent = recentCycles.findIndex((c) => c.id === cycleId);
+  const windowEnd = idxOfCurrent >= 0 ? idxOfCurrent + 1 : recentCycles.length;
+  const windowStart = Math.max(0, windowEnd - 6);
+  const cycleWindow = recentCycles.slice(windowStart, windowEnd);
+  const cycleWindowIds = cycleWindow.map((c) => c.id);
+  const historyRows =
+    activeDefs.length === 0 || cycleWindowIds.length === 0
+      ? []
+      : await db
+          .select()
+          .from(cycleKpiValues)
+          .where(
+            and(
+              inArray(cycleKpiValues.cycleId, cycleWindowIds),
+              inArray(
+                cycleKpiValues.definitionId,
+                activeDefs.map((d) => d.id),
+              ),
+            ),
+          );
+  const historyByDef = new Map<string, Map<string, string>>();
+  for (const row of historyRows) {
+    let m = historyByDef.get(row.definitionId);
+    if (!m) {
+      m = new Map();
+      historyByDef.set(row.definitionId, m);
+    }
+    m.set(row.cycleId, row.value);
+  }
+
+  /**
+   * Parse a free-text KPI value into a number for charting. Accepts
+   * "$5,000,000", "5M", "12.4%", "1.2k" etc. Returns null when nothing
+   * sensible can be extracted — those points are omitted from the
+   * sparkline (the line skips them).
+   */
+  function parseKpiValue(raw: string | undefined): number | null {
+    if (!raw) return null;
+    const s = raw.trim().toLowerCase();
+    if (!s) return null;
+    const match = s.match(/-?\d+(?:[.,]\d+)*/);
+    if (!match) return null;
+    const num = Number(match[0].replace(/,/g, ''));
+    if (!Number.isFinite(num)) return null;
+    if (/\bk\b|k\s*$/.test(s)) return num * 1_000;
+    if (/\bm\b|m\s*$/.test(s)) return num * 1_000_000;
+    if (/\bb\b|b\s*$/.test(s)) return num * 1_000_000_000;
+    return num;
+  }
+
+  /**
+   * Pull the first word out of a cycle label so the chart x-axis stays
+   * compact — "Mar 2026" → "Mar". When the label has no whitespace
+   * (custom labels) we fall back to the first 6 chars.
+   */
+  function shortCycleLabel(full: string): string {
+    const trimmed = full.trim();
+    if (!trimmed) return '';
+    const first = trimmed.split(/\s+/)[0];
+    return first.length > 0 ? first.slice(0, 6) : trimmed.slice(0, 6);
+  }
+
   const pdfKpis = activeDefs
     .map((def) => {
       const v = valueByDef.get(def.id);
       if (!v) return null;
+      const hist = historyByDef.get(def.id);
+      const history = cycleWindow
+        .map((c) => {
+          const raw = hist?.get(c.id);
+          const num = parseKpiValue(raw);
+          return num !== null
+            ? { label: shortCycleLabel(c.label), value: num }
+            : null;
+        })
+        .filter((p): p is { label: string; value: number } => p !== null);
       return {
         label: def.label,
         value: v.value,
         trend: (v.trend as 'up' | 'down' | 'flat' | null) ?? undefined,
         note: v.note ?? undefined,
+        history,
       };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -215,9 +298,29 @@ export async function GET(
   };
 
   // ── Render + stream ─────────────────────────────────────────────
-  const buffer = await renderToBuffer(<CycleReportPdf data={pdfData} />);
-  const filename = `${slug(ceo.name)}_${slug(cycle.label)}_summary.pdf`;
+  // Wrap renderToBuffer so any react-pdf failure (bad child shape,
+  // SVG primitive misuse, font issue) surfaces as a 500 JSON response
+  // instead of bubbling up into Next.js's default HTML error page —
+  // the client uses `<a download>` which would otherwise save that
+  // HTML body as a `.html`/`.txt` file. The full stack lands in the
+  // dev server stderr so we can debug.
+  let buffer: Buffer;
+  try {
+    buffer = await renderToBuffer(<CycleReportPdf data={pdfData} />);
+  } catch (err) {
+    console.error('[reports/pdf] renderToBuffer failed:', err);
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      {
+        error: 'Failed to render PDF',
+        detail: message,
+        cycleId,
+      },
+      { status: 500 },
+    );
+  }
 
+  const filename = `${slug(ceo.name)}_${slug(cycle.label)}_summary.pdf`;
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,
     headers: {

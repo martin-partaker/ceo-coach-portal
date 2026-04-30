@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { Markdown, MarkdownInline } from '@/components/markdown';
 
 interface Props {
   cycleId: string;
@@ -112,6 +113,18 @@ export function ReportReviewer({
   // if the report doesn't have a structured block (older runs, or the
   // model didn't emit one).
   const [tab, setTab] = useState<Tab>('report');
+  // Reset to the default tab whenever the drawer opens or the cycle
+  // changes. Without this, a previous "switched to Email" session
+  // sticks: the component stays mounted (Radix Dialog), so without a
+  // reset the user lands back on Email next time. We deliberately
+  // don't depend on `hasReport` here so we don't yank a user who
+  // switched to Email while the structured block was still loading.
+  useEffect(() => {
+    if (open) setTab('report');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cycleId]);
+  // Fallback: if there's truly no structured block (older reports,
+  // model failure), the report tab has nothing to show — drop to email.
   useEffect(() => {
     if (!hasReport && tab === 'report') setTab('email');
   }, [hasReport, tab]);
@@ -200,19 +213,7 @@ export function ReportReviewer({
           <span className="flex-1" />
           {data && (
             <>
-              <Button asChild variant="outline" size="sm">
-                {/* Plain anchor with `download` so the browser saves
-                    the file directly. The route handler streams the
-                    rendered PDF with a Content-Disposition filename. */}
-                <a
-                  href={`/api/reports/${cycleId}/pdf`}
-                  download
-                  rel="noreferrer"
-                >
-                  <Download className="mr-1.5 h-3 w-3" />
-                  Download PDF
-                </a>
-              </Button>
+              <PdfDownloadButton cycleId={cycleId} />
               <Button
                 variant="outline"
                 size="sm"
@@ -231,6 +232,76 @@ export function ReportReviewer({
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/**
+ * Fetch the PDF blob, then trigger a save via a transient anchor.
+ * Replaces the previous `<a download>` approach so a server-side
+ * render error (renderToBuffer throwing) shows up as an inline
+ * message instead of the browser silently saving the JSON / HTML
+ * error body as a `.txt` file.
+ */
+function PdfDownloadButton({ cycleId }: { cycleId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/reports/${cycleId}/pdf`, {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        // Surface the server's JSON error if it sent one — otherwise
+        // fall back to a generic message keyed off the status.
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+          const body = await res.json();
+          if (body?.detail) detail = body.detail;
+          else if (body?.error) detail = body.error;
+        } catch {
+          /* response wasn't JSON */
+        }
+        throw new Error(detail);
+      }
+      const blob = await res.blob();
+      // Pull the server-supplied filename from Content-Disposition,
+      // fall back to a sensible default when missing/malformed.
+      const cd = res.headers.get('Content-Disposition') ?? '';
+      const fnameMatch = cd.match(/filename="?([^";]+)"?/);
+      const fname = fnameMatch?.[1] ?? `report-${cycleId.slice(0, 8)}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Download failed';
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button variant="outline" size="sm" onClick={download} disabled={busy}>
+        {busy ? (
+          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+        ) : (
+          <Download className="mr-1.5 h-3 w-3" />
+        )}
+        {busy ? 'Generating…' : 'Download PDF'}
+      </Button>
+      {error && (
+        <span className="text-[10px] text-destructive">{error}</span>
+      )}
+    </div>
   );
 }
 
@@ -819,6 +890,14 @@ function EditableProseSection({
       setEditing(false);
     },
   });
+  const regenerate = trpc.reports.regenerateSection.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.reports.getForCycle.invalidate(),
+        utils.roster.cycleSummary.invalidate(),
+      ]);
+    },
+  });
 
   // Don't render an empty readonly section — but still allow editing
   // into existence via a small "Add" affordance.
@@ -844,16 +923,27 @@ function EditableProseSection({
         tone={tone}
         icon={icon}
         extraAction={
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-            onClick={() => setEditing(true)}
-            aria-label={`Edit ${title}`}
-          >
-            <Pencil className="h-3 w-3" />
-          </Button>
+          <>
+            <RegenerateSectionButton
+              reportId={reportId}
+              field={field}
+              isPending={regenerate.isPending}
+              onRegenerate={(feedback) =>
+                regenerate.mutate({ reportId, field, feedback })
+              }
+              error={regenerate.error?.message ?? null}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setEditing(true)}
+              aria-label={`Edit ${title}`}
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
+          </>
         }
       >
         <Prose>{value}</Prose>
@@ -941,6 +1031,14 @@ function EditableListSection({
       setEditing(false);
     },
   });
+  const regenerate = trpc.reports.regenerateSection.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.reports.getForCycle.invalidate(),
+        utils.roster.cycleSummary.invalidate(),
+      ]);
+    },
+  });
 
   function save() {
     const next = draft
@@ -974,16 +1072,27 @@ function EditableListSection({
         tone={tone}
         icon={icon}
         extraAction={
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-            onClick={() => setEditing(true)}
-            aria-label={`Edit ${title}`}
-          >
-            <Pencil className="h-3 w-3" />
-          </Button>
+          <>
+            <RegenerateSectionButton
+              reportId={reportId}
+              field={field}
+              isPending={regenerate.isPending}
+              onRegenerate={(feedback) =>
+                regenerate.mutate({ reportId, field, feedback })
+              }
+              error={regenerate.error?.message ?? null}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setEditing(true)}
+              aria-label={`Edit ${title}`}
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
+          </>
         }
       >
         <BulletList items={items} numbered={field === 'suggestedNextSteps'} />
@@ -1043,6 +1152,12 @@ function EditableListSection({
 }
 
 function Prose({ children }: { children: React.ReactNode }) {
+  // The AI emits markdown — bold via **, lists via -, soft breaks. The
+  // <Markdown/> component renders all of that; falls back to plain text
+  // when the parser finds no formatting.
+  if (typeof children === 'string') {
+    return <Markdown text={children} />;
+  }
   return (
     <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
       {children}
@@ -1068,7 +1183,9 @@ function BulletList({
           ) : (
             <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/40" />
           )}
-          <span className="whitespace-pre-wrap">{item}</span>
+          <span className="whitespace-pre-wrap">
+            <MarkdownInline text={item} />
+          </span>
         </li>
       ))}
     </ul>
@@ -1123,6 +1240,63 @@ function EmptySectionShell({
         </Button>
       </div>
     </section>
+  );
+}
+
+/**
+ * Per-section regenerate button. Click → spinner → fresh AI content for
+ * just this field. Hold-shift-click (or use the title/aria hint) to
+ * supply optional feedback via a prompt() — keeps the UX terse without
+ * forcing a heavy popover. Errors render below the section header.
+ */
+function RegenerateSectionButton({
+  reportId: _reportId,
+  field,
+  isPending,
+  onRegenerate,
+  error,
+}: {
+  reportId: string;
+  field: string;
+  isPending: boolean;
+  onRegenerate: (feedback?: string) => void;
+  error: string | null;
+}) {
+  function go(e: React.MouseEvent) {
+    if (e.shiftKey) {
+      const fb = window.prompt(
+        `Re-generate "${field}" with feedback. What's wrong with the current version?`,
+      );
+      if (fb === null) return; // cancelled
+      onRegenerate(fb.trim() || undefined);
+      return;
+    }
+    onRegenerate();
+  }
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+        onClick={go}
+        disabled={isPending}
+        aria-label={`Re-generate ${field}`}
+        title="Click to re-generate this section · Shift-click to add feedback"
+      >
+        {isPending ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Sparkles className="h-3 w-3" />
+        )}
+      </Button>
+      {error && (
+        <span className="text-[10px] text-destructive" role="alert">
+          {error}
+        </span>
+      )}
+    </>
   );
 }
 

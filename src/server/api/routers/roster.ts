@@ -1,4 +1,4 @@
-import { eq, asc, and, desc, inArray } from 'drizzle-orm';
+import { eq, asc, and, desc, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import Anthropic from '@anthropic-ai/sdk';
 import { TRPCError } from '@trpc/server';
@@ -6,7 +6,9 @@ import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import {
   ceos,
   ceoEmailAliases,
+  ceoKpiDefinitions,
   coaches,
+  cycleKpiValues,
   cycles,
   journalEntries,
   transcripts as transcriptsTable,
@@ -14,6 +16,7 @@ import {
   reports,
   rawInputs,
 } from '@/db/schema';
+import type { KpiKind } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
 import { refreshAiActionItems } from '@/lib/cycles/ai-action-items';
 import {
@@ -684,18 +687,32 @@ export const rosterRouter = createTRPCRouter({
         (r) => r.matchConfidence != null && r.matchConfidence < 100
       );
 
-      // Most recent prior cycle's KPIs — drives the editor's
-      // "Continue from last cycle" button + per-row "↳ was X last
-      // month" hint. "Prior" = strictly non-overlapping (periodEnd <
-      // this cycle's periodStart) when both have dates; otherwise
-      // falls back to createdAt ordering, mirroring the rule we use
-      // for previous reports.
+      // KPIs (normalized): definitions live at the CEO level so they
+      // persist across cycles; values are per (cycle × definition).
+      // We load every non-archived definition for the CEO, then pull
+      // the value for *this* cycle (current row) and the value for
+      // the most recent strictly-prior cycle (for "↳ was X last
+      // month" hints + auto-trend derivation).
+      const definitions = await ctx.db
+        .select()
+        .from(ceoKpiDefinitions)
+        .where(
+          and(
+            eq(ceoKpiDefinitions.ceoId, ceo.id),
+            // archivedAt IS NULL — definition still active in the editor.
+            sql`${ceoKpiDefinitions.archivedAt} is null`,
+          ),
+        )
+        .orderBy(asc(ceoKpiDefinitions.sortOrder), asc(ceoKpiDefinitions.createdAt));
+
+      // "Prior cycle" rule mirrors loadPreviousReports: strictly
+      // non-overlapping by periodEnd when both have dates, fall back
+      // to createdAt ordering when not.
       const allCeoCycles = await ctx.db
         .select({
           id: cycles.id,
           periodEnd: cycles.periodEnd,
           createdAt: cycles.createdAt,
-          kpis: cycles.kpis,
           label: cycles.label,
         })
         .from(cycles)
@@ -714,7 +731,104 @@ export const rosterRouter = createTRPCRouter({
           return ak < bk ? 1 : -1;
         });
       const priorCycle = priorCycleSorted[0] ?? null;
-      const priorKpis = priorCycle?.kpis ?? [];
+
+      // Pull this-cycle and prior-cycle values in one round-trip each.
+      const definitionIds = definitions.map((d) => d.id);
+      const [thisCycleValues, priorCycleValues] = await Promise.all([
+        definitionIds.length === 0
+          ? Promise.resolve([])
+          : ctx.db
+              .select()
+              .from(cycleKpiValues)
+              .where(
+                and(
+                  eq(cycleKpiValues.cycleId, cycle.id),
+                  inArray(cycleKpiValues.definitionId, definitionIds),
+                ),
+              ),
+        priorCycle && definitionIds.length > 0
+          ? ctx.db
+              .select()
+              .from(cycleKpiValues)
+              .where(
+                and(
+                  eq(cycleKpiValues.cycleId, priorCycle.id),
+                  inArray(cycleKpiValues.definitionId, definitionIds),
+                ),
+              )
+          : Promise.resolve([]),
+      ]);
+
+      // Multi-month series for the prompt + (eventually) the inline
+      // sparkline. We pull every value for these definitions across
+      // every cycle of this CEO, sorted oldest → newest by the same
+      // periodEnd-then-createdAt rule. Bounded by `kpis` size so this
+      // stays cheap.
+      const allValues =
+        definitionIds.length === 0
+          ? []
+          : await ctx.db
+              .select({
+                value: cycleKpiValues.value,
+                trend: cycleKpiValues.trend,
+                note: cycleKpiValues.note,
+                definitionId: cycleKpiValues.definitionId,
+                cycleId: cycleKpiValues.cycleId,
+                cycleLabel: cycles.label,
+                cyclePeriodEnd: cycles.periodEnd,
+                cycleCreatedAt: cycles.createdAt,
+              })
+              .from(cycleKpiValues)
+              .innerJoin(cycles, eq(cycleKpiValues.cycleId, cycles.id))
+              .where(
+                and(
+                  eq(cycles.ceoId, ceo.id),
+                  inArray(cycleKpiValues.definitionId, definitionIds),
+                ),
+              );
+
+      const valuesByDefinition = new Map<string, typeof allValues>();
+      for (const v of allValues) {
+        const list = valuesByDefinition.get(v.definitionId) ?? [];
+        list.push(v);
+        valuesByDefinition.set(v.definitionId, list);
+      }
+      for (const list of valuesByDefinition.values()) {
+        list.sort((a, b) => {
+          const ak = a.cyclePeriodEnd ?? a.cycleCreatedAt.toISOString();
+          const bk = b.cyclePeriodEnd ?? b.cycleCreatedAt.toISOString();
+          return ak < bk ? -1 : 1;
+        });
+      }
+
+      const thisCycleByDef = new Map(thisCycleValues.map((v) => [v.definitionId, v]));
+      const priorCycleByDef = new Map(priorCycleValues.map((v) => [v.definitionId, v]));
+
+      const kpiRows = definitions.map((def) => {
+        const series = (valuesByDefinition.get(def.id) ?? []).map((v) => ({
+          cycleId: v.cycleId,
+          cycleLabel: v.cycleLabel,
+          value: v.value,
+          trend: v.trend as 'up' | 'down' | 'flat' | null,
+          note: v.note,
+        }));
+        return {
+          definition: {
+            id: def.id,
+            label: def.label,
+            unit: def.unit,
+            target: def.target,
+            kind: def.kind as KpiKind,
+            sortOrder: def.sortOrder,
+          },
+          current: thisCycleByDef.get(def.id) ?? null,
+          prior: priorCycleByDef.get(def.id) ?? null,
+          /** Oldest → newest, includes the current cycle's value when
+           *  present. Used for the multi-month series in the prompt and
+           *  the inline sparkline in step C. */
+          series,
+        };
+      });
 
       return {
         cycle,
@@ -727,7 +841,7 @@ export const rosterRouter = createTRPCRouter({
         rawInputs: cycleRawInputs,
         unconfirmedCount: unconfirmed.length,
         report: latestReport[0] ?? null,
-        priorKpis,
+        kpis: kpiRows,
         priorCycleLabel: priorCycle?.label ?? null,
       };
     }),
@@ -747,19 +861,6 @@ export const rosterRouter = createTRPCRouter({
         additionalContext: z.string().nullable().optional(),
         monthlyGoals: z.string().nullable().optional(),
         monthlyReflection: z.string().nullable().optional(),
-        // Quantitative KPI snapshots — full replace on each save (the
-        // workspace editor sends the whole list back, including blanks
-        // filtered out client-side).
-        kpis: z
-          .array(
-            z.object({
-              label: z.string().min(1),
-              value: z.string().min(1),
-              trend: z.enum(['up', 'down', 'flat']).optional(),
-              note: z.string().optional(),
-            }),
-          )
-          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -798,7 +899,8 @@ export const rosterRouter = createTRPCRouter({
         set.monthlyReflection = input.monthlyReflection;
         set.monthlyReflectionAiSuggested = false;
       }
-      if (input.kpis !== undefined) set.kpis = input.kpis;
+      // KPIs moved out of updateCycle into the dedicated kpi.* sub-API
+      // (see roster.upsertKpis below).
 
       // Sanity: if both dates supplied, end must be ≥ start
       if (set.periodStart && set.periodEnd && set.periodStart > set.periodEnd) {
@@ -814,6 +916,186 @@ export const rosterRouter = createTRPCRouter({
         .where(eq(cycles.id, input.cycleId))
         .returning();
       return updated;
+    }),
+
+  /**
+   * Replace the KPIs for a cycle in one round-trip. The editor sends
+   * the full list of (label, value, trend, note, sortOrder, optional
+   * definitionId) on each save. We:
+   *   - Resolve each row to a definitionId (re-use by id, then by
+   *     case-insensitive label match per CEO; create otherwise).
+   *   - Upsert the cycle_kpi_values row for (cycleId, definitionId).
+   *   - Delete any cycle_kpi_value not in the incoming set, so a row
+   *     removed in the editor disappears from this cycle (but the
+   *     definition lives on for other cycles).
+   *
+   * Coach-scope guard mirrors updateCycle.
+   */
+  upsertKpis: protectedProcedure
+    .input(
+      z.object({
+        cycleId: z.string().uuid(),
+        rows: z.array(
+          z.object({
+            definitionId: z.string().uuid().optional(),
+            label: z.string().min(1),
+            value: z.string().min(1),
+            trend: z.enum(['up', 'down', 'flat']).optional(),
+            note: z.string().optional(),
+            unit: z.string().optional(),
+            target: z.string().optional(),
+            kind: z
+              .enum(['number', 'currency', 'percent', 'count', 'text'])
+              .optional(),
+            sortOrder: z.number().int().optional(),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (!isUnscopedAdmin(ctx)) {
+        const [ceo] = await ctx.db
+          .select({ coachId: ceos.coachId })
+          .from(ceos)
+          .where(eq(ceos.id, cycle.ceoId))
+          .limit(1);
+        if (!ceo || ceo.coachId !== ctx.coach.id) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+      }
+
+      // Existing definitions for this CEO so we can match by label
+      // when the client doesn't send a definitionId (e.g. a freshly
+      // typed row). Case-insensitive match.
+      const existingDefs = await ctx.db
+        .select()
+        .from(ceoKpiDefinitions)
+        .where(eq(ceoKpiDefinitions.ceoId, cycle.ceoId));
+      const defByLabel = new Map(
+        existingDefs.map((d) => [d.label.trim().toLowerCase(), d]),
+      );
+      const defById = new Map(existingDefs.map((d) => [d.id, d]));
+
+      // Resolve every incoming row to a (definitionId, value, trend, note).
+      const resolved: Array<{
+        definitionId: string;
+        value: string;
+        trend: 'up' | 'down' | 'flat' | null;
+        note: string | null;
+      }> = [];
+
+      for (let i = 0; i < input.rows.length; i++) {
+        const row = input.rows[i];
+        const label = row.label.trim();
+        const value = row.value.trim();
+        if (!label || !value) continue;
+
+        let definitionId = row.definitionId;
+        if (definitionId && !defById.has(definitionId)) {
+          // Stale id (cross-CEO or already deleted) — fall back to
+          // label match instead of accidentally writing into another
+          // CEO's definition.
+          definitionId = undefined;
+        }
+        if (!definitionId) {
+          const matched = defByLabel.get(label.toLowerCase());
+          if (matched) definitionId = matched.id;
+        }
+        if (!definitionId) {
+          const [created] = await ctx.db
+            .insert(ceoKpiDefinitions)
+            .values({
+              ceoId: cycle.ceoId,
+              label,
+              unit: row.unit ?? null,
+              target: row.target ?? null,
+              kind: row.kind ?? 'text',
+              sortOrder: row.sortOrder ?? i * 10,
+            })
+            .returning();
+          definitionId = created.id;
+          defByLabel.set(label.toLowerCase(), created);
+          defById.set(created.id, created);
+        } else {
+          // Touch the existing definition's optional metadata if the
+          // client sent updates (e.g. coach renamed the label, set a
+          // target, or changed the kind).
+          const existing = defById.get(definitionId)!;
+          const patch: Partial<typeof ceoKpiDefinitions.$inferInsert> = {};
+          if (existing.label !== label) patch.label = label;
+          if (row.unit !== undefined && existing.unit !== (row.unit || null)) {
+            patch.unit = row.unit || null;
+          }
+          if (row.target !== undefined && existing.target !== (row.target || null)) {
+            patch.target = row.target || null;
+          }
+          if (row.kind !== undefined && existing.kind !== row.kind) {
+            patch.kind = row.kind;
+          }
+          if (row.sortOrder !== undefined && existing.sortOrder !== row.sortOrder) {
+            patch.sortOrder = row.sortOrder;
+          }
+          if (Object.keys(patch).length > 0) {
+            await ctx.db
+              .update(ceoKpiDefinitions)
+              .set(patch)
+              .where(eq(ceoKpiDefinitions.id, definitionId));
+          }
+        }
+
+        resolved.push({
+          definitionId,
+          value,
+          trend: row.trend ?? null,
+          note: row.note?.trim() ? row.note.trim() : null,
+        });
+      }
+
+      // Upsert each value row, then delete any cycle_kpi_value for
+      // this cycle that isn't in the resolved set (the editor removed
+      // that row in this save).
+      const keepDefIds = new Set(resolved.map((r) => r.definitionId));
+      for (const r of resolved) {
+        await ctx.db
+          .insert(cycleKpiValues)
+          .values({
+            cycleId: cycle.id,
+            definitionId: r.definitionId,
+            value: r.value,
+            trend: r.trend,
+            note: r.note,
+          })
+          .onConflictDoUpdate({
+            target: [cycleKpiValues.cycleId, cycleKpiValues.definitionId],
+            set: { value: r.value, trend: r.trend, note: r.note },
+          });
+      }
+      const existingForCycle = await ctx.db
+        .select({ definitionId: cycleKpiValues.definitionId })
+        .from(cycleKpiValues)
+        .where(eq(cycleKpiValues.cycleId, cycle.id));
+      const toDelete = existingForCycle
+        .map((v) => v.definitionId)
+        .filter((id) => !keepDefIds.has(id));
+      if (toDelete.length > 0) {
+        await ctx.db
+          .delete(cycleKpiValues)
+          .where(
+            and(
+              eq(cycleKpiValues.cycleId, cycle.id),
+              inArray(cycleKpiValues.definitionId, toDelete),
+            ),
+          );
+      }
+
+      return { ok: true, count: resolved.length };
     }),
 
   /**

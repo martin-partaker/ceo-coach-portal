@@ -1,7 +1,14 @@
 import 'server-only';
 import { db } from '@/db';
-import { curriculum, cycles, journalEntries, transcripts } from '@/db/schema';
-import { eq, asc, desc } from 'drizzle-orm';
+import {
+  ceoKpiDefinitions,
+  curriculum,
+  cycleKpiValues,
+  cycles,
+  journalEntries,
+  transcripts,
+} from '@/db/schema';
+import { and, eq, asc, desc, inArray, sql } from 'drizzle-orm';
 import type { Cycle, Ceo } from '@/db/schema';
 import {
   inputBelongsToCycle,
@@ -149,21 +156,86 @@ export async function buildPrompt({
     ? priorPatterns.map((p) => `#### ${p.label}\n${p.text}`).join('\n\n---\n\n')
     : '(no prior pattern observations recorded yet — base patternObservations on this cycle alone, and say so explicitly.)';
 
-  // Quantitative KPI snapshots logged for this cycle. Stored as
-  // structured rows (label / value / trend / note) so the prompt can
-  // surface them as a clean block rather than burying them in prose.
-  const kpiRows = (cycle.kpis ?? []).filter(
-    (k) => k.label?.trim() && k.value?.trim(),
-  );
-  const kpiText = kpiRows.length > 0
-    ? kpiRows
-        .map((k) => {
-          const trend = k.trend ? ` (${k.trend})` : '';
-          const note = k.note?.trim() ? ` — ${k.note.trim()}` : '';
-          return `- **${k.label.trim()}**: ${k.value.trim()}${trend}${note}`;
+  // KPIs (normalized): definitions persist at the CEO level; this
+  // cycle's measurements live as cycle_kpi_values rows. We pull the
+  // full series for every active definition so the prompt can render
+  // each KPI as a multi-month progression — that's the trajectory the
+  // model needs to write "EBITDA tracking from $3.5M toward $5M" style
+  // analysis instead of a flat single-cell snapshot.
+  const activeDefs = await db
+    .select()
+    .from(ceoKpiDefinitions)
+    .where(
+      and(
+        eq(ceoKpiDefinitions.ceoId, ceo.id),
+        sql`${ceoKpiDefinitions.archivedAt} is null`,
+      ),
+    )
+    .orderBy(asc(ceoKpiDefinitions.sortOrder), asc(ceoKpiDefinitions.createdAt));
+
+  const allKpiValues = activeDefs.length === 0
+    ? []
+    : await db
+        .select({
+          definitionId: cycleKpiValues.definitionId,
+          value: cycleKpiValues.value,
+          trend: cycleKpiValues.trend,
+          note: cycleKpiValues.note,
+          cycleId: cycleKpiValues.cycleId,
+          cycleLabel: cycles.label,
+          cyclePeriodEnd: cycles.periodEnd,
+          cycleCreatedAt: cycles.createdAt,
         })
-        .join('\n')
-    : '(no KPIs recorded for this cycle)';
+        .from(cycleKpiValues)
+        .innerJoin(cycles, eq(cycleKpiValues.cycleId, cycles.id))
+        .where(
+          and(
+            eq(cycles.ceoId, ceo.id),
+            inArray(
+              cycleKpiValues.definitionId,
+              activeDefs.map((d) => d.id),
+            ),
+          ),
+        );
+
+  // Group + sort series oldest → newest. Mark which entry corresponds
+  // to this cycle so the prompt can highlight the "current" reading.
+  const seriesByDef = new Map<string, typeof allKpiValues>();
+  for (const v of allKpiValues) {
+    const list = seriesByDef.get(v.definitionId) ?? [];
+    list.push(v);
+    seriesByDef.set(v.definitionId, list);
+  }
+  for (const list of seriesByDef.values()) {
+    list.sort((a, b) => {
+      const ak = a.cyclePeriodEnd ?? a.cycleCreatedAt.toISOString();
+      const bk = b.cyclePeriodEnd ?? b.cycleCreatedAt.toISOString();
+      return ak < bk ? -1 : 1;
+    });
+  }
+
+  const kpiBlocks = activeDefs
+    .map((def) => {
+      const series = seriesByDef.get(def.id) ?? [];
+      if (series.length === 0) return null; // no measurements anywhere
+      const points = series
+        .map((p) => {
+          const trend = p.trend ? ` ${p.trend}` : '';
+          const isCurrent = p.cycleId === cycle.id ? ' ← this cycle' : '';
+          const note = p.note?.trim() ? ` — ${p.note.trim()}` : '';
+          return `  - ${p.cycleLabel}: ${p.value}${trend}${note}${isCurrent}`;
+        })
+        .join('\n');
+      const targetLine = def.target?.trim()
+        ? `\n  target: ${def.target.trim()}`
+        : '';
+      return `- **${def.label}**${def.unit ? ` (${def.unit})` : ''}:${targetLine}\n${points}`;
+    })
+    .filter(Boolean) as string[];
+
+  const kpiText = kpiBlocks.length > 0
+    ? kpiBlocks.join('\n')
+    : '(no KPIs recorded for this CEO yet)';
 
   const systemPrompt = `You are writing a personalised coaching update email on behalf of a coach named ${coachName} to their CEO client named ${ceo.name}. This email is sent after each coaching cycle to make the CEO feel heard, understood, and motivated.
 

@@ -50,25 +50,12 @@ export const cycles = pgTable('cycles', {
   monthlyGoals: text('monthly_goals'),
   monthlyReflection: text('monthly_reflection'),
   additionalContext: text('additional_context'),
-  // Quantitative KPI snapshots for the cycle. Spec ("KPI/metric updates")
-  // calls these out as a first-class CEO input. Stored as JSONB so the
-  // shape stays flexible (label, value, optional trend, optional note);
-  // the typed surface lives on `Kpi` below and on the cycles router input.
-  kpis: jsonb('kpis').$type<CycleKpi[]>().notNull().default([]),
   transcriptSkipped: boolean('transcript_skipped').notNull().default(false),
   monthlyGoalsAiSuggested: boolean('monthly_goals_ai_suggested').notNull().default(false),
   monthlyReflectionAiSuggested: boolean('monthly_reflection_ai_suggested').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
-/** Single KPI row stored in `cycles.kpis`. Trend is optional so a coach
- *  who's just listing a metric without context isn't forced to pick. */
-export interface CycleKpi {
-  label: string;
-  value: string;
-  trend?: 'up' | 'down' | 'flat';
-  note?: string;
-}
 
 export const journalEntries = pgTable('journal_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -234,6 +221,70 @@ export const tallyForms = pgTable('tally_forms', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
 
+/**
+ * Per-CEO KPI definitions (label, optional unit + target, kind for the
+ * input affordance). Definitions persist across cycles so month-over-
+ * month progression for "Revenue", "EBITDA", etc. is queryable as a
+ * series. Soft-delete via `archivedAt` so historical reports can still
+ * resolve a definition that the coach stopped tracking later.
+ */
+export const ceoKpiDefinitions = pgTable(
+  'ceo_kpi_definitions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ceoId: uuid('ceo_id')
+      .notNull()
+      .references(() => ceos.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    /** Optional unit hint, e.g. "$", "%". Currently informational; the
+     *  PDF renders it adjacent to the value when set. */
+    unit: text('unit'),
+    /** Optional aspirational target for the KPI (free-text so it can be
+     *  "$10M" or "5 finalist banks"). PDF renders progress when both
+     *  current and target parse as the same kind of number. */
+    target: text('target'),
+    /** Drives input UX + parsing. Defaults to 'text' so the coach can
+     *  log anything; numeric kinds enable trend math and progress bars. */
+    kind: text('kind').notNull().default('text'),
+    /** Manual ordering for the editor. Lower comes first. */
+    sortOrder: integer('sort_order').notNull().default(0),
+    /** Soft-delete: hide from the editor but keep referenced values
+     *  intact so old reports / PDFs still render. */
+    archivedAt: timestamp('archived_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    ceoIdx: index('ceo_kpi_definitions_ceo_idx').on(t.ceoId),
+  }),
+);
+
+/** Per-cycle KPI measurement. One row per (cycle × definition).
+ *  Trend is stored as the operator's "sticky" choice (auto-derived
+ *  trend lives only on the client). */
+export const cycleKpiValues = pgTable(
+  'cycle_kpi_values',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    cycleId: uuid('cycle_id')
+      .notNull()
+      .references(() => cycles.id, { onDelete: 'cascade' }),
+    definitionId: uuid('definition_id')
+      .notNull()
+      .references(() => ceoKpiDefinitions.id, { onDelete: 'cascade' }),
+    value: text('value').notNull(),
+    trend: text('trend'),
+    note: text('note'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    /** A cycle can only have one measurement per definition. */
+    cycleDefinitionUnique: uniqueIndex('cycle_kpi_unique').on(
+      t.cycleId,
+      t.definitionId,
+    ),
+  }),
+);
+
 // Type exports
 export type Coach = typeof coaches.$inferSelect;
 export type NewCoach = typeof coaches.$inferInsert;
@@ -249,3 +300,6 @@ export type NewRawInput = typeof rawInputs.$inferInsert;
 export type CeoEmailAlias = typeof ceoEmailAliases.$inferSelect;
 export type IngestionCursor = typeof ingestionCursors.$inferSelect;
 export type TallyForm = typeof tallyForms.$inferSelect;
+export type CeoKpiDefinition = typeof ceoKpiDefinitions.$inferSelect;
+export type CycleKpiValue = typeof cycleKpiValues.$inferSelect;
+export type KpiKind = 'number' | 'currency' | 'percent' | 'count' | 'text';

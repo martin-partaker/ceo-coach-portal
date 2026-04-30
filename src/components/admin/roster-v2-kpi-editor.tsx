@@ -15,18 +15,47 @@ import {
   Trash2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { KpiKind } from '@/db/schema';
 
-export interface KpiRow {
+/* ─────────────────── Types from cycleDetail ─────────────────── */
+
+export interface KpiCellData {
+  /** When non-null we're talking to an existing definition; the editor
+   *  passes the id back so the server doesn't need to label-match. */
+  definition: {
+    id: string;
+    label: string;
+    unit: string | null;
+    target: string | null;
+    kind: KpiKind;
+    sortOrder: number;
+  };
+  current: { value: string; trend: string | null; note: string | null } | null;
+  prior: { value: string; trend: string | null; note: string | null } | null;
+  /** Oldest → newest. Includes current cycle's value when present.
+   *  Step C consumes this for the inline sparkline. */
+  series: Array<{
+    cycleId: string;
+    cycleLabel: string;
+    value: string;
+    trend: 'up' | 'down' | 'flat' | null;
+    note: string | null;
+  }>;
+}
+
+interface EditorRow {
+  /** Stable client-side id. Persisted definitions use their real id;
+   *  freshly typed rows use a synthetic prefix that the upsert ignores. */
+  _id: string;
+  /** When set, the server treats this row as an existing definition. */
+  definitionId?: string;
   label: string;
   value: string;
   trend?: 'up' | 'down' | 'flat';
   note?: string;
-}
-
-interface KpiRowWithId extends KpiRow {
-  /** Stable client-side id so React keys don't shift on insert/remove
-   *  (which used to remount Radix Selects + lose focus). Not persisted. */
-  _id: string;
+  unit?: string;
+  target?: string;
+  kind?: KpiKind;
 }
 
 const SAVE_DEBOUNCE_MS = 600;
@@ -37,110 +66,119 @@ const TREND_OPTIONS: Array<{ id: 'up' | 'down' | 'flat'; Icon: typeof ArrowUp; t
 ];
 
 let _idCounter = 0;
-const nextId = () => `kpi-${Date.now().toString(36)}-${(_idCounter++).toString(36)}`;
+const synthId = () => `new-${Date.now().toString(36)}-${(_idCounter++).toString(36)}`;
+
+function rowsFromKpis(kpis: KpiCellData[]): EditorRow[] {
+  return kpis.map((k) => ({
+    _id: k.definition.id,
+    definitionId: k.definition.id,
+    label: k.definition.label,
+    value: k.current?.value ?? '',
+    trend: (k.current?.trend ?? undefined) as EditorRow['trend'],
+    note: k.current?.note ?? undefined,
+    unit: k.definition.unit ?? undefined,
+    target: k.definition.target ?? undefined,
+    kind: k.definition.kind,
+  }));
+}
 
 /**
  * Inline KPI editor for the cycle workspace.
  *
- * Each row is label + value + optional trend + optional note. The whole
- * list is sent back to roster.updateCycle on each (debounced) save —
- * partial diffs aren't worth the complexity here since cycle KPI lists
- * are short. On save success we patch the react-query cache directly via
- * setQueryData instead of invalidating cycleDetail; that avoids the
- * mid-edit refetch flicker that used to wipe focus and remount the
- * trend selector portal.
+ * Step B switched the schema from cycles.kpis JSONB to normalized
+ * ceo_kpi_definitions + cycle_kpi_values, and this editor talks to the
+ * new roster.upsertKpis mutation. Each row is a label / value / trend
+ * triple plus optional note + unit + target. Definitions persist across
+ * cycles, so adding a row in cycle N also makes it appear (empty) on
+ * cycle N+1's editor via the prior-cycle rows passed in props.
  *
- * When this cycle is empty and a prior cycle has KPIs, a "Continue from
- * {prior label}" CTA pre-populates the rows with the prior labels (values
- * blank). Each row also shows a "↳ was X last month" hint when its label
- * matches a prior KPI. Trend is auto-derived from the numeric delta when
- * both current and prior values parse as numbers; the manual buttons
- * below still let the coach override for non-numeric metrics.
+ * UX behaviours kept from step A:
+ *   - "Continue from {prior cycle label}" CTA when the cycle has no
+ *     definitions yet but a prior cycle had some.
+ *   - "↳ was X last cycle" hint inline under the value input.
+ *   - Auto-derived trend when both current + prior values parse as
+ *     numbers, with a manual override that "sticks".
+ *   - Stable React keys + memo'd rows + setQueryData on save (no
+ *     mid-edit refetch flicker).
  */
 export function CycleKpiEditor({
   cycleId,
-  initialKpis,
-  priorKpis = [],
+  kpis,
   priorCycleLabel = null,
 }: {
   cycleId: string;
-  initialKpis: KpiRow[];
-  priorKpis?: KpiRow[];
+  kpis: KpiCellData[];
   priorCycleLabel?: string | null;
 }) {
   const utils = trpc.useUtils();
-  const [rows, setRows] = useState<KpiRowWithId[]>(() =>
-    initialKpis.map((k) => ({ ...k, _id: nextId() })),
-  );
+  const [rows, setRows] = useState<EditorRow[]>(() => rowsFromKpis(kpis));
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Persist the last-saved JSON so we can ignore upstream re-renders
-  // that re-emit the same array reference.
-  const lastSavedRef = useRef<string>(JSON.stringify(cleanRows(initialKpis)));
+  const lastSavedRef = useRef<string>(JSON.stringify(serializeForSave(rowsFromKpis(kpis))));
 
   // Re-seed only when the upstream value structurally differs from what
-  // we just saved (e.g. cycle switch, server returns new data after a
-  // sibling page mutated). Reference-only change is ignored.
+  // we just saved (cycle switch, server-side change). Reference-only
+  // re-renders are ignored.
   useEffect(() => {
-    const upstream = JSON.stringify(cleanRows(initialKpis));
-    if (upstream !== lastSavedRef.current) {
-      setRows(initialKpis.map((k) => ({ ...k, _id: nextId() })));
-      lastSavedRef.current = upstream;
+    const upstream = rowsFromKpis(kpis);
+    const upstreamKey = JSON.stringify(serializeForSave(upstream));
+    if (upstreamKey !== lastSavedRef.current) {
+      setRows(upstream);
+      lastSavedRef.current = upstreamKey;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialKpis]);
+  }, [kpis]);
 
-  // Lookup map for prior KPIs by lowercased label, used for the "↳ was
-  // X last month" hint and for auto-trend derivation.
-  const priorByLabel = useMemo(() => {
-    const m = new Map<string, KpiRow>();
-    for (const k of priorKpis) m.set(k.label.trim().toLowerCase(), k);
+  // Hint lookup: prior values keyed by definition id (preferred) and
+  // by lowercased label (fallback for freshly-typed rows that don't
+  // have a definitionId yet but happen to use a known label).
+  const priorByDef = useMemo(() => {
+    const m = new Map<string, KpiCellData['prior']>();
+    for (const k of kpis) if (k.prior) m.set(k.definition.id, k.prior);
     return m;
-  }, [priorKpis]);
+  }, [kpis]);
+  const priorByLabel = useMemo(() => {
+    const m = new Map<string, KpiCellData['prior']>();
+    for (const k of kpis) if (k.prior) m.set(k.definition.label.trim().toLowerCase(), k.prior);
+    return m;
+  }, [kpis]);
+  const priorKpis = useMemo(() => kpis.filter((k) => k.prior !== null), [kpis]);
 
-  const update = trpc.roster.updateCycle.useMutation({
-    onSuccess: (updated) => {
-      lastSavedRef.current = JSON.stringify(cleanRows(rows));
+  const upsert = trpc.roster.upsertKpis.useMutation({
+    onSuccess: () => {
+      lastSavedRef.current = JSON.stringify(serializeForSave(rows));
       setSavedAt(Date.now());
       setError(null);
-      // Patch the cycleDetail cache in place instead of invalidating —
-      // that's what eliminates the mid-edit refetch flicker. The
-      // workspace's other reads (e.g. the InputSlot summary count) read
-      // off cycleSummary, which we DO invalidate so the headline stats
-      // stay fresh.
-      utils.roster.cycleDetail.setData({ cycleId }, (prev) => {
-        if (!prev) return prev;
-        return { ...prev, cycle: { ...prev.cycle, kpis: updated.kpis ?? [] } };
-      });
-      utils.roster.cycleSummary.invalidate();
+      // Invalidate cycleDetail (we *want* the server-merged definitions
+      // back so freshly-created rows pick up their persisted ids), but
+      // skip cycleSummary since KPIs aren't in that shape.
+      utils.roster.cycleDetail.invalidate({ cycleId });
     },
     onError: (e) => setError(e.message),
   });
 
-  // Debounced save on any structural change. We strip the _id field
-  // and drop blank rows before sending so a half-typed Add KPI doesn't
-  // fail the zod min(1) on label/value.
+  // Debounced save on any structural change.
   useEffect(() => {
-    const cleaned = cleanRows(rows);
+    const cleaned = serializeForSave(rows);
     const next = JSON.stringify(cleaned);
     if (next === lastSavedRef.current) return;
     const t = setTimeout(() => {
-      update.mutate({ cycleId, kpis: cleaned });
+      upsert.mutate({ cycleId, rows: cleaned });
     }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, cycleId]);
 
-  const dirty = JSON.stringify(cleanRows(rows)) !== lastSavedRef.current;
+  const dirty = JSON.stringify(serializeForSave(rows)) !== lastSavedRef.current;
   const showSaved = savedAt && Date.now() - savedAt < 4000 && !dirty;
 
-  function patchRow(id: string, patch: Partial<KpiRow>) {
+  function patchRow(id: string, patch: Partial<EditorRow>) {
     setRows((prev) => prev.map((r) => (r._id === id ? { ...r, ...patch } : r)));
   }
-  function addRow(seed?: Partial<KpiRow>) {
+  function addRow() {
     setRows((prev) => [
       ...prev,
-      { _id: nextId(), label: '', value: '', ...seed },
+      { _id: synthId(), label: '', value: '', kind: 'text' },
     ]);
   }
   function removeRow(id: string) {
@@ -149,11 +187,13 @@ export function CycleKpiEditor({
   function copyFromPrior() {
     setRows(
       priorKpis.map((k) => ({
-        _id: nextId(),
-        label: k.label,
+        _id: k.definition.id,
+        definitionId: k.definition.id,
+        label: k.definition.label,
         value: '',
-        // Trend is derived per-row at render — we don't carry the prior
-        // trend forward as the new cycle's trend, since that would lie.
+        unit: k.definition.unit ?? undefined,
+        target: k.definition.target ?? undefined,
+        kind: k.definition.kind,
       })),
     );
   }
@@ -183,7 +223,7 @@ export function CycleKpiEditor({
             size="sm"
             variant="outline"
             className="h-6 px-2 text-[11px]"
-            onClick={() => addRow()}
+            onClick={addRow}
           >
             <Plus className="mr-1 h-3 w-3" /> Add new KPI
           </Button>
@@ -196,9 +236,10 @@ export function CycleKpiEditor({
         <div className="grid gap-1.5">
           {rows.map((row) => {
             const prior =
-              row.label.trim().length > 0
-                ? priorByLabel.get(row.label.trim().toLowerCase()) ?? null
-                : null;
+              (row.definitionId && priorByDef.get(row.definitionId)) ||
+              (row.label.trim() &&
+                priorByLabel.get(row.label.trim().toLowerCase())) ||
+              null;
             return (
               <KpiRowEditor
                 key={row._id}
@@ -219,7 +260,7 @@ export function CycleKpiEditor({
             size="sm"
             variant="outline"
             className="h-6 border-dashed px-2 text-[11px] text-muted-foreground"
-            onClick={() => addRow()}
+            onClick={addRow}
           >
             <Plus className="mr-1 h-3 w-3" /> Add KPI
           </Button>
@@ -229,7 +270,7 @@ export function CycleKpiEditor({
               error && 'text-destructive',
             )}
           >
-            {update.isPending ? (
+            {upsert.isPending ? (
               <>
                 <Loader2 className="h-2.5 w-2.5 animate-spin" /> saving…
               </>
@@ -257,22 +298,14 @@ const KpiRowEditor = memo(function KpiRowEditor({
   onPatch,
   onRemove,
 }: {
-  row: KpiRowWithId;
-  prior: KpiRow | null;
-  onPatch: (patch: Partial<KpiRow>) => void;
+  row: EditorRow;
+  prior: { value: string; trend: string | null; note: string | null } | null;
+  onPatch: (patch: Partial<EditorRow>) => void;
   onRemove: () => void;
 }) {
-  // Auto-derive trend whenever the value or prior changes IF both parse
-  // as numbers. Manual override (clicking a trend button) sets a "sticky"
-  // trend that the auto-derivation respects — coaches need to be able to
-  // mark "down" on a metric where the comparison-derived direction would
-  // be wrong (e.g. inverted KPIs like "Days to close").
   const autoTrend = useMemo(() => deriveTrend(prior?.value, row.value), [prior, row.value]);
   const stickyTrendRef = useRef<boolean>(!!row.trend);
   useEffect(() => {
-    // If we have an autoTrend and the user hasn't explicitly clicked a
-    // trend in this session, mirror it onto the row. Doesn't fight a
-    // manual override since stickyTrendRef stays true after a click.
     if (!stickyTrendRef.current && autoTrend && autoTrend !== row.trend) {
       onPatch({ trend: autoTrend });
     }
@@ -338,8 +371,8 @@ function TrendButtons({
   derived,
   onChange,
 }: {
-  value: KpiRow['trend'];
-  derived: KpiRow['trend'];
+  value: EditorRow['trend'];
+  derived: EditorRow['trend'];
   onChange: (t: 'up' | 'down' | 'flat' | undefined) => void;
 }) {
   return (
@@ -373,27 +406,22 @@ function TrendButtons({
 
 /* ─────────────────────── Helpers ─────────────────────── */
 
-function cleanRows(rows: Array<KpiRow | KpiRowWithId>): KpiRow[] {
+function serializeForSave(rows: EditorRow[]) {
   return rows
-    .map((r) => ({
+    .map((r, i) => ({
+      definitionId: r.definitionId,
       label: r.label.trim(),
       value: r.value.trim(),
       trend: r.trend,
       note: r.note?.trim() || undefined,
+      unit: r.unit?.trim() || undefined,
+      target: r.target?.trim() || undefined,
+      kind: r.kind,
+      sortOrder: i * 10,
     }))
     .filter((r) => r.label && r.value);
 }
 
-/**
- * Pull a numeric value out of a KPI cell. Strips currency symbols,
- * commas, and a trailing M/MM/B/K multiplier. Returns null if there's
- * no recognisable number.
- *
- *  "$5.2M"   →  5_200_000
- *  "1.2 mm"  →  1_200_000
- *  "12%"     →  12
- *  "two"     →  null
- */
 function parseNumeric(input: string | undefined | null): number | null {
   if (!input) return null;
   const s = input.trim().toLowerCase().replace(/[$£€,]/g, '');

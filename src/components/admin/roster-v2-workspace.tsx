@@ -516,21 +516,22 @@ function CycleBody({
         <InputSlot
           title="KPIs / Metrics"
           status={
-            (data?.cycle.kpis?.length ?? 0) > 0 ? 'done' : 'optional'
+            (data?.kpis?.filter((k) => k.current?.value).length ?? 0) > 0
+              ? 'done'
+              : 'optional'
           }
-          summary={
-            (data?.cycle.kpis?.length ?? 0) > 0
-              ? `${data?.cycle.kpis?.length} metric${
-                  (data?.cycle.kpis?.length ?? 0) === 1 ? '' : 's'
-                } logged`
-              : undefined
-          }
+          summary={(() => {
+            const filled =
+              data?.kpis?.filter((k) => k.current?.value).length ?? 0;
+            return filled > 0
+              ? `${filled} metric${filled === 1 ? '' : 's'} logged`
+              : undefined;
+          })()}
         >
           {data ? (
             <CycleKpiEditor
               cycleId={cycle.id}
-              initialKpis={data.cycle.kpis ?? []}
-              priorKpis={data.priorKpis ?? []}
+              kpis={data.kpis ?? []}
               priorCycleLabel={data.priorCycleLabel ?? null}
             />
           ) : (
@@ -994,12 +995,17 @@ function ReadinessCard({
       setReviewOpen(true);
     },
   });
+  // Order mirrors the left-hand form's top-to-bottom flow so the
+  // operator's eye sweeps the same sequence on both columns: the 10x
+  // banner is at the top of the page, then Inputs (transcript + weekly
+  // journals), then Synthesis (monthly goals + reflection), then the
+  // Action Items section last.
   const items: Array<{ key: keyof RosterCycle['readiness']; label: string }> = [
     { key: 'tenx', label: '10x goal' },
+    { key: 'tx', label: 'Zoom transcript' },
+    { key: 'weekly', label: 'Weekly journals (≥3)' },
     { key: 'goals', label: 'Monthly goals' },
     { key: 'reflect', label: 'Monthly reflection' },
-    { key: 'weekly', label: 'Weekly journals (≥3)' },
-    { key: 'tx', label: 'Zoom transcript' },
     { key: 'actions', label: 'Action items reviewed' },
   ];
 

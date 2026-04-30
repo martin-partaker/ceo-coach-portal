@@ -1,10 +1,17 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { auth } from '@/lib/auth/server';
 import { db } from '@/db';
-import { cycles, ceos, coaches, reports } from '@/db/schema';
+import {
+  cycles,
+  ceos,
+  ceoKpiDefinitions,
+  coaches,
+  cycleKpiValues,
+  reports,
+} from '@/db/schema';
 import { IMPERSONATE_COOKIE } from '@/server/api/trpc';
 import {
   CycleReportPdf,
@@ -139,6 +146,48 @@ export async function GET(
 
   const json = latestReport.contentJson as ReportJson | null;
 
+  // KPIs (normalized): pull this cycle's measurements with the
+  // matching definition row attached, so the PDF can render label +
+  // unit + target + value + trend.
+  const activeDefs = await db
+    .select()
+    .from(ceoKpiDefinitions)
+    .where(
+      and(
+        eq(ceoKpiDefinitions.ceoId, ceo.id),
+        sql`${ceoKpiDefinitions.archivedAt} is null`,
+      ),
+    )
+    .orderBy(asc(ceoKpiDefinitions.sortOrder), asc(ceoKpiDefinitions.createdAt));
+  const thisCycleValues =
+    activeDefs.length === 0
+      ? []
+      : await db
+          .select()
+          .from(cycleKpiValues)
+          .where(
+            and(
+              eq(cycleKpiValues.cycleId, cycleId),
+              inArray(
+                cycleKpiValues.definitionId,
+                activeDefs.map((d) => d.id),
+              ),
+            ),
+          );
+  const valueByDef = new Map(thisCycleValues.map((v) => [v.definitionId, v]));
+  const pdfKpis = activeDefs
+    .map((def) => {
+      const v = valueByDef.get(def.id);
+      if (!v) return null;
+      return {
+        label: def.label,
+        value: v.value,
+        trend: (v.trend as 'up' | 'down' | 'flat' | null) ?? undefined,
+        note: v.note ?? undefined,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
   // ── Assemble PDF data ───────────────────────────────────────────
   const pdfData: CycleReportPdfData = {
     ceo: {
@@ -151,7 +200,7 @@ export async function GET(
       periodEnd: cycle.periodEnd ?? null,
       monthlyGoals: cycle.monthlyGoals ?? null,
       monthlyReflection: cycle.monthlyReflection ?? null,
-      kpis: cycle.kpis ?? [],
+      kpis: pdfKpis,
     },
     coach: assignedCoach ? { name: assignedCoach.name } : null,
     report: json?.report ?? {},

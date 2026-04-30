@@ -7,10 +7,9 @@ import { RosterV2Page } from '@/components/admin/roster-v2-page';
 import { CycleWorkspace } from '@/components/admin/roster-v2-workspace';
 
 /**
- * Coach-side mount of the Roster v2 page. The same `roster.cycleSummary`
+ * Coach-side mount of the Dashboard page. The same `roster.cycleSummary`
  * query (now coach-scoped per Phase 1) backs both this and the admin
- * Roster v2 — only `surface="coach"` flips the page chrome:
- *   - title "Dashboard" instead of "Roster"
+ * Dashboard at /admin/ceos — only `surface="coach"` flips the chrome:
  *   - no manager-mode toggle, no per-coach grouping
  *   - coach-scoped AddCeoDialog (`ceos.create`) instead of the
  *     admin RosterAddCeoDialog (`admin.createCeo`)
@@ -18,6 +17,11 @@ import { CycleWorkspace } from '@/components/admin/roster-v2-workspace';
  *
  * The expanded inline workspace is identical to the admin one and is
  * wired through `renderExpanded` exactly the same way.
+ *
+ * (The internal component name "RosterV2Page" + the `roster.*` tRPC
+ * router are kept as-is — only user-facing strings flipped to
+ * "Dashboard". Renaming the internals would be a much bigger churn
+ * for no behavioural payoff.)
  */
 export function CoachDashboardWrapper({ currentCoachId }: { currentCoachId: string }) {
   return (

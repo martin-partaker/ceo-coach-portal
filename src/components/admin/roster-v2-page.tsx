@@ -208,7 +208,7 @@ export function RosterV2Page({
     );
   }
 
-  const headerTitle = isAdmin ? 'Roster' : 'Dashboard';
+  const headerTitle = 'Dashboard';
   // Show only buckets that have at least one CEO so the math always adds
   // up to the headline total. The order here is roughly action priority:
   // ready ⟶ generated are things the operator should look at; gathering
@@ -326,8 +326,12 @@ export function RosterV2Page({
 }
 
 function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
+  // Mode internal id stays 'roster' to avoid ripping through every
+  // reference; the user-facing label is "List" since the page is now
+  // titled "Dashboard" (calling the toggle "Roster | Manager" inside
+  // a "Dashboard" page would read weird).
   const opts: Array<{ id: Mode; label: string }> = [
-    { id: 'roster', label: 'Roster' },
+    { id: 'roster', label: 'List' },
     { id: 'manager', label: 'Manager' },
   ];
   return (

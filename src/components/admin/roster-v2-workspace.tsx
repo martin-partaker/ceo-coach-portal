@@ -38,11 +38,18 @@ import type {
   RosterCeoSummary,
   RosterCycle,
 } from '@/server/api/routers/roster';
-import { CONTENT_TYPE_DOT, fmtShortDate, PHASE_DOT, dayOffset, relativeDay, deriveCycleLabel } from './roster-v2-shared';
+import { CONTENT_TYPE_DOT, CONTENT_TYPE_LABEL, fmtShortDate, PHASE_DOT, dayOffset, relativeDay, deriveCycleLabel } from './roster-v2-shared';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { CycleEditDialog } from './roster-v2-cycle-edit-dialog';
 import { CycleCreateDialog } from './roster-v2-cycle-create-dialog';
 import { NotesEditor } from './roster-v2-notes-editor';
 import { CycleFieldEditor } from './roster-v2-cycle-field-editor';
+import { ActionItemsEditableList } from './roster-v2-action-items';
 import { PromptInspector } from './prompt-inspector';
 import { ManualTranscriptDialog } from './manual-transcript-dialog';
 import { AddWeekDialog } from './add-week-dialog';
@@ -464,7 +471,7 @@ function CycleBody({
           )}
         </InputSlot>
 
-        <ActionItemsSlot cycleId={cycle.id} ceoId={ceo.id} data={data} readinessDone={cycle.readiness.actions.done} />
+        <ActionItemsSlot cycleId={cycle.id} data={data} />
       </div>
 
       {/* Right rail */}
@@ -497,40 +504,85 @@ function CycleSubmissionsStrip({ cycle }: { cycle: RosterCycle }) {
   const end = new Date(cycle.periodEnd);
   const span = (end.getTime() - start.getTime()) / 86_400_000;
   if (span <= 0) return null;
+  const today = new Date();
   return (
-    <div className="relative h-7 rounded border border-border bg-background px-1.5">
-      <div className="absolute left-2 top-1.5 font-mono text-[10px] text-muted-foreground">
-        {fmtShortDate(cycle.periodStart)}
+    <TooltipProvider delayDuration={150}>
+      <div className="relative h-7 rounded border border-border bg-background px-1.5">
+        <div className="absolute left-2 top-1.5 font-mono text-[10px] text-muted-foreground">
+          {fmtShortDate(cycle.periodStart)}
+        </div>
+        <div className="absolute right-2 top-1.5 font-mono text-[10px] text-muted-foreground">
+          {fmtShortDate(cycle.periodEnd)}
+        </div>
+        {cycle.submissions.map((s) => {
+          const sd = new Date(s.occurredAt);
+          const offset = (sd.getTime() - start.getTime()) / 86_400_000;
+          const pct = (offset / span) * 100;
+          if (pct < 0 || pct > 100) return null;
+          const color = CONTENT_TYPE_DOT[s.type] ?? 'var(--muted-foreground)';
+          const unconfirmed = s.status.includes('unconfirmed');
+          return (
+            <Tooltip key={s.rawInputId}>
+              <TooltipTrigger asChild>
+                <span
+                  className="absolute cursor-help"
+                  style={{
+                    left: `${pct}%`,
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    background: unconfirmed ? 'transparent' : color,
+                    border: `1.5px solid ${color}`,
+                  }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[260px]">
+                <SubmissionTooltip submission={s} today={today} />
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
       </div>
-      <div className="absolute right-2 top-1.5 font-mono text-[10px] text-muted-foreground">
-        {fmtShortDate(cycle.periodEnd)}
+    </TooltipProvider>
+  );
+}
+
+/**
+ * Compact tooltip body shown on hover of a submission dot. Surfaces what
+ * the dot actually represents — content type, source (Tally / Zoom), the
+ * exact submission date, relative age, and the attachment status — so the
+ * operator can decode the timeline without expanding the row.
+ */
+function SubmissionTooltip({
+  submission,
+  today,
+}: {
+  submission: RosterCycle['submissions'][number];
+  today: Date;
+}) {
+  const typeLabel = CONTENT_TYPE_LABEL[submission.type] ?? submission.type;
+  const sourceLabel =
+    submission.source === 'zoom'
+      ? 'Zoom'
+      : submission.source === 'tally'
+        ? 'Tally'
+        : submission.source;
+  const date = fmtShortDate(submission.occurredAt.slice(0, 10));
+  const rel = relativeDay(dayOffset(submission.occurredAt, today));
+  const unconfirmed = submission.status.includes('unconfirmed');
+  return (
+    <div className="space-y-0.5">
+      <div className="font-medium">{typeLabel}</div>
+      <div className="font-mono text-[10px] opacity-80">
+        {sourceLabel} · {date} · {rel}
       </div>
-      {cycle.submissions.map((s) => {
-        const sd = new Date(s.occurredAt);
-        const offset = (sd.getTime() - start.getTime()) / 86_400_000;
-        const pct = (offset / span) * 100;
-        if (pct < 0 || pct > 100) return null;
-        const color = CONTENT_TYPE_DOT[s.type] ?? 'var(--muted-foreground)';
-        const unconfirmed = s.status.includes('unconfirmed');
-        const today = new Date();
-        return (
-          <span
-            key={s.rawInputId}
-            title={`${s.type} · ${relativeDay(dayOffset(s.occurredAt, today))}`}
-            className="absolute"
-            style={{
-              left: `${pct}%`,
-              top: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: 8,
-              height: 8,
-              borderRadius: 4,
-              background: unconfirmed ? 'transparent' : color,
-              border: `1.5px solid ${color}`,
-            }}
-          />
-        );
-      })}
+      {unconfirmed && (
+        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-background/20 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider">
+          unconfirmed — needs review
+        </div>
+      )}
     </div>
   );
 }
@@ -539,125 +591,19 @@ type CycleDetailData = inferRouterOutputs<AppRouter>['roster']['cycleDetail'];
 
 function ActionItemsSlot({
   cycleId,
-  ceoId,
   data,
-  readinessDone,
 }: {
   cycleId: string;
-  ceoId: string;
   data: CycleDetailData | undefined;
-  readinessDone: boolean;
 }) {
-  const utils = trpc.useUtils();
-  const items = data?.actionItems ?? [];
-  const total = data?.actionsBucketed.total ?? items.length;
+  const items = (data?.actionItems ?? []) as Parameters<typeof ActionItemsEditableList>[0]['items'];
   const reviewedCount = data?.actionsBucketed.reviewed ?? 0;
-  const isEmpty = total === 0;
-  const allReviewed = !isEmpty && reviewedCount === total;
-
-  const updateItem = trpc.actionItems.update.useMutation({
-    onSuccess: () => {
-      utils.roster.cycleDetail.invalidate({ cycleId });
-      utils.roster.cycleSummary.invalidate();
-      utils.actionItems.listForCycle.invalidate({ cycleId });
-    },
-  });
-  const setAll = trpc.actionItems.setAllReviewed.useMutation({
-    onSuccess: () => {
-      utils.roster.cycleDetail.invalidate({ cycleId });
-      utils.roster.cycleSummary.invalidate();
-      utils.actionItems.listForCycle.invalidate({ cycleId });
-    },
-  });
-
   return (
-    <InputSlot
-      icon="actions"
-      title="Action Items"
-      status={readinessDone ? 'done' : 'empty'}
-      countLabel={
-        isEmpty
-          ? 'auto-reviewed (no items)'
-          : `${reviewedCount}/${total} reviewed`
-      }
-      right={
-        !isEmpty ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-6 px-2 text-[11px]"
-            disabled={setAll.isPending}
-            onClick={() =>
-              setAll.mutate({ cycleId, reviewed: !allReviewed })
-            }
-          >
-            {setAll.isPending ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <CheckCircle2 className="mr-1 h-3 w-3" />
-            )}
-            {allReviewed ? 'Unreview all' : 'Mark all reviewed'}
-          </Button>
-        ) : undefined
-      }
-    >
-      {isEmpty ? (
-        <div className="flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 text-[12px] text-emerald-700 dark:text-emerald-400">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          No action items — section auto-reviewed.
-        </div>
-      ) : (
-        <div className="grid gap-1.5">
-          {items.slice(0, 3).map((a) => (
-            <div
-              key={a.id}
-              className={cn(
-                'flex items-center gap-2 rounded border px-2.5 py-1.5 text-[12px] transition-colors',
-                a.reviewed
-                  ? 'border-emerald-500/30 bg-emerald-500/[0.04]'
-                  : 'border-border bg-background'
-              )}
-            >
-              <Checkbox
-                checked={a.reviewed}
-                onCheckedChange={(v) =>
-                  updateItem.mutate({ id: a.id, reviewed: v === true })
-                }
-                aria-label={a.reviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
-                className="shrink-0"
-              />
-              <span
-                className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{
-                  background:
-                    a.status === 'done'
-                      ? 'oklch(55% 0.12 152)'
-                      : a.status === 'dropped'
-                        ? 'var(--muted-foreground)'
-                        : 'oklch(58% 0.13 64)',
-                }}
-              />
-              <span className={cn('truncate', a.reviewed && 'text-foreground/70')}>
-                {a.item}
-              </span>
-              <span className="ml-auto text-[10px] text-muted-foreground">{a.owner}</span>
-            </div>
-          ))}
-          {items.length > 3 && (
-            <Button
-              asChild
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-[11px] text-muted-foreground"
-            >
-              <Link href={`/ceos/${ceoId}/cycles/${cycleId}`}>
-                + {items.length - 3} more
-              </Link>
-            </Button>
-          )}
-        </div>
-      )}
-    </InputSlot>
+    <ActionItemsEditableList
+      cycleId={cycleId}
+      items={items}
+      reviewedCount={reviewedCount}
+    />
   );
 }
 

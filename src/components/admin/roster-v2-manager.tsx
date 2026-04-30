@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import type { RosterCeoSummary, RosterCycle } from '@/server/api/routers/roster';
@@ -9,6 +10,7 @@ import {
   PHASE_FILL,
   PHASE_STROKE,
 } from './roster-v2-shared';
+import { WorkspaceDrawer } from './workspace-drawer';
 
 interface Props {
   summaries: RosterCeoSummary[];
@@ -26,16 +28,36 @@ const NAME_COL_WIDTH = 220;
  * appear inside each bar so cadence is legible at a glance.
  */
 export function RosterV2Manager({ summaries, days = 120 }: Props) {
-  // Group by coach, ordered alphabetically. Each coach is a sub-section
-  // header so the page reads top-down.
+  const [drawerTarget, setDrawerTarget] = useState<{
+    summary: RosterCeoSummary;
+    activeCycleId: string;
+  } | null>(null);
+
+  function openCycle(summary: RosterCeoSummary, cycleId: string) {
+    setDrawerTarget({ summary, activeCycleId: cycleId });
+  }
+
+  // Group by coach, ordered alphabetically. Unassigned CEOs (coach is
+  // null) are bucketed under a synthetic key and rendered last with an
+  // "Unassigned" header — typing carries through via a string|null key.
   const grouped = (() => {
-    const m = new Map<string, { coach: RosterCeoSummary['coach']; rows: RosterCeoSummary[] }>();
+    const m = new Map<
+      string,
+      { coachKey: string | null; coachName: string; rows: RosterCeoSummary[] }
+    >();
     for (const s of summaries) {
-      const slot = m.get(s.coach.id);
+      const key = s.coach?.id ?? '__unassigned__';
+      const name = s.coach?.name ?? 'Unassigned';
+      const slot = m.get(key);
       if (slot) slot.rows.push(s);
-      else m.set(s.coach.id, { coach: s.coach, rows: [s] });
+      else m.set(key, { coachKey: s.coach?.id ?? null, coachName: name, rows: [s] });
     }
-    return [...m.values()].sort((a, b) => a.coach.name.localeCompare(b.coach.name));
+    return [...m.values()].sort((a, b) => {
+      // Pin Unassigned to the bottom.
+      if (a.coachKey === null) return 1;
+      if (b.coachKey === null) return -1;
+      return a.coachName.localeCompare(b.coachName);
+    });
   })();
 
   if (summaries.length === 0) return null;
@@ -54,15 +76,15 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
       </div>
 
       {/* Coach sections */}
-      {grouped.map(({ coach, rows }, gi) => (
-        <div key={coach.id}>
+      {grouped.map(({ coachKey, coachName, rows }, gi) => (
+        <div key={coachKey ?? '__unassigned__'}>
           {gi > 0 && <div className="h-px bg-border" />}
           <div
             className="grid items-center border-b border-border bg-muted/20 py-1.5"
             style={{ gridTemplateColumns: `${NAME_COL_WIDTH}px 1fr` }}
           >
             <div className="px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              {coach.name}
+              {coachName}
               <span className="ml-2 font-mono normal-case text-muted-foreground/70">
                 · {rows.length} CEO{rows.length === 1 ? '' : 's'}
               </span>
@@ -70,7 +92,12 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
             <div />
           </div>
           {rows.map((s) => (
-            <CeoRow key={s.ceo.id} summary={s} days={days} />
+            <CeoRow
+              key={s.ceo.id}
+              summary={s}
+              days={days}
+              onCycleClick={(cycleId) => openCycle(s, cycleId)}
+            />
           ))}
         </div>
       ))}
@@ -90,11 +117,34 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
           </span>
         ))}
       </div>
+
+      {drawerTarget && (
+        <WorkspaceDrawer
+          summary={drawerTarget.summary}
+          cycles={drawerTarget.summary.cycles}
+          activeCycleId={drawerTarget.activeCycleId}
+          onActiveCycleIdChange={(id) =>
+            setDrawerTarget((t) => (t ? { ...t, activeCycleId: id } : t))
+          }
+          open={true}
+          onOpenChange={(o) => {
+            if (!o) setDrawerTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function CeoRow({ summary, days }: { summary: RosterCeoSummary; days: number }) {
+function CeoRow({
+  summary,
+  days,
+  onCycleClick,
+}: {
+  summary: RosterCeoSummary;
+  days: number;
+  onCycleClick: (cycleId: string) => void;
+}) {
   return (
     <div
       className="grid items-stretch border-b border-border last:border-b-0"
@@ -115,7 +165,11 @@ function CeoRow({ summary, days }: { summary: RosterCeoSummary; days: number }) 
           </div>
         </div>
       </Link>
-      <ManagerLane cycles={summary.cycles} ceoId={summary.ceo.id} days={days} />
+      <ManagerLane
+        cycles={summary.cycles}
+        days={days}
+        onCycleClick={onCycleClick}
+      />
     </div>
   );
 }
@@ -152,12 +206,12 @@ function ManagerHeader({ days }: { days: number }) {
 
 function ManagerLane({
   cycles,
-  ceoId,
   days,
+  onCycleClick,
 }: {
   cycles: RosterCycle[];
-  ceoId: string;
   days: number;
+  onCycleClick: (cycleId: string) => void;
 }) {
   const today = new Date();
   const dateToPct = (iso: string) => {
@@ -194,11 +248,12 @@ function ManagerLane({
         if (width <= 0) return null;
 
         return (
-          <Link
+          <button
             key={cy.id}
-            href={`/ceos/${ceoId}/cycles/${cy.id}`}
+            type="button"
+            onClick={() => onCycleClick(cy.id)}
             title={`${cy.label} · ${cy.phase}`}
-            className="absolute overflow-hidden rounded transition-shadow hover:shadow-md"
+            className="absolute overflow-hidden rounded text-left transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
             style={{
               left: `calc(${left}% + ${LANE_PADDING_X}px)`,
               width: `${width}%`,
@@ -243,7 +298,7 @@ function ManagerLane({
                 </span>
               )}
             </div>
-          </Link>
+          </button>
         );
       })}
     </div>

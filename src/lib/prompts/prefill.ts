@@ -45,14 +45,17 @@ export async function buildPrefillPrompt({
 
   const systemPrompt = `You are an executive coaching assistant. Your job is to analyze a coaching session transcript and extract structured information to help the coach prepare their session notes.
 
-You will extract TWO things:
+You will extract THREE things:
 1. **Monthly Goals & Commitments** — What did the CEO commit to doing? What goals were set or discussed? Pull specific, concrete commitments from the conversation.
 2. **Monthly Reflection** — Summarize how the CEO reflected on their progress. What went well? What didn't? What patterns emerged? What did they struggle with?
+3. **Action Items** — Concrete, owner-scoped tasks that fell out of the session. Each item must name a single owner ("CEO", "Coach", or "Other"), state the action in one sentence, and include a due date when one was discussed.
 
 ## Guidelines
 - Be specific — quote or closely paraphrase what the CEO actually said
 - Use bullet points for goals/commitments
 - Keep the reflection in the CEO's voice where possible
+- For action items: pick discrete, verifiable tasks (not vague aspirations). Skip anything you can't tie to a clear owner.
+- 0–8 action items is normal. Returning [] is fine if nothing concrete was committed.
 - If the transcript is thin on a topic, note what's there but don't fabricate
 - These are SUGGESTIONS for the coach to review and edit — mark anything you're uncertain about
 
@@ -60,7 +63,10 @@ You will extract TWO things:
 Return a JSON object with exactly these keys:
 {
   "monthlyGoals": "Extracted goals and commitments as bullet points",
-  "monthlyReflection": "Summary of the CEO's self-reflection and progress assessment"
+  "monthlyReflection": "Summary of the CEO's self-reflection and progress assessment",
+  "actionItems": [
+    { "owner": "CEO" | "Coach" | "Other", "item": "Single-sentence action", "dueAt": "YYYY-MM-DD or null" }
+  ]
 }
 
 Return ONLY the JSON object, no markdown fences, no extra text.`;

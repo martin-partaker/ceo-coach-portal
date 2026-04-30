@@ -1,17 +1,32 @@
 /**
- * Seed the curriculum table with Eric Partaker's coaching framework content.
- * Run: pnpm seed:curriculum
+ * Seed the curriculum table with two layers:
  *
- * Based on: /product/curriculum-seed.md
- * This content powers the AI system prompt for report generation.
+ *   1. `framework` rows — Eric Partaker's high-level coaching philosophy
+ *      (IPA, 10x goal, monthly cycle, three life domains, etc). These
+ *      are loaded into the AI system prompt for every email generation
+ *      so the coach's voice + pedagogy come through.
+ *
+ *   2. `class` rows — granular section chunks from the bundled CEO
+ *      Accelerator classes (12 weeks, ~91 chunks). Each row has a
+ *      classNumber + section + summary so the AI can pick 1–3 of them
+ *      per cycle to surface as "Suggested Resources" in the email.
+ *      The chunks are produced by `scripts/extract-curriculum.ts` from
+ *      the bundled `.docx`; this script reads its `index.json`.
+ *
+ * Run: pnpm seed:curriculum
  */
 import 'dotenv/config';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 import { curriculum } from '../src/db/schema';
 
 const sql = neon(process.env.DATABASE_URL!);
 const db = drizzle(sql);
+
+const EXTRACTED_INDEX =
+  'core-data/CEO Accelerator Materials/extracted/index.json';
 
 const seeds = [
   {
@@ -212,14 +227,108 @@ The monthly summary should always name the primary constraint operating in that 
   },
 ];
 
-async function main() {
-  console.log('Seeding curriculum...');
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
 
-  for (const seed of seeds) {
-    await db.insert(curriculum).values(seed).onConflictDoNothing();
+/**
+ * Pull the first complete sentence (or fall back to ~200 chars) of a
+ * chunk and use it as the summary for the AI's "Suggested Resources"
+ * picker. Strips bullet markers + bold so the summary reads naturally.
+ */
+function deriveSummary(text: string, max = 220): string {
+  const flat = text
+    .replace(/^[-*•_#>\s]+/gm, '')
+    .replace(/__|\*\*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!flat) return '';
+  // First sentence (period followed by whitespace), capped at `max`.
+  const firstStop = flat.search(/[.!?](\s|$)/);
+  const candidate = firstStop > 40 ? flat.slice(0, firstStop + 1) : flat;
+  if (candidate.length <= max) return candidate;
+  return candidate.slice(0, max - 1).trimEnd() + '…';
+}
+
+interface ExtractedClass {
+  classNumber: number;
+  classTitle: string;
+  chunks: Array<{ section: string; slug: string; contentText: string }>;
+}
+
+async function loadExtracted(): Promise<ExtractedClass[]> {
+  const indexPath = path.join(process.cwd(), EXTRACTED_INDEX);
+  try {
+    const raw = await fs.readFile(indexPath, 'utf8');
+    return JSON.parse(raw) as ExtractedClass[];
+  } catch (err) {
+    console.error(
+      `Could not read ${indexPath}.\n` +
+        `Run \`pnpm tsx scripts/extract-curriculum.ts\` first to generate it.`,
+    );
+    throw err;
   }
+}
 
-  console.log(`✓ Seeded ${seeds.length} curriculum rows`);
+async function main() {
+  console.log('Seeding curriculum…\n');
+
+  // Wipe and re-seed so the table is the canonical projection of
+  // (curriculum-seed.md + the extracted classes). With nothing live
+  // we don't worry about preserving existing rows.
+  await db.delete(curriculum);
+  console.log('  ✓ wiped existing curriculum rows');
+
+  // ── Layer 1: framework rows from the static seeds list ─────────────
+  let frameworkCount = 0;
+  for (const seed of seeds) {
+    await db.insert(curriculum).values({
+      kind: 'framework',
+      title: seed.title,
+      contentText: seed.contentText,
+      summary: deriveSummary(seed.contentText),
+      slug: slugify(`framework-${seed.title}`),
+      sortOrder: seed.sortOrder,
+    });
+    frameworkCount++;
+  }
+  console.log(`  ✓ inserted ${frameworkCount} framework rows`);
+
+  // ── Layer 2: class chunks extracted from the bundled docx ──────────
+  const classes = await loadExtracted();
+  // Track slug uniqueness — class N + slug are deterministic but we
+  // de-dup defensively in case two sections normalise to the same slug.
+  const seen = new Set<string>();
+  let classRowCount = 0;
+  let classChunkSort = 100; // sort frameworks first (1–9), then classes.
+  for (const cls of classes) {
+    for (const chunk of cls.chunks) {
+      let slug = `class-${cls.classNumber}-${chunk.slug}`;
+      let suffix = 2;
+      while (seen.has(slug)) slug = `class-${cls.classNumber}-${chunk.slug}-${suffix++}`;
+      seen.add(slug);
+      const title = `Class ${cls.classNumber}: ${cls.classTitle} — ${chunk.section}`;
+      await db.insert(curriculum).values({
+        kind: 'class',
+        classNumber: cls.classNumber,
+        section: chunk.section,
+        slug,
+        title,
+        contentText: chunk.contentText,
+        summary: deriveSummary(chunk.contentText),
+        sortOrder: classChunkSort++,
+      });
+      classRowCount++;
+    }
+  }
+  console.log(`  ✓ inserted ${classRowCount} class chunks (across ${classes.length} classes)`);
+
+  const total = await db.select({ id: curriculum.id }).from(curriculum);
+  console.log(`\nTotal rows in curriculum: ${total.length}`);
   process.exit(0);
 }
 

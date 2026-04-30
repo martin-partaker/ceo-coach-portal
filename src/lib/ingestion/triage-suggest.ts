@@ -7,8 +7,9 @@ export interface TriageSuggestion {
   ceoName: string;
   ceoEmail: string | null;
   ceoAvatarUrl: string | null;
-  coachId: string;
-  coachName: string;
+  /** Null when the suggested CEO is in the Unassigned bucket. */
+  coachId: string | null;
+  coachName: string | null;
   confidence: number; // 0-100
   reasoning: string;
 }
@@ -122,8 +123,11 @@ interface CeoWithAliases {
   name: string;
   email: string | null;
   avatarUrl: string | null;
-  coachId: string;
-  coachName: string;
+  /** Null when the CEO is in the Unassigned bucket — they still appear
+   *  as triage suggestions but the operator may want to assign a coach
+   *  before routing inputs to them. */
+  coachId: string | null;
+  coachName: string | null;
   aliases: string[];
 }
 

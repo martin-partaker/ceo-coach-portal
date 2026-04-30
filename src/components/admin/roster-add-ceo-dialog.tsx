@@ -57,14 +57,19 @@ export function RosterAddCeoDialog({
   const [tenXGoal, setTenXGoal] = useState('');
 
   const create = trpc.admin.createCeo.useMutation({
-    onSuccess: () => {
-      utils.admin.listAllCeos.invalidate();
-      utils.admin.listCoaches.invalidate();
+    onSuccess: async () => {
       setOpen(false);
       setName('');
       setEmail('');
       setTenXGoal('');
       setCoachId(defaultCoachId);
+      // Roster v2 reads from cycleSummary — without invalidating it the
+      // new CEO doesn't appear until the page is reloaded.
+      await Promise.all([
+        utils.admin.listAllCeos.invalidate(),
+        utils.admin.listCoaches.invalidate(),
+        utils.roster.cycleSummary.invalidate(),
+      ]);
     },
   });
 
@@ -77,11 +82,11 @@ export function RosterAddCeoDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!coachId || !name.trim()) return;
+    if (!name.trim()) return;
     create.mutate({
       name: name.trim(),
       email: email.trim() || null,
-      coachId,
+      coachId: coachId || null,
       tenXGoal: tenXGoal.trim() || null,
     });
   }
@@ -136,12 +141,18 @@ export function RosterAddCeoDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>Coach *</Label>
-              <Select value={coachId ?? ''} onValueChange={(v) => setCoachId(v || null)}>
+              <Label>Coach</Label>
+              <Select
+                value={coachId ?? '__unassigned__'}
+                onValueChange={(v) => setCoachId(v === '__unassigned__' ? null : v)}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Pick a coach" />
+                  <SelectValue placeholder="Unassigned" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__unassigned__">
+                    <span className="text-muted-foreground">— Unassigned (assign later) —</span>
+                  </SelectItem>
                   {coaches.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.name} <span className="text-muted-foreground">· {c.email}</span>
@@ -149,6 +160,9 @@ export function RosterAddCeoDialog({
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Leave unassigned and reassign later from the row menu.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -171,7 +185,7 @@ export function RosterAddCeoDialog({
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={create.isPending || !coachId || !name.trim()}>
+            <Button type="submit" disabled={create.isPending || !name.trim()}>
               {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Add CEO
             </Button>

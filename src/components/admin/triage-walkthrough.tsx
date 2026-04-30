@@ -39,7 +39,7 @@ interface ManualPick {
   ceoName: string;
   ceoEmail: string | null;
   ceoAvatarUrl: string | null;
-  coachName: string;
+  coachName: string | null;
 }
 
 interface HistoryEntry {

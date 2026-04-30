@@ -7,7 +7,7 @@ import {
   Users,
   LayoutDashboard,
   Settings,
-  Inbox,
+  Plug2,
   ListChecks,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
@@ -21,7 +21,7 @@ const navItems = [
 const adminItems = [
   { href: '/admin/ceos', label: 'Roster', icon: Users },
   { href: '/admin/triage', label: 'Triage', icon: ListChecks, showPendingBadge: true },
-  { href: '/admin/inbox', label: 'Inbox', icon: Inbox },
+  { href: '/admin/integrations', label: 'Integrations', icon: Plug2 },
 ];
 
 interface SidebarProps {
@@ -89,7 +89,7 @@ export function Sidebar({ isSuperAdmin }: SidebarProps) {
             <div className="space-y-1">
               {adminItems.map(({ href, label, icon: Icon, showPendingBadge }) => {
                 // Longest prefix wins — prevents '/admin' from highlighting
-                // while on '/admin/ceos' or '/admin/inbox'.
+                // while on '/admin/ceos' or '/admin/integrations'.
                 const winningHref = [...adminItems]
                   .map((i) => i.href)
                   .sort((a, b) => b.length - a.length)

@@ -3,8 +3,9 @@ import { eq, desc, and, asc, lt, or, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { ceos, cycles, journalEntries, transcripts, rawInputs } from '@/db/schema';
+import { actionItems, ceos, cycles, journalEntries, transcripts, rawInputs } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
+import { refreshAiActionItems } from '@/lib/cycles/ai-action-items';
 
 const anthropic = new Anthropic();
 
@@ -155,21 +156,60 @@ export const cyclesRouter = createTRPCRouter({
     .input(
       z.object({
         cycleId: z.string().uuid(),
-        weekNumber: z.number().min(1).max(8),
-        title: z.string().min(1),
+        // Day the journal refers to (preferred — feeds derived membership
+        // and chronological sort). When supplied without weekNumber, we
+        // derive weekNumber from the cycle's periodStart so the legacy
+        // column stays consistent.
+        entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        weekNumber: z.number().min(1).max(52).optional(),
+        title: z.string().min(1).optional(),
+        content: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const [cycle] = await ctx.db
         .select().from(cycles).where(eq(cycles.id, input.cycleId)).limit(1);
       if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
-      const [ceo] = await ctx.db
-        .select().from(ceos).where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id))).limit(1);
+      const ceoFilter = ctx.realCoach?.isSuperAdmin
+        ? eq(ceos.id, cycle.ceoId)
+        : and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id));
+      const [ceo] = await ctx.db.select().from(ceos).where(ceoFilter).limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Derive weekNumber from entryDate when caller didn't pass one. Falls
+      // back to 1 if the cycle has no periodStart to anchor against.
+      let weekNumber = input.weekNumber;
+      if (weekNumber === undefined) {
+        if (input.entryDate && cycle.periodStart) {
+          const startMs = new Date(`${cycle.periodStart}T00:00:00Z`).getTime();
+          const dayMs = new Date(`${input.entryDate}T00:00:00Z`).getTime();
+          weekNumber = Math.max(1, Math.floor((dayMs - startMs) / (7 * 86_400_000)) + 1);
+        } else {
+          weekNumber = 1;
+        }
+      }
+
+      // Build a sensible default title from the date when caller omits it.
+      let title = input.title?.trim();
+      if (!title) {
+        if (input.entryDate) {
+          const [y, m, d] = input.entryDate.split('-').map(Number);
+          const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+          title = `${months[m - 1]} ${d}, ${y}`;
+        } else {
+          title = `Week ${weekNumber}`;
+        }
+      }
 
       const [created] = await ctx.db
         .insert(journalEntries)
-        .values({ cycleId: input.cycleId, weekNumber: input.weekNumber, title: input.title, content: '' })
+        .values({
+          cycleId: input.cycleId,
+          weekNumber,
+          entryDate: input.entryDate ?? null,
+          title,
+          content: input.content ?? '',
+        })
         .returning();
       return created;
     }),
@@ -241,11 +281,10 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const [ceo] = await ctx.db
-        .select()
-        .from(ceos)
-        .where(and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id)))
-        .limit(1);
+      const ceoFilter = ctx.realCoach?.isSuperAdmin
+        ? eq(ceos.id, cycle.ceoId)
+        : and(eq(ceos.id, cycle.ceoId), eq(ceos.coachId, ctx.coach.id));
+      const [ceo] = await ctx.db.select().from(ceos).where(ceoFilter).limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
       const [created] = await ctx.db
@@ -342,14 +381,18 @@ export const cyclesRouter = createTRPCRouter({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'No AI response' });
       }
 
-      let parsed: { monthlyGoals: string; monthlyReflection: string };
+      let parsed: {
+        monthlyGoals: string;
+        monthlyReflection: string;
+        actionItems?: Array<{ owner?: string; item?: string; dueAt?: string | null }>;
+      };
       try {
         parsed = JSON.parse(textBlock.text);
       } catch {
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to parse AI response' });
       }
 
-      const [updated] = await ctx.db
+      await ctx.db
         .update(cycles)
         .set({
           monthlyGoals: parsed.monthlyGoals,
@@ -357,12 +400,22 @@ export const cyclesRouter = createTRPCRouter({
           monthlyGoalsAiSuggested: true,
           monthlyReflectionAiSuggested: true,
         })
-        .where(eq(cycles.id, input.cycleId))
-        .returning();
+        .where(eq(cycles.id, input.cycleId));
+
+      // Refresh AI-suggested action items: drop the prior batch (only those
+      // the coach hasn't already manually edited or marked done) and replace
+      // with whatever the model returned this time. Manual items and any
+      // AI item the coach has reviewed/done/dropped are left alone.
+      const writtenActionItems = await refreshAiActionItems(
+        ctx.db,
+        input.cycleId,
+        parsed.actionItems ?? [],
+      );
 
       return {
         monthlyGoals: parsed.monthlyGoals,
         monthlyReflection: parsed.monthlyReflection,
+        actionItems: writtenActionItems,
       };
     }),
 

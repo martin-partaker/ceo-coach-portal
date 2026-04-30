@@ -15,6 +15,7 @@ import {
   rawInputs,
 } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
+import { refreshAiActionItems } from '@/lib/cycles/ai-action-items';
 import {
   actionItemEffectiveDate,
   inputBelongsToCycle,
@@ -63,8 +64,11 @@ export interface RosterCeoSummary {
     email: string | null;
     avatarUrl: string | null;
     tenXGoal: string | null;
-    coachId: string;
+    /** Null when the CEO is on the roster but not yet assigned to a coach. */
+    coachId: string | null;
   };
+  /** Null when the CEO is unassigned. The roster page renders these into
+   *  a synthetic "Unassigned" section. */
   coach: {
     id: string;
     name: string;
@@ -72,7 +76,7 @@ export interface RosterCeoSummary {
     zoomUserEmail: string | null;
     isSuperAdmin: boolean;
     neonAuthUserId: string | null;
-  };
+  } | null;
   aliasEmails: string[];
   cycles: RosterCycle[]; // oldest → newest
 }
@@ -195,10 +199,14 @@ export const rosterRouter = createTRPCRouter({
     //    reliably treat `.where(undefined)` as a no-op — when `unscoped`
     //    is true the original (admin) query had no `.where()` clause at
     //    all, and we replicate that exactly here.
+    // Use a left join so unassigned CEOs (coachId = null) still show up
+    // on the admin Roster — they're rendered into a separate "Unassigned"
+    // section client-side. Coach-scoped callers don't see unassigned
+    // rows at all (the eq(coachId, ctx.coach.id) filter excludes them).
     const ceoBaseQuery = ctx.db
       .select({ ceo: ceos, coach: coaches })
       .from(ceos)
-      .innerJoin(coaches, eq(ceos.coachId, coaches.id));
+      .leftJoin(coaches, eq(ceos.coachId, coaches.id));
     const ceoRows = unscoped
       ? await ceoBaseQuery
       : await ceoBaseQuery.where(eq(ceos.coachId, ctx.coach.id));
@@ -436,19 +444,25 @@ export const rosterRouter = createTRPCRouter({
           tenXGoal: r.ceo.tenXGoal,
           coachId: r.ceo.coachId,
         },
-        coach: {
-          id: r.coach.id,
-          name: r.coach.name,
-          email: r.coach.email,
-          zoomUserEmail: r.coach.zoomUserEmail,
-          isSuperAdmin: r.coach.isSuperAdmin,
-          neonAuthUserId: r.coach.neonAuthUserId,
-        },
+        coach: r.coach
+          ? {
+              id: r.coach.id,
+              name: r.coach.name,
+              email: r.coach.email,
+              zoomUserEmail: r.coach.zoomUserEmail,
+              isSuperAdmin: r.coach.isSuperAdmin,
+              neonAuthUserId: r.coach.neonAuthUserId,
+            }
+          : null,
         aliasEmails: aliasesByCeo.get(r.ceo.id) ?? [],
         cycles: cyclesByCeo.get(r.ceo.id) ?? [],
       }))
       .sort((a, b) => {
-        const c = a.coach.name.localeCompare(b.coach.name);
+        // Unassigned CEOs sort to the end so the page's named-coach
+        // sections come first.
+        const aName = a.coach?.name ?? '￿';
+        const bName = b.coach?.name ?? '￿';
+        const c = aName.localeCompare(bName);
         if (c !== 0) return c;
         return a.ceo.name.localeCompare(b.ceo.name);
       });
@@ -484,11 +498,13 @@ export const rosterRouter = createTRPCRouter({
         throw new TRPCError({ code: 'NOT_FOUND' });
       }
 
-      const [coach] = await ctx.db
-        .select()
-        .from(coaches)
-        .where(eq(coaches.id, ceo.coachId))
-        .limit(1);
+      const [coach] = ceo.coachId
+        ? await ctx.db
+            .select()
+            .from(coaches)
+            .where(eq(coaches.id, ceo.coachId))
+            .limit(1)
+        : [];
 
       // Pull every input that belongs to this CEO joined with its parent
       // cycle so we can compute the input's effective date for derived
@@ -949,5 +965,93 @@ export const rosterRouter = createTRPCRouter({
       await ctx.db.update(cycles).set(set).where(eq(cycles.id, input.cycleId));
 
       return { value: nextValue, previousValue };
+    }),
+
+  /**
+   * Re-extract action items from the cycle's transcript(s) using the same
+   * prefill prompt. Replaces the prior AI batch (open + un-reviewed only)
+   * — manual additions and anything the coach has touched are preserved.
+   */
+  suggestActionItems: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, cycle.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (!isUnscopedAdmin(ctx) && ceo.coachId !== ctx.coach.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+
+      const txJoined = await ctx.db
+        .select({ row: transcriptsTable })
+        .from(transcriptsTable)
+        .innerJoin(cycles, eq(transcriptsTable.cycleId, cycles.id))
+        .where(eq(cycles.ceoId, ceo.id));
+
+      const cycleTranscripts = txJoined
+        .filter(({ row }) =>
+          inputBelongsToCycle(
+            {
+              primaryCycleId: row.cycleId,
+              effectiveDate: transcriptEffectiveDate({
+                recordedAt: row.recordedAt,
+                createdAt: row.createdAt,
+              }),
+            },
+            cycle,
+          )
+        )
+        .map(({ row }) => row);
+
+      if (cycleTranscripts.length === 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Import a transcript first before suggesting action items.',
+        });
+      }
+
+      const transcriptText = cycleTranscripts.map((t) => t.content).join('\n\n---\n\n');
+
+      const { systemPrompt, userPrompt } = await buildPrefillPrompt({
+        cycle,
+        ceo,
+        transcriptText,
+        additionalContext: cycle.additionalContext ?? undefined,
+      });
+
+      const message = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      });
+
+      const textBlock = message.content.find((b) => b.type === 'text');
+      if (!textBlock || textBlock.type !== 'text') {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'No AI response' });
+      }
+
+      let parsed: {
+        actionItems?: Array<{ owner?: string; item?: string; dueAt?: string | null }>;
+      };
+      try {
+        parsed = JSON.parse(textBlock.text);
+      } catch {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to parse AI response' });
+      }
+
+      const written = await refreshAiActionItems(ctx.db, input.cycleId, parsed.actionItems ?? []);
+      return { count: written.length };
     }),
 });

@@ -16,7 +16,7 @@ async function main() {
   const ceoList = await db.select().from(ceos);
   console.log(`\nCEOS (${ceoList.length}):`);
   for (const c of ceoList) {
-    console.log(`  ${c.name} <${c.email ?? '-'}> coach=${c.coachId.slice(0, 8)}`);
+    console.log(`  ${c.name} <${c.email ?? '-'}> coach=${c.coachId?.slice(0, 8) ?? 'unassigned'}`);
   }
 
   const aliasList = await db.select().from(ceoEmailAliases);

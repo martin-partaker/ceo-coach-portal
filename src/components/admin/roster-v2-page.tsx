@@ -91,21 +91,89 @@ export function RosterV2Page({
       if (s.ceo.name.toLowerCase().includes(q)) return true;
       if ((s.ceo.email ?? '').toLowerCase().includes(q)) return true;
       if (s.aliasEmails.some((a) => a.toLowerCase().includes(q))) return true;
-      if (s.coach.name.toLowerCase().includes(q)) return true;
+      if (s.coach?.name.toLowerCase().includes(q)) return true;
       return false;
     });
   }, [summaries, query]);
 
-  // Group by coach for the section headers
-  const grouped = useMemo(() => {
-    const map = new Map<string, { coach: RosterCeoSummary['coach']; rows: RosterCeoSummary[] }>();
-    for (const s of filteredSummaries) {
-      const existing = map.get(s.coach.id);
-      if (existing) existing.rows.push(s);
-      else map.set(s.coach.id, { coach: s.coach, rows: [s] });
+  // Group by coach for the section headers. Start from `coachList` so a
+  // coach with zero CEOs still gets a section — without this, just-created
+  // coaches stay invisible until they have at least one CEO. Each group
+  // then gets its filtered rows from the cycleSummary side. Unassigned
+  // CEOs (coach === null) are bucketed separately and rendered after the
+  // named coach groups. Search either matches the coach name (keep group,
+  // even if empty) or row content.
+  const { grouped, unassignedRows } = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const rowsByCoach = new Map<string, RosterCeoSummary[]>();
+    const unassigned: RosterCeoSummary[] = [];
+    for (const s of summaries) {
+      if (!s.coach) {
+        unassigned.push(s);
+        continue;
+      }
+      const list = rowsByCoach.get(s.coach.id) ?? [];
+      list.push(s);
+      rowsByCoach.set(s.coach.id, list);
     }
-    return [...map.values()].sort((a, b) => a.coach.name.localeCompare(b.coach.name));
-  }, [filteredSummaries]);
+    const allCoaches = (coachList ?? []).map((c) => ({
+      // Shape this to match RosterCeoSummary['coach'] so the existing
+      // CoachGroup component can render either a populated or empty
+      // section without branching.
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      zoomUserEmail: c.zoomUserEmail,
+      isSuperAdmin: c.isSuperAdmin,
+      neonAuthUserId: c.neonAuthUserId,
+    }));
+    // Some cycleSummary rows may reference coaches that aren't in
+    // coachList (defensive — admin.listCoaches has its own filter). Add
+    // any leftover coaches from summaries so we don't drop their rows.
+    for (const s of summaries) {
+      if (s.coach && !allCoaches.some((c) => c.id === s.coach!.id)) {
+        allCoaches.push(s.coach);
+      }
+    }
+    const groups = allCoaches.map((coach) => {
+      const rows = rowsByCoach.get(coach.id) ?? [];
+      // Apply the search filter: by row OR coach name. If the coach name
+      // matches, keep all their rows so the user sees the full section.
+      const coachMatches = q === '' || coach.name.toLowerCase().includes(q);
+      const filteredRows = q === ''
+        ? rows
+        : rows.filter((s) => {
+            if (coachMatches) return true;
+            if (s.ceo.name.toLowerCase().includes(q)) return true;
+            if ((s.ceo.email ?? '').toLowerCase().includes(q)) return true;
+            if (s.aliasEmails.some((a) => a.toLowerCase().includes(q))) return true;
+            return false;
+          });
+      return { coach, rows: filteredRows };
+    });
+    const filteredGroups = groups
+      .filter(({ coach, rows }) => {
+        if (q === '') return true;
+        if (coach.name.toLowerCase().includes(q)) return true;
+        return rows.length > 0;
+      })
+      .sort((a, b) => a.coach.name.localeCompare(b.coach.name));
+
+    // Same search behavior for the unassigned bucket — show it whenever
+    // we have anything to display (or when "unassigned" itself matches).
+    const unassignedMatches = q === '' || 'unassigned'.includes(q);
+    const filteredUnassigned = q === ''
+      ? unassigned
+      : unassigned.filter((s) => {
+          if (unassignedMatches) return true;
+          if (s.ceo.name.toLowerCase().includes(q)) return true;
+          if ((s.ceo.email ?? '').toLowerCase().includes(q)) return true;
+          if (s.aliasEmails.some((a) => a.toLowerCase().includes(q))) return true;
+          return false;
+        });
+
+    return { grouped: filteredGroups, unassignedRows: filteredUnassigned };
+  }, [coachList, summaries, query]);
 
   // Subtitle counts by phase. CEOs without any cycles get their own
   // bucket so the totals add up (a CEO with no cycle isn't gathering,
@@ -195,7 +263,7 @@ export function RosterV2Page({
       </div>
 
       {/* Body */}
-      {summaries.length === 0 ? (
+      {summaries.length === 0 && (!isAdmin || (coachList ?? []).length === 0) ? (
         <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center text-sm text-muted-foreground">
           {isAdmin
             ? 'No CEOs yet. Add a coach and a CEO to get started.'
@@ -225,6 +293,15 @@ export function RosterV2Page({
               currentCoachId={currentCoachId}
             />
           ))}
+          {unassignedRows.length > 0 && (
+            <UnassignedGroup
+              rows={unassignedRows}
+              coachOptions={coachOptions}
+              openCeoId={openCeoId}
+              onToggle={(id) => setOpenCeoId(openCeoId === id ? null : id)}
+              renderExpanded={renderExpanded}
+            />
+          )}
         </div>
       ) : (
         // Coach surface: skip the per-coach grouping (there's only one
@@ -292,7 +369,7 @@ function CoachGroup({
   renderExpanded,
   currentCoachId,
 }: {
-  coach: RosterCeoSummary['coach'];
+  coach: NonNullable<RosterCeoSummary['coach']>;
   rows: RosterCeoSummary[];
   coachOptions: Array<{ id: string; name: string; email: string }>;
   openCeoId: string | null;
@@ -310,11 +387,6 @@ function CoachGroup({
         <span className="font-mono">
           {rows.length} CEO{rows.length === 1 ? '' : 's'}
         </span>
-        {!coach.neonAuthUserId && (
-          <span className="ml-2 rounded-full border border-border px-1.5 py-0.5 text-[9px] normal-case text-muted-foreground/80">
-            auto-created
-          </span>
-        )}
         {coach.isSuperAdmin && (
           <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-1.5 py-0.5 text-[9px] normal-case text-purple-700 dark:text-purple-400">
             <ShieldCheck className="h-2.5 w-2.5" /> admin
@@ -332,6 +404,70 @@ function CoachGroup({
 
       {/* Rows */}
       <div className="overflow-hidden rounded-lg border border-border bg-background">
+        {rows.length === 0 ? (
+          <div className="flex items-center gap-3 px-4 py-4 text-[12px] text-muted-foreground">
+            <span className="italic">No CEOs assigned to this coach yet.</span>
+            <span className="flex-1" />
+            <RosterAddCeoDialog
+              coaches={coachOptions}
+              defaultCoachId={coach.id}
+              triggerVariant="ghost"
+              triggerSize="sm"
+              triggerLabel="Add CEO"
+            />
+          </div>
+        ) : (
+          rows.map((r) => (
+            <RosterV2Row
+              key={r.ceo.id}
+              summary={r}
+              coaches={coachOptions}
+              expanded={openCeoId === r.ceo.id}
+              onToggle={() => onToggle(r.ceo.id)}
+              renderExpanded={renderExpanded}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Section for CEOs that exist on the roster but have no coach assigned
+ * yet. Pinned to the bottom of the admin Roster v2 page. The header
+ * mirrors the CoachGroup styling but doesn't try to look like a coach
+ * (no "you" badge, no edit/delete affordances) — it's a holding bucket
+ * the user moves rows out of via the row's "Reassign coach" menu item.
+ */
+function UnassignedGroup({
+  rows,
+  coachOptions,
+  openCeoId,
+  onToggle,
+  renderExpanded,
+}: {
+  rows: RosterCeoSummary[];
+  coachOptions: Array<{ id: string; name: string; email: string }>;
+  openCeoId: string | null;
+  onToggle: (id: string) => void;
+  renderExpanded?: React.ComponentProps<typeof RosterV2Row>['renderExpanded'];
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2 px-1 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <span className="font-mono text-foreground/80">Unassigned</span>
+        <span>·</span>
+        <span className="font-mono">
+          {rows.length} CEO{rows.length === 1 ? '' : 's'}
+        </span>
+        <span className="ml-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] normal-case text-amber-700 dark:text-amber-400">
+          needs a coach
+        </span>
+        <span className="flex-1" />
+        <Legend />
+      </div>
+      <div className="overflow-hidden rounded-lg border border-dashed border-border bg-background">
         {rows.map((r) => (
           <RosterV2Row
             key={r.ceo.id}
@@ -352,7 +488,7 @@ function CoachActionsMenu({
   ceoCount,
   isSelf,
 }: {
-  coach: RosterCeoSummary['coach'];
+  coach: NonNullable<RosterCeoSummary['coach']>;
   ceoCount: number;
   isSelf: boolean;
 }) {
@@ -424,11 +560,19 @@ function CoachActionsMenu({
 }
 
 function Legend() {
+  // Show every content type the timeline can plot — collapse the
+  // 10x_goal/goal_worksheet pair (both green) and the
+  // self_assessment/support_feedback/coach_note/fallback_doc cluster
+  // (all the same neutral purple) into single legend entries so the
+  // chip count stays manageable.
   const items: Array<{ key: string; label: string }> = [
     { key: 'weekly_journal', label: CONTENT_TYPE_LABEL.weekly_journal },
     { key: 'monthly_journal', label: CONTENT_TYPE_LABEL.monthly_journal },
     { key: 'transcript', label: CONTENT_TYPE_LABEL.transcript },
+    { key: 'intake', label: CONTENT_TYPE_LABEL.intake },
     { key: 'goal_worksheet', label: '10x' },
+    { key: 'self_assessment', label: 'Other' },
+    { key: 'unknown', label: 'Unknown' },
   ];
   return (
     <span className="hidden items-center gap-3 md:inline-flex">

@@ -10,7 +10,8 @@ export interface TriageSuggestionView {
   ceoName: string;
   ceoEmail: string | null;
   ceoAvatarUrl: string | null;
-  coachName: string;
+  /** Null when the suggested CEO is in the Unassigned bucket. */
+  coachName: string | null;
   confidence: number;
   reasoning: string;
 }

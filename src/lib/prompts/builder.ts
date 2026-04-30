@@ -1,35 +1,105 @@
 import 'server-only';
 import { db } from '@/db';
-import { curriculum, journalEntries, transcripts } from '@/db/schema';
-import { eq, asc } from 'drizzle-orm';
-import type { Cycle, Ceo, Report } from '@/db/schema';
+import { curriculum, cycles, journalEntries, transcripts } from '@/db/schema';
+import { eq, asc, desc } from 'drizzle-orm';
+import type { Cycle, Ceo } from '@/db/schema';
+import {
+  inputBelongsToCycle,
+  journalEffectiveDate,
+  transcriptEffectiveDate,
+} from '@/lib/cycles/membership';
 
 export async function buildPrompt({
   cycle,
   ceo,
   coachName,
-  previousReport,
+  previousReports,
 }: {
   cycle: Cycle;
   ceo: Ceo;
   coachName: string;
-  previousReport: Report | null;
+  previousReports: Array<{ cycleLabel: string; rawText: string }>;
 }) {
-  // Fetch curriculum from DB
-  const rows = await db.select().from(curriculum);
-  const curriculumText = rows.map((r) => `### ${r.title}\n${r.contentText}`).join('\n\n');
+  // Fetch curriculum from DB. Two layers:
+  //   - `framework` rows go into the system prompt as the coach's
+  //     pedagogy + voice (~9 rows). The full body is included.
+  //   - `class` rows (~91) are a *catalog* the model can choose 1–3
+  //     "Suggested Resources" from. We only ship id + title + summary
+  //     to keep the prompt cheap; the body lives in the DB and is
+  //     surfaced in the UI when the operator clicks through.
+  const rows = await db
+    .select({
+      id: curriculum.id,
+      title: curriculum.title,
+      contentText: curriculum.contentText,
+      summary: curriculum.summary,
+      kind: curriculum.kind,
+      classNumber: curriculum.classNumber,
+      section: curriculum.section,
+      sortOrder: curriculum.sortOrder,
+    })
+    .from(curriculum)
+    .orderBy(asc(curriculum.sortOrder));
+  const frameworkRows = rows.filter((r) => r.kind === 'framework');
+  const classRows = rows.filter((r) => r.kind === 'class');
+  const curriculumText = frameworkRows
+    .map((r) => `### ${r.title}\n${r.contentText}`)
+    .join('\n\n');
+  const resourceCatalog = classRows
+    .map((r) => `- id: ${r.id}\n  title: ${r.title}\n  summary: ${r.summary ?? ''}`)
+    .join('\n');
 
-  // Fetch journals and transcripts for this cycle
-  const journals = await db
-    .select()
+  // Fetch journals and transcripts for this CEO joined with their parent
+  // cycle so we can apply derived (date-range) membership: any input
+  // whose primary cycle is this one OR whose effective date sits inside
+  // this cycle's [periodStart, periodEnd] window counts as "in" this
+  // cycle. This means a stretched cycle (e.g. Feb–Jun) naturally pulls
+  // in journals/transcripts that primarily live on monthly sub-cycles.
+  const journalJoined = await db
+    .select({ row: journalEntries, parentPeriodStart: cycles.periodStart })
     .from(journalEntries)
-    .where(eq(journalEntries.cycleId, cycle.id))
+    .innerJoin(cycles, eq(journalEntries.cycleId, cycles.id))
+    .where(eq(cycles.ceoId, ceo.id))
     .orderBy(asc(journalEntries.weekNumber));
 
-  const cycleTranscripts = await db
-    .select()
+  const journals = journalJoined
+    .filter(({ row, parentPeriodStart }) =>
+      inputBelongsToCycle(
+        {
+          primaryCycleId: row.cycleId,
+          effectiveDate: journalEffectiveDate({
+            entryDate: row.entryDate,
+            weekNumber: row.weekNumber,
+            parentPeriodStart,
+            createdAt: row.createdAt,
+          }),
+        },
+        cycle,
+      )
+    )
+    .map(({ row }) => row);
+
+  const transcriptJoined = await db
+    .select({ row: transcripts })
     .from(transcripts)
-    .where(eq(transcripts.cycleId, cycle.id));
+    .innerJoin(cycles, eq(transcripts.cycleId, cycles.id))
+    .where(eq(cycles.ceoId, ceo.id))
+    .orderBy(desc(transcripts.recordedAt));
+
+  const cycleTranscripts = transcriptJoined
+    .filter(({ row }) =>
+      inputBelongsToCycle(
+        {
+          primaryCycleId: row.cycleId,
+          effectiveDate: transcriptEffectiveDate({
+            recordedAt: row.recordedAt,
+            createdAt: row.createdAt,
+          }),
+        },
+        cycle,
+      )
+    )
+    .map(({ row }) => row);
 
   // Build missing fields warning
   const missing: string[] = [];
@@ -55,6 +125,12 @@ export async function buildPrompt({
       ? '(transcript skipped for this session)'
       : '(not provided)';
 
+  const previousReportsText = previousReports.length > 0
+    ? previousReports
+        .map((r) => `#### ${r.cycleLabel}\n${r.rawText}`)
+        .join('\n\n---\n\n')
+    : '(none yet — this is the first coaching email generated for this CEO. As more cycles are completed, every previously generated coaching email will appear here so you can build on prior themes, language, and commitments.)';
+
   const systemPrompt = `You are writing a personalised coaching update email on behalf of a coach named ${coachName} to their CEO client named ${ceo.name}. This email is sent after each coaching cycle to make the CEO feel heard, understood, and motivated.
 
 ## Your role
@@ -70,21 +146,42 @@ ${curriculumText}
 - Celebrate wins concretely — not "great progress" but "you closed the COO hire in 3 weeks."
 - Be honest about gaps — if they avoided something, name it kindly but clearly.
 - Use Eric Partaker's language naturally: "best self," "say/do gap," "constraint," "champion proof," "momentum."
+- **Anchor the email in named concepts from the Framework Reference.** Where a CEO's situation maps to a concept (Olympic Day Planner, champion proof, the 3 life domains, identity-based change, the say-do gap, the commitment loop, the constraints model), name the concept inline. Don't just summarise behaviour — connect it back to the framework so the email teaches as it reflects.
 - Keep the email scannable: short paragraphs, bold for emphasis, bullet points for action items.
 - End with clear next commitments and encouragement.
 - No diagnostic or therapeutic language. No legal, medical, or mental health claims.
 
+## Suggested Resources catalog
+You may pick **1–3** entries from the catalog below as next-cycle reading. Choose only ones that genuinely fit the CEO's situation this cycle. Return their ids in \`report.suggestedResourceIds\`. The same picks must drive the \`going_deeper\` email section — don't recommend in one and not the other. If nothing fits, return empty arrays in both.
+
+${resourceCatalog || '(no class catalog available)'}
+
 ## Output Format
-Return a JSON object with exactly these keys:
+Return a JSON object with TWO sections — the email body (what the coach will send) and the structured report (what the operator reviews internally). Both views must be derived from the same observations, just shaped differently.
+
 {
+  // ── EMAIL VIEW (coach's voice, ready to copy/paste into Gmail) ──
   "subject_line": "Email subject line — personal and specific, not generic",
   "opening": "1-2 paragraphs — personal greeting + high-level reflection on the cycle. Make them feel seen.",
   "wins_and_progress": "What went well this cycle. Be specific — reference their actual inputs. Use bullet points for clarity.",
   "honest_feedback": "Where they got stuck, avoided, or fell short. Kind but clear. Name the pattern if there is one.",
   "key_insight": "The ONE most important observation or pattern you want them to sit with. 2-3 sentences max.",
   "commitments": "Clear numbered list of what they're committing to before next session. Include owners and deadlines where possible.",
-  "closing": "Encouraging sign-off. 1-2 sentences. End with the coach's name: ${coachName}"
+  "going_deeper": "A brief 'Going deeper this month' block — markdown bullet list, ONE bullet per resource you picked above, in the order of report.suggestedResourceIds. Each bullet starts with the bolded class title (Class N: …), then 2–3 sentences in the coach's voice tying that resource specifically to what THIS CEO did or struggled with this cycle. Reference the actual concepts from the resource (not generic praise). If you pick zero resources, return an empty string.",
+  "closing": "Encouraging sign-off. 1-2 sentences. End with the coach's name: ${coachName}",
+
+  // ── STRUCTURED REPORT (the SCOPE-mandated 6 sections) ──
+  "report": {
+    "progressSummary": "1–2 paragraph plain-prose snapshot of the cycle. What was the through-line? Reference the 10x goal and where they sit relative to it.",
+    "keyWins": ["Win 1 — concrete, with what changed", "Win 2 …"],
+    "challenges": ["Challenge 1 — what got in the way and why it matters", "Challenge 2 …"],
+    "patternObservations": "Cross-cycle patterns ONLY (recurring strengths, recurring avoidance, escalating wins). Use the previous reports above. If this is the first cycle, say so explicitly — don't fabricate a pattern from a single data point.",
+    "suggestedNextSteps": ["Next step 1 — verb-led, owner-clear, time-bound", "Next step 2 …"],
+    "suggestedResourceIds": ["uuid-1", "uuid-2"]
+  }
 }
+
+The email keys and the report sections must be coherent — the same wins, the same challenges, the same insight, expressed for different audiences. The email is the coach's voice. The report is structured for the operator's review. The \`going_deeper\` bullet count must equal the \`suggestedResourceIds\` length and use the same picks in the same order.
 
 Return ONLY the JSON object, no markdown fences, no extra text.`;
 
@@ -108,10 +205,10 @@ ${transcriptText}
 ${cycle.additionalContext?.trim() ? `
 ### Additional Context (coach notes, emails, etc.)
 ${cycle.additionalContext}
-` : ''}${previousReport ? `
-### Previous Session Email (for continuity)
-${previousReport.rawText?.substring(0, 1500) ?? ''}
-` : ''}${missingWarning}
+` : ''}
+### Previous Coaching Emails (for continuity across cycles, oldest → newest)
+${previousReportsText}
+${missingWarning}
 
 Write the coaching update email now.`;
 

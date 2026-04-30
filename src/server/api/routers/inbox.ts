@@ -576,7 +576,9 @@ export const inboxRouter = createTRPCRouter({
       await projectRawInput(input.rawInputId);
 
       // Sweep other pending rows — the new alias may unlock more matches
-      const { resolved } = await rematchPendingRows({ coachId: ceo.coachId });
+      const { resolved } = await rematchPendingRows({
+        coachId: ceo.coachId ?? undefined,
+      });
       return { ok: true, autoResolved: resolved };
     }),
 

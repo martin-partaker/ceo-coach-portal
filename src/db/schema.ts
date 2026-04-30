@@ -24,9 +24,12 @@ export const coaches = pgTable('coaches', {
 
 export const ceos = pgTable('ceos', {
   id: uuid('id').primaryKey().defaultRandom(),
-  coachId: uuid('coach_id')
-    .notNull()
-    .references(() => coaches.id, { onDelete: 'cascade' }),
+  // Nullable so a CEO can exist on the roster before being assigned to a
+  // coach. Deleting a coach moves their CEOs to unassigned (set null)
+  // instead of cascading them out of existence.
+  coachId: uuid('coach_id').references(() => coaches.id, {
+    onDelete: 'set null',
+  }),
   name: text('name').notNull(),
   email: text('email'),
   avatarUrl: text('avatar_url'),
@@ -59,6 +62,11 @@ export const journalEntries = pgTable('journal_entries', {
     .notNull()
     .references(() => cycles.id, { onDelete: 'cascade' }),
   weekNumber: integer('week_number').notNull(),
+  // Exact day the journal entry refers to. Optional for legacy rows that
+  // were created with only a weekNumber; new entries should populate it.
+  // The membership / sort logic prefers entryDate when present and falls
+  // back to (parentCycle.periodStart + (weekNumber-1)·7d) otherwise.
+  entryDate: date('entry_date'),
   title: text('title').notNull(),
   content: text('content').notNull().default(''),
   sourceRawInputId: uuid('source_raw_input_id'),
@@ -89,6 +97,9 @@ export const actionItems = pgTable('action_items', {
   dueAt: date('due_at'),
   status: text('status').notNull().default('open'),
   aiSuggested: boolean('ai_suggested').notNull().default(false),
+  reviewed: boolean('reviewed').notNull().default(false),
+  reviewedAt: timestamp('reviewed_at'),
+  reviewedBy: uuid('reviewed_by').references(() => coaches.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -106,6 +117,25 @@ export const reports = pgTable('reports', {
 
 export const curriculum = pgTable('curriculum', {
   id: uuid('id').primaryKey().defaultRandom(),
+  /** What kind of curriculum row this is. Two kinds today:
+   *   - `framework` — coaching philosophy / 10x methodology / question
+   *     bank summaries. Always loaded into the AI system prompt as the
+   *     coach's voice + pedagogy.
+   *   - `class` — granular class-section chunks from the bundled CEO
+   *     Accelerator materials. The AI is given titles + summaries and
+   *     picks 1–3 to surface as "Suggested Resources" per cycle email.
+   */
+  kind: text('kind').notNull().default('framework'),
+  /** Class number 1–12 for kind='class'; null for kind='framework'. */
+  classNumber: integer('class_number'),
+  /** Subsection name within a class (e.g. "Olympic Day Planner"). */
+  section: text('section'),
+  /** URL-safe handle. Uniqueness is enforced in the seeding pipeline,
+   *  not the DB — making the column unique requires an interactive
+   *  drizzle migration we don't want to gate on in a non-TTY context. */
+  slug: text('slug'),
+  /** Short blurb the AI can read when picking suggested resources. */
+  summary: text('summary'),
   title: text('title').notNull(),
   contentText: text('content_text').notNull(),
   sortOrder: integer('sort_order').notNull().default(0),

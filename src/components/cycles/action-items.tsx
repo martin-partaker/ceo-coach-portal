@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -65,6 +66,16 @@ export function ActionItems({ cycleId }: ActionItemsProps) {
   const updateItem = trpc.actionItems.update.useMutation({
     onSuccess: () => {
       utils.actionItems.listForCycle.invalidate({ cycleId });
+      utils.roster.cycleSummary.invalidate();
+      utils.roster.cycleDetail.invalidate({ cycleId });
+    },
+  });
+
+  const setAllReviewed = trpc.actionItems.setAllReviewed.useMutation({
+    onSuccess: () => {
+      utils.actionItems.listForCycle.invalidate({ cycleId });
+      utils.roster.cycleSummary.invalidate();
+      utils.roster.cycleDetail.invalidate({ cycleId });
     },
   });
 
@@ -90,19 +101,53 @@ export function ActionItems({ cycleId }: ActionItemsProps) {
     updateItem.mutate({ id, status: next as 'open' | 'done' | 'dropped' });
   }
 
+  function toggleReviewed(id: string, reviewed: boolean) {
+    updateItem.mutate({ id, reviewed });
+  }
+
   const openItems = items.data?.filter((i) => i.status === 'open') ?? [];
   const closedItems = items.data?.filter((i) => i.status !== 'open') ?? [];
   const prevOpen = previousOpen.data ?? [];
+  const totalItems = items.data?.length ?? 0;
+  const reviewedCount = items.data?.filter((i) => i.reviewed).length ?? 0;
+  const allReviewed = totalItems > 0 && reviewedCount === totalItems;
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-medium">Action Items</CardTitle>
-          <Button size="sm" variant="outline" onClick={() => setShowAdd(!showAdd)}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            Add
-          </Button>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <CardTitle className="text-base font-medium">Action Items</CardTitle>
+            {totalItems > 0 && (
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {reviewedCount}/{totalItems} reviewed
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {totalItems > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-xs"
+                disabled={setAllReviewed.isPending}
+                onClick={() =>
+                  setAllReviewed.mutate({ cycleId, reviewed: !allReviewed })
+                }
+              >
+                {setAllReviewed.isPending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {allReviewed ? 'Unreview all' : 'Mark all reviewed'}
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setShowAdd(!showAdd)}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <Separator />
@@ -207,13 +252,23 @@ export function ActionItems({ cycleId }: ActionItemsProps) {
         ) : (
           <div className="space-y-1">
             {openItems.map((item) => (
-              <ActionItemRow key={item.id} item={item} onStatusChange={cycleStatus} />
+              <ActionItemRow
+                key={item.id}
+                item={item}
+                onStatusChange={cycleStatus}
+                onReviewedChange={toggleReviewed}
+              />
             ))}
             {closedItems.length > 0 && openItems.length > 0 && (
               <Separator className="my-2" />
             )}
             {closedItems.map((item) => (
-              <ActionItemRow key={item.id} item={item} onStatusChange={cycleStatus} />
+              <ActionItemRow
+                key={item.id}
+                item={item}
+                onStatusChange={cycleStatus}
+                onReviewedChange={toggleReviewed}
+              />
             ))}
           </div>
         )}
@@ -225,9 +280,18 @@ export function ActionItems({ cycleId }: ActionItemsProps) {
 function ActionItemRow({
   item,
   onStatusChange,
+  onReviewedChange,
 }: {
-  item: { id: string; owner: string; item: string; dueAt: string | null; status: string };
+  item: {
+    id: string;
+    owner: string;
+    item: string;
+    dueAt: string | null;
+    status: string;
+    reviewed: boolean;
+  };
   onStatusChange: (id: string, status: string) => void;
+  onReviewedChange: (id: string, reviewed: boolean) => void;
 }) {
   const isDone = item.status !== 'open';
 
@@ -235,9 +299,16 @@ function ActionItemRow({
     <div
       className={cn(
         'flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-muted/50',
-        isDone && 'opacity-60'
+        isDone && 'opacity-60',
+        item.reviewed && 'bg-emerald-500/[0.04]'
       )}
     >
+      <Checkbox
+        checked={item.reviewed}
+        onCheckedChange={(v) => onReviewedChange(item.id, v === true)}
+        aria-label={item.reviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
+        className="shrink-0"
+      />
       <button
         type="button"
         onClick={() => onStatusChange(item.id, item.status)}

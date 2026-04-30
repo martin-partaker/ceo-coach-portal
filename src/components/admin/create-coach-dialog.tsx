@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,19 +18,24 @@ import {
 import { Plus, Loader2 } from 'lucide-react';
 
 export function CreateCoachDialog() {
-  const router = useRouter();
+  const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
 
   const createCoach = trpc.admin.createCoach.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       setOpen(false);
       setName('');
       setEmail('');
       setIsAdmin(false);
-      router.refresh();
+      // Invalidate everything that drives the Roster page so the new
+      // coach (with zero CEOs) appears immediately as its own section.
+      await Promise.all([
+        utils.admin.listCoaches.invalidate(),
+        utils.roster.cycleSummary.invalidate(),
+      ]);
     },
   });
 

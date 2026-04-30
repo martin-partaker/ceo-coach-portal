@@ -175,17 +175,22 @@ export const adminRouter = createTRPCRouter({
       z.object({
         name: z.string().min(1),
         email: z.string().email().nullable().optional(),
-        coachId: z.string().uuid(),
+        // Optional now — admins can drop a CEO onto the roster without
+        // assigning a coach yet; they appear under "Unassigned" until
+        // someone reassigns them.
+        coachId: z.string().uuid().nullable().optional(),
         tenXGoal: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const [coach] = await ctx.db
-        .select({ id: coaches.id })
-        .from(coaches)
-        .where(eq(coaches.id, input.coachId))
-        .limit(1);
-      if (!coach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found' });
+      if (input.coachId) {
+        const [coach] = await ctx.db
+          .select({ id: coaches.id })
+          .from(coaches)
+          .where(eq(coaches.id, input.coachId))
+          .limit(1);
+        if (!coach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found' });
+      }
 
       const normalizedEmail = input.email ? input.email.toLowerCase().trim() : null;
 
@@ -207,7 +212,7 @@ export const adminRouter = createTRPCRouter({
       const [created] = await ctx.db
         .insert(ceos)
         .values({
-          coachId: input.coachId,
+          coachId: input.coachId ?? null,
           name: input.name,
           email: normalizedEmail,
           tenXGoal: input.tenXGoal ?? null,
@@ -356,7 +361,8 @@ export const adminRouter = createTRPCRouter({
     .input(
       z.object({
         ceoId: z.string().uuid(),
-        newCoachId: z.string().uuid(),
+        // Pass null to move the CEO into the "Unassigned" bucket.
+        newCoachId: z.string().uuid().nullable(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -367,12 +373,14 @@ export const adminRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const [coach] = await ctx.db
-        .select({ id: coaches.id })
-        .from(coaches)
-        .where(eq(coaches.id, input.newCoachId))
-        .limit(1);
-      if (!coach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found' });
+      if (input.newCoachId) {
+        const [coach] = await ctx.db
+          .select({ id: coaches.id })
+          .from(coaches)
+          .where(eq(coaches.id, input.newCoachId))
+          .limit(1);
+        if (!coach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found' });
+      }
 
       if (ceo.coachId === input.newCoachId) {
         return ceo;

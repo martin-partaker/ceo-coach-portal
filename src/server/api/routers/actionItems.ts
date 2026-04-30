@@ -93,6 +93,7 @@ export const actionItemsRouter = createTRPCRouter({
         item: z.string().min(1).optional(),
         dueAt: z.string().nullable().optional(),
         status: z.enum(['open', 'done', 'dropped']).optional(),
+        reviewed: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -105,10 +106,23 @@ export const actionItemsRouter = createTRPCRouter({
 
       await verifyCycleOwnership(ctx.db, existing.cycleId, ctx.coach.id);
 
-      const { id, ...fields } = input;
-      const updatePayload = Object.fromEntries(
+      const { id, reviewed, ...fields } = input;
+      const updatePayload: Record<string, unknown> = Object.fromEntries(
         Object.entries(fields).filter(([, v]) => v !== undefined)
       );
+      if (reviewed !== undefined) {
+        updatePayload.reviewed = reviewed;
+        updatePayload.reviewedAt = reviewed ? new Date() : null;
+        updatePayload.reviewedBy = reviewed ? ctx.coach.id : null;
+      } else if (Object.keys(updatePayload).length > 0 && !existing.reviewed) {
+        // Touching the item (status / owner / text / due) implicitly
+        // reviews it — anything the coach has actively curated counts
+        // toward the readiness gate. Manual `reviewed` overrides still
+        // win because they go through the branch above.
+        updatePayload.reviewed = true;
+        updatePayload.reviewedAt = new Date();
+        updatePayload.reviewedBy = ctx.coach.id;
+      }
 
       const [updated] = await ctx.db
         .update(actionItems)
@@ -116,6 +130,22 @@ export const actionItemsRouter = createTRPCRouter({
         .where(eq(actionItems.id, id))
         .returning();
       return updated;
+    }),
+
+  setAllReviewed: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid(), reviewed: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await verifyCycleOwnership(ctx.db, input.cycleId, ctx.coach.id);
+      const result = await ctx.db
+        .update(actionItems)
+        .set({
+          reviewed: input.reviewed,
+          reviewedAt: input.reviewed ? new Date() : null,
+          reviewedBy: input.reviewed ? ctx.coach.id : null,
+        })
+        .where(eq(actionItems.cycleId, input.cycleId))
+        .returning({ id: actionItems.id });
+      return { updated: result.length };
     }),
 
   delete: protectedProcedure

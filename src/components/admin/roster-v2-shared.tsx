@@ -82,3 +82,26 @@ export function fmtShortDate(s: string): string {
   const [y, m, d] = s.split('-');
   return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m - 1]} ${+d}`;
 }
+
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/**
+ * Tab-friendly cycle label derived from `periodStart` / `periodEnd`.
+ *  - Single month:    "Apr 2026"
+ *  - Range, same yr:  "Feb–Jun 2026"
+ *  - Range, cross-yr: "Dec 2025–Jan 2026"
+ *  - No dates set:    falls back to the stored `cycle.label`.
+ */
+export function deriveCycleLabel(cycle: {
+  label: string;
+  periodStart: string | null;
+  periodEnd: string | null;
+}): string {
+  if (!cycle.periodStart || !cycle.periodEnd) return cycle.label;
+  const [sy, sm] = cycle.periodStart.split('-').map(Number);
+  const [ey, em] = cycle.periodEnd.split('-').map(Number);
+  if (!sy || !sm || !ey || !em) return cycle.label;
+  if (sy === ey && sm === em) return `${MONTHS_SHORT[sm - 1]} ${sy}`;
+  if (sy === ey) return `${MONTHS_SHORT[sm - 1]}–${MONTHS_SHORT[em - 1]} ${sy}`;
+  return `${MONTHS_SHORT[sm - 1]} ${sy}–${MONTHS_SHORT[em - 1]} ${ey}`;
+}

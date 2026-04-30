@@ -111,3 +111,78 @@
     color: var(--foreground);
   }
 }
+
+/* curriculum-prose: typography for the /c/[slug] permalinks. */
+.curriculum-prose {
+  color: var(--foreground);
+  font-size: 15.5px;
+  line-height: 1.7;
+}
+.curriculum-prose > * + * { margin-top: 1em; }
+.curriculum-prose h1,
+.curriculum-prose h2,
+.curriculum-prose h3,
+.curriculum-prose h4 {
+  color: var(--foreground);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.curriculum-prose h1 { font-size: 1.75rem; line-height: 1.25; margin-top: 2em; }
+.curriculum-prose h2 {
+  font-size: 1.35rem;
+  line-height: 1.3;
+  margin-top: 2em;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.curriculum-prose h3 { font-size: 1.1rem; line-height: 1.35; margin-top: 1.6em; }
+.curriculum-prose h4 {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  margin-top: 1.4em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: color-mix(in oklab, var(--foreground), transparent 25%);
+}
+.curriculum-prose p { margin: 0; }
+.curriculum-prose strong { color: var(--foreground); font-weight: 600; }
+.curriculum-prose em { font-style: italic; }
+.curriculum-prose ul,
+.curriculum-prose ol {
+  padding-left: 1.4em;
+  margin-top: 0.5em;
+}
+.curriculum-prose ul { list-style: disc; }
+.curriculum-prose ol { list-style: decimal; }
+.curriculum-prose li { margin-top: 0.35em; }
+.curriculum-prose li > ul,
+.curriculum-prose li > ol { margin-top: 0.35em; margin-bottom: 0.35em; }
+.curriculum-prose li::marker { color: color-mix(in oklab, var(--foreground), transparent 55%); }
+.curriculum-prose blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.9em;
+  margin-left: 0;
+  color: color-mix(in oklab, var(--foreground), transparent 25%);
+  font-style: italic;
+}
+.curriculum-prose code {
+  font-family: var(--font-geist-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.9em;
+  background: color-mix(in oklab, var(--foreground), transparent 92%);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.curriculum-prose hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2em 0;
+}
+.curriculum-prose a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--foreground), transparent 60%);
+}
+.curriculum-prose a:hover {
+  text-decoration-color: var(--foreground);
+}

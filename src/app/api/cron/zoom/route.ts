@@ -7,7 +7,7 @@ import { ingestZoomMeeting } from '@/lib/ingestion/ingest-zoom';
 import { INGESTION_CONFIG } from '@/lib/ingestion/config';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 600;
+export const maxDuration = 300;
 
 function isAuthorized(req: Request): boolean {
   const expected = process.env.CRON_SECRET;

@@ -63,7 +63,9 @@
       "WebFetch(domain:marketplace.zoom.us)",
       "WebFetch(domain:portal.apis.huit.harvard.edu)",
       "WebFetch(domain:www.recall.ai)",
-      "WebFetch(domain:devforum.zoom.us)"
+      "WebFetch(domain:devforum.zoom.us)",
+      "Bash(vercel git *)",
+      "Bash(vercel project *)"
     ]
   }
 }

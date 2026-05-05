@@ -6,6 +6,7 @@ import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { actionItems, ceos, cycles, journalEntries, transcripts, rawInputs } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
 import { refreshAiActionItems } from '@/lib/cycles/ai-action-items';
+import { MODELS } from '@/lib/anthropic/models';
 
 const anthropic = new Anthropic();
 
@@ -380,7 +381,7 @@ export const cyclesRouter = createTRPCRouter({
       });
 
       const message = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: MODELS.draft,
         max_tokens: 2048,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],

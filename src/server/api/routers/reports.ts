@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { cycles, ceos, reports, coaches, curriculum } from '@/db/schema';
 import { buildPrompt } from '@/lib/prompts/builder';
+import { MODELS } from '@/lib/anthropic/models';
 
 const anthropic = new Anthropic();
 
@@ -297,7 +298,7 @@ export const reportsRouter = createTRPCRouter({
       }
 
       // Call Claude
-      const modelId = 'claude-sonnet-4-20250514';
+      const modelId = MODELS.reportPrimary;
       const message = await anthropic.messages.create({
         model: modelId,
         max_tokens: 4096,
@@ -584,7 +585,7 @@ export const reportsRouter = createTRPCRouter({
         { role: 'user', content: focusInstruction },
       ];
 
-      const modelId = 'claude-sonnet-4-20250514';
+      const modelId = MODELS.reportPrimary;
       const message = await anthropic.messages.create({
         model: modelId,
         max_tokens: 2048,

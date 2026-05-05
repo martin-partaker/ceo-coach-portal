@@ -3,6 +3,7 @@ import { db } from '@/db';
 import { ceos, ceoEmailAliases, coaches, cycles, type RawInput } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { INGESTION_CONFIG } from './config';
+import { MODELS } from '@/lib/anthropic/models';
 
 const anthropic = new Anthropic();
 
@@ -310,7 +311,7 @@ Return ONLY JSON, no markdown fences:
   };
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODELS.classifier,
       max_tokens: 384,
       messages: [{ role: 'user', content: userPrompt }],
     });

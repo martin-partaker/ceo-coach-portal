@@ -1,3 +1,5 @@
+import { MODELS } from '@/lib/anthropic/models';
+
 export const INGESTION_CONFIG = {
   // Fuzzy match score (0-1). Above this → auto-attach. Below → pending_ceo with top-3 candidates.
   fuzzyMatchThreshold: 0.9,
@@ -10,5 +12,5 @@ export const INGESTION_CONFIG = {
   // Tally polling page size.
   tallyPageSize: 100,
   // Anthropic model used for transcript classification.
-  classifierModel: 'claude-haiku-4-5-20251001',
+  classifierModel: MODELS.classifier,
 };

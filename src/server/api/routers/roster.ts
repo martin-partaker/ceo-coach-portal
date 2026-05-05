@@ -19,6 +19,7 @@ import {
 import type { KpiKind } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
 import { refreshAiActionItems } from '@/lib/cycles/ai-action-items';
+import { MODELS } from '@/lib/anthropic/models';
 import {
   actionItemEffectiveDate,
   inputBelongsToCycle,
@@ -1415,7 +1416,7 @@ export const rosterRouter = createTRPCRouter({
       });
 
       const message = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: MODELS.draft,
         max_tokens: 2048,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
@@ -1515,7 +1516,7 @@ export const rosterRouter = createTRPCRouter({
       });
 
       const message = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: MODELS.draft,
         max_tokens: 2048,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],

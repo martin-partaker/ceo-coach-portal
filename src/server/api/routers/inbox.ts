@@ -19,11 +19,13 @@ import { ensureCycleForCeoAndDate } from '@/lib/ingestion/match-cycle';
 import { projectRawInput } from '@/lib/ingestion/project';
 import { rematchPendingRows } from '@/lib/ingestion/rematch';
 import {
-  suggestForPendingRow,
   suggestCycleFor,
   loadCeoIndexCached,
-  loadCoachNames,
+  loadCoachNamesCached,
   mapWithConcurrency,
+  computeAndStoreSuggestion,
+  invalidatePendingSuggestions,
+  suggestionFromRow,
   type PendingRowSuggestions,
 } from '@/lib/ingestion/triage-suggest';
 import { coaches as coachesTbl } from '@/db/schema';
@@ -220,19 +222,40 @@ export const inboxRouter = createTRPCRouter({
     const coachById = new Map(coachRows.map((c) => [c.id, c.name]));
 
     // Pre-load the CEO + coach indexes once (avoids N round-trips
-    // inside the loop and lets every row pass the same coach list to
-    // the AI matcher).
-    const [ceoIndex, coachNames] = await Promise.all([
+    // inside the loop and lets every row reuse the same catalog).
+    const [ceoIndex] = await Promise.all([
       loadCeoIndexCached(),
-      loadCoachNames(),
+      loadCoachNamesCached(),
     ]);
 
-    // Run AI suggestions with bounded concurrency — Anthropic enforces
-    // a 50k input-token-per-minute limit on this org and a fully
-    // parallel fan-out trips it on big triage queues. 4 in flight at a
-    // time gives us most of the speedup with no rate-limit drops.
-    const suggestions = await mapWithConcurrency(rows, 4, (r) =>
-      suggestForPendingRow(r, ceoIndex, coachNames),
+    // Read suggestions from the row columns (`suggested_*`). For rows
+    // without a stored suggestion (`suggested_at` is null — newly ingested
+    // before the suggester ran, or invalidated by a CEO/alias change),
+    // lazy-fill: compute + persist now, then read back the row.
+    //
+    // Lazy fan-out has bounded concurrency so a stale-suggestion stampede
+    // doesn't trip Anthropic's per-minute input-token limit. After a
+    // catalog invalidation everyone hitting the page would otherwise race
+    // to recompute every row in parallel.
+    const missingIds = rows.filter((r) => !r.suggestedAt).map((r) => r.id);
+    if (missingIds.length > 0) {
+      await mapWithConcurrency(missingIds, 4, (id) => computeAndStoreSuggestion(id));
+      // Re-fetch the rows we just filled so the column reads pick up the
+      // freshly-written suggestion. Cheap since we only refetch the rows
+      // that actually changed.
+      const refreshed = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(inArray(rawInputs.id, missingIds));
+      const refreshedById = new Map(refreshed.map((r) => [r.id, r]));
+      for (let i = 0; i < rows.length; i++) {
+        const fresh = refreshedById.get(rows[i].id);
+        if (fresh) rows[i] = fresh;
+      }
+    }
+
+    const suggestions = rows.map(
+      (r) => suggestionFromRow(r, ceoIndex) ?? { topSuggestion: null, alternatives: [] },
     );
 
     // Cycle suggestions are tiny DB reads; do them in parallel too.
@@ -712,10 +735,12 @@ export const inboxRouter = createTRPCRouter({
       // Optionally add submission's email as a new alias on the primary CEO.
       // Aliases are 1:1 with email→CEO; no sensible meaning to attach the
       // same email to multiple CEOs, so primary-only is correct here.
+      let addedAlias = false;
       if (input.addAliasFromSubmission && raw.matchCandidates) {
         const candidates = raw.matchCandidates as { email?: string };
         if (candidates?.email) {
           await ensureAlias(primaryCeo.id, candidates.email);
+          addedAlias = true;
         }
       }
 
@@ -754,6 +779,13 @@ export const inboxRouter = createTRPCRouter({
       // Trigger projection — fans out into one transcripts row per linked
       // CEO/cycle.
       await projectRawInput(input.rawInputId);
+
+      // If a new alias was added, other pending rows may now resolve to a
+      // different CEO via the deterministic short-circuit. Invalidate
+      // their cached suggestions so the next triage page recomputes.
+      if (addedAlias) {
+        await invalidatePendingSuggestions();
+      }
 
       // Sweep other pending rows — the new alias may unlock more matches.
       const { resolved } = await rematchPendingRows({
@@ -826,6 +858,10 @@ export const inboxRouter = createTRPCRouter({
         .where(eq(rawInputs.id, input.rawInputId));
 
       await projectRawInput(input.rawInputId);
+
+      // New CEO + alias → existing pending suggestions may now resolve to
+      // this CEO. Invalidate so the next triage view recomputes.
+      await invalidatePendingSuggestions();
 
       // Sweep other pending rows — they may now match by email or by name
       // under this coach's roster.

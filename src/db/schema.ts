@@ -164,6 +164,19 @@ export const rawInputs = pgTable(
     matchConfidence: integer('match_confidence'),
     matchCandidates: jsonb('match_candidates'),
     classification: jsonb('classification'),
+    // Cached AI triage suggestion. Computed once at ingest (or lazily on
+    // first triage view) and re-used until invalidated. The triage UI
+    // reads these columns directly instead of re-running the LLM on every
+    // page load. `suggestedAt` is the freshness gate — null means "needs
+    // recompute" and is set whenever a new CEO/alias is added or the row's
+    // text content changes.
+    suggestedCeoId: uuid('suggested_ceo_id').references(() => ceos.id, {
+      onDelete: 'set null',
+    }),
+    suggestedReason: text('suggested_reason'),
+    /** Array of `{ ceoId: string; reason: string }` — up to 2 alternates. */
+    suggestedAlternatives: jsonb('suggested_alternatives'),
+    suggestedAt: timestamp('suggested_at'),
     ingestedAt: timestamp('ingested_at').notNull().defaultNow(),
     resolvedAt: timestamp('resolved_at'),
     resolvedBy: uuid('resolved_by').references(() => coaches.id),

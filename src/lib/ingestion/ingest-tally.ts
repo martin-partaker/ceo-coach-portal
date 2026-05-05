@@ -10,6 +10,7 @@ import { renderSubmissionAsText } from '@/lib/tally/render';
 import { findCeoByEmail, isInternalEmail, normalizeEmail } from './identity';
 import { ensureCycleForCeoAndDate } from './match-cycle';
 import { projectRawInput } from './project';
+import { computeAndStoreSuggestion } from './triage-suggest';
 
 export type TallyIngestOutcome =
   | 'matched'
@@ -144,6 +145,14 @@ export async function ingestTallySubmission(args: {
     if (cycleId || formRow.contentType === 'intake' || formRow.contentType === 'goal_worksheet') {
       await projectRawInput(insertedId);
     }
+  }
+
+  // Compute + persist the triage suggestion at ingest time so the operator
+  // doesn't pay an LLM call on every page load. Tally's ingest path only
+  // produces `pending_ceo` for unresolved rows (no `pending_cycle` here);
+  // matched/discarded already have a verdict.
+  if (insertedId && matchStatus === 'pending_ceo') {
+    await computeAndStoreSuggestion(insertedId);
   }
 
   return matchStatus;

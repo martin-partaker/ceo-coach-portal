@@ -36,6 +36,7 @@ import { rawInputs } from '../src/db/schema';
 import { fetchTranscriptByUuid } from '../src/lib/zoom/client';
 import { classifyTranscript } from '../src/lib/ingestion/classify';
 import { projectRawInput } from '../src/lib/ingestion/project';
+import { invalidatePendingSuggestions } from '../src/lib/ingestion/triage-suggest';
 import type { ZoomParticipant } from '../src/lib/zoom/client';
 
 interface ZoomPayload {
@@ -199,6 +200,10 @@ async function main() {
       }
 
       await db.update(rawInputs).set(updateSet).where(eq(rawInputs.id, row.id));
+
+      // Text content changed → existing cached suggestion is based on
+      // wrong content. Invalidate so the next triage view recomputes.
+      await invalidatePendingSuggestions({ rawInputIds: [row.id] });
 
       // 3. Re-project to typed transcripts table for matched rows so
       //    transcripts.content reflects the corrected text. projectRawInput

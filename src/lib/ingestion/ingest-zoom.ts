@@ -11,6 +11,7 @@ import { classifyTranscript, type TranscriptClassification } from './classify';
 import { fuzzyMatchCeoForCoach } from './match-ceo';
 import { isInternalEmail } from './identity';
 import { INGESTION_CONFIG } from './config';
+import { computeAndStoreSuggestion } from './triage-suggest';
 
 export type ZoomIngestOutcome = 'matched' | 'pending_ceo' | 'discarded' | 'duplicate';
 
@@ -147,6 +148,14 @@ export async function ingestZoomMeeting(args: {
     .returning({ id: rawInputs.id });
 
   if (!inserted) return 'duplicate';
+
+  // Compute + persist the triage suggestion now, so the operator's first
+  // page load doesn't trigger an LLM fan-out. Awaited but failures are
+  // swallowed inside computeAndStoreSuggestion — a flaky Anthropic call
+  // mustn't fail ingestion.
+  if (matchStatus === 'pending_ceo') {
+    await computeAndStoreSuggestion(inserted.id);
+  }
 
   // Group sessions: defer rawInputCeos linkage until the operator confirms
   // each CEO via triage. (Was auto-linked when matched; now always pending.)

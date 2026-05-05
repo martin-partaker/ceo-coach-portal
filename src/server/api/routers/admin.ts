@@ -12,6 +12,7 @@ import {
   journalEntries,
   transcripts,
 } from '@/db/schema';
+import { invalidatePendingSuggestions } from '@/lib/ingestion/triage-suggest';
 
 /**
  * Same scope rule used by roster.*: unscoped means a real super admin who
@@ -228,6 +229,10 @@ export const adminRouter = createTRPCRouter({
           .onConflictDoNothing({ target: ceoEmailAliases.email });
       }
 
+      // New CEO → every pending row's suggestion is potentially stale.
+      // Mark them for lazy recompute next time triageQueue is queried.
+      await invalidatePendingSuggestions();
+
       return created;
     }),
 
@@ -275,6 +280,8 @@ export const adminRouter = createTRPCRouter({
           .insert(ceoEmailAliases)
           .values({ ceoId: updated.id, email: set.email })
           .onConflictDoNothing({ target: ceoEmailAliases.email });
+        // New alias → suggestions might shift; invalidate.
+        await invalidatePendingSuggestions();
       }
 
       return updated;
@@ -316,6 +323,8 @@ export const adminRouter = createTRPCRouter({
         .insert(ceoEmailAliases)
         .values({ ceoId: input.ceoId, email: normalized })
         .returning();
+      // New alias → suggestions might shift; invalidate.
+      await invalidatePendingSuggestions();
       return created;
     }),
 

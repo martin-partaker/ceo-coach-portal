@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { ceos, cycles, reports, transcripts } from '@/db/schema';
 import { sql } from 'drizzle-orm';
+import { invalidatePendingSuggestions } from '@/lib/ingestion/triage-suggest';
 
 export const ceosRouter = createTRPCRouter({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -98,6 +99,8 @@ export const ceosRouter = createTRPCRouter({
           tenXGoalUpdatedAt: input.tenXGoal ? new Date() : null,
         })
         .returning();
+      // New CEO → pending row suggestions may now resolve to this CEO.
+      await invalidatePendingSuggestions();
       return created;
     }),
 

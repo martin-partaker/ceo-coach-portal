@@ -33,14 +33,16 @@ Output ONLY a JSON object with these exact keys (no markdown, no explanation):
   "commitmentDensity": 0-10,         // rough count of concrete commitments / next-actions surfaced
   "includeInMonthlySummary": true | false,
   "includeReason": "one short sentence",
-  "participantsSummary": "Eric Partaker (coach) + Dave Dieter (CEO)"
+  "participantsSummary": "<Coach Full Name> (coach) + <CEO Full Name> (CEO)"
 }
 
 Rules:
 - meetingType "internal_team" / "coach_onboarding" / "scheduling_only" / "test_or_discard" / "external" → includeInMonthlySummary MUST be false.
 - "coaching_1on1" / "coaching_group" / "kickoff" with substantive coaching content → includeInMonthlySummary true.
 - durationBucket: short = <30 min, standard = 30-90, deep_dive = >90.
-- Be conservative: if the call is mostly logistics/scheduling/tech issues with no coaching content, set includeInMonthlySummary false.`;
+- Be conservative: if the call is mostly logistics/scheduling/tech issues with no coaching content, set includeInMonthlySummary false.
+- participantsSummary: use the ACTUAL names from the Participants list provided in the user message. Internal participants (marked "(internal/coach)") are coaches; external participants are CEOs / clients. NEVER invent names, NEVER reuse names from a different transcript, NEVER fall back to a default placeholder. If you cannot identify the people from the participants list, list whatever names appear there verbatim.
+- includeReason: one sentence specific to THIS transcript's actual content. Do not produce generic boilerplate.`;
 
 function truncate(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;

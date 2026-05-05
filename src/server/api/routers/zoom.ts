@@ -5,7 +5,7 @@ import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { cycles, ceos, transcripts, rawInputs } from '@/db/schema';
 import {
   listRecordings,
-  fetchTranscript,
+  fetchTranscriptByUuid,
   fetchParticipants,
   type ZoomParticipant,
 } from '@/lib/zoom/client';
@@ -49,7 +49,10 @@ export const zoomRouter = createTRPCRouter({
       z.object({
         cycleId: z.string().uuid(),
         meetingId: z.union([z.string(), z.number()]),
-        meetingUuid: z.string().optional(),
+        // Required: the numeric meeting ID is shared across all occurrences
+        // of a recurring meeting, so we MUST fetch by UUID to get the
+        // correct per-occurrence transcript.
+        meetingUuid: z.string(),
         meetingTopic: z.string().optional(),
         meetingDuration: z.number().optional(),
         meetingStartTime: z.string().optional(),
@@ -79,8 +82,8 @@ export const zoomRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      // Fetch transcript from Zoom
-      const result = await fetchTranscript(input.meetingId, zoomEmail);
+      // Fetch transcript from Zoom by UUID (correct per-occurrence path).
+      const result = await fetchTranscriptByUuid(input.meetingUuid);
       if (!result) {
         throw new TRPCError({
           code: 'NOT_FOUND',
@@ -89,25 +92,22 @@ export const zoomRouter = createTRPCRouter({
         });
       }
 
-      // Fetch participants — best effort. If meetingUuid wasn't passed,
-      // skip (Zoom API requires UUID for past_meetings/{uuid}/participants).
+      // Fetch participants — best effort.
       let participants: ZoomParticipant[] = [];
-      if (input.meetingUuid) {
-        try {
-          participants = await fetchParticipants(input.meetingUuid);
-          participants = participants.map((p) => ({
-            ...p,
-            internal_user:
-              p.internal_user === true ||
-              (p.user_email ? isInternalEmail(p.user_email) : false),
-          }));
-        } catch (err) {
-          console.warn('zoom.importTranscript: participants fetch failed', err);
-        }
+      try {
+        participants = await fetchParticipants(input.meetingUuid);
+        participants = participants.map((p) => ({
+          ...p,
+          internal_user:
+            p.internal_user === true ||
+            (p.user_email ? isInternalEmail(p.user_email) : false),
+        }));
+      } catch (err) {
+        console.warn('zoom.importTranscript: participants fetch failed', err);
       }
 
       const occurredAt = input.meetingStartTime ? new Date(input.meetingStartTime) : new Date();
-      const externalId = input.meetingUuid ?? `manual:${input.meetingId}`;
+      const externalId = input.meetingUuid;
       const payloadJson = {
         meeting: {
           uuid: input.meetingUuid,

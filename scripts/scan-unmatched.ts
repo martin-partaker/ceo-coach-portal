@@ -52,7 +52,13 @@ async function main() {
     // Show a few sample meetings/topics
     console.log('  sample raw_input rows:');
     for (const m of matches.slice(0, 5)) {
-      const payload = m.row.payloadJson;
+      const payload = m.row.payloadJson as {
+        topic?: string;
+        formName?: string;
+        meeting?: { topic?: string };
+        start_time?: string;
+        submittedAt?: string;
+      } | null;
       const topic = payload?.topic ?? payload?.formName ?? payload?.meeting?.topic ?? '(no topic)';
       const start = payload?.start_time ?? payload?.submittedAt ?? m.row.occurredAt;
       console.log(`    · [${m.row.source}/${m.row.matchStatus}] ${String(start).slice(0,10)}  ${topic}  (hits: ${m.hits.join(',')})`);

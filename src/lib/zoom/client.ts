@@ -111,8 +111,20 @@ export async function listRecordings(userEmail: string, fromDate?: string, toDat
   return out;
 }
 
-export async function fetchTranscript(meetingId: string | number, userEmail: string): Promise<{ transcript: string; meetingTopic: string } | null> {
-  const res = await zoomFetch(`/meetings/${meetingId}/recordings`);
+/**
+ * Fetch a transcript by meeting UUID. Use this for recurring meetings
+ * (Personal Meeting Rooms, scheduled series) where the numeric meeting
+ * ID is shared across every occurrence — `/meetings/{id}/recordings`
+ * returns only the latest occurrence in that case, so passing a UUID is
+ * the only way to get a specific instance's transcript. UUIDs containing
+ * `/` or starting with `+` need double URL-encoding per Zoom's docs;
+ * `encodeMeetingUuid` handles that.
+ */
+export async function fetchTranscriptByUuid(
+  meetingUuid: string
+): Promise<{ transcript: string; meetingTopic: string } | null> {
+  const encoded = encodeMeetingUuid(meetingUuid);
+  const res = await zoomFetch(`/meetings/${encoded}/recordings`);
 
   if (!res.ok) {
     if (res.status === 404) return null;
@@ -122,16 +134,13 @@ export async function fetchTranscript(meetingId: string | number, userEmail: str
 
   const data = await res.json();
 
-  // Find transcript file (TRANSCRIPT or TIMELINE type, VTT format)
   const transcriptFile = data.recording_files?.find(
     (f: ZoomRecordingFile) =>
-      f.file_type === 'TRANSCRIPT' ||
-      f.recording_type === 'audio_transcript'
+      f.file_type === 'TRANSCRIPT' || f.recording_type === 'audio_transcript'
   );
 
   if (!transcriptFile) return null;
 
-  // Download the transcript
   const token = await getAccessToken();
   const downloadRes = await fetch(`${transcriptFile.download_url}?access_token=${token}`);
 
@@ -140,12 +149,8 @@ export async function fetchTranscript(meetingId: string | number, userEmail: str
   }
 
   const rawTranscript = await downloadRes.text();
-
-  // Clean VTT format to plain text
-  const transcript = cleanVttTranscript(rawTranscript);
-
   return {
-    transcript,
+    transcript: cleanVttTranscript(rawTranscript),
     meetingTopic: data.topic ?? 'Untitled meeting',
   };
 }

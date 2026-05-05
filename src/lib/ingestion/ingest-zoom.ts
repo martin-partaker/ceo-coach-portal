@@ -3,7 +3,7 @@ import { db } from '@/db';
 import { rawInputs } from '@/db/schema';
 import {
   fetchParticipants,
-  fetchTranscript,
+  fetchTranscriptByUuid,
   type ZoomRecording,
   type ZoomParticipant,
 } from '@/lib/zoom/client';
@@ -49,7 +49,11 @@ export async function ingestZoomMeeting(args: {
 
   let transcriptText: string | null = args.prefetched?.transcriptText ?? null;
   if (transcriptText == null) {
-    const fetched = await fetchTranscript(meeting.id, zoomEmail);
+    // Fetch by UUID, not numeric ID. Recurring meetings (Personal Meeting
+    // Rooms, scheduled series) share one numeric ID across every occurrence;
+    // hitting `/meetings/{id}/recordings` returns only the latest, which
+    // would copy that one transcript onto every UUID.
+    const fetched = await fetchTranscriptByUuid(meeting.uuid);
     transcriptText = fetched?.transcript ?? null;
   }
   if (!transcriptText) {

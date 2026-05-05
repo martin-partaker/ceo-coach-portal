@@ -12,7 +12,7 @@ Browser → Next.js App Router → tRPC (HTTP handler at /api/trpc/[trpc])
 
 Auth: Neon Auth (email/password) → session cookie → tRPC context
 ```
-
+ 
 ## Components
 
 ### Frontend

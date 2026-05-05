@@ -83,26 +83,32 @@ interface ListRecordingsResponse {
   from: string;
   to: string;
   meetings: ZoomRecording[];
+  next_page_token?: string;
 }
 
 export async function listRecordings(userEmail: string, fromDate?: string, toDate?: string): Promise<ZoomRecording[]> {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const from = fromDate ?? thirtyDaysAgo.toISOString().split('T')[0];
+  const to = toDate ?? now.toISOString().split('T')[0];
 
-  const res = await zoomFetch(`/users/${encodeURIComponent(userEmail)}/recordings`, {
-    from: fromDate ?? thirtyDaysAgo.toISOString().split('T')[0],
-    to: toDate ?? now.toISOString().split('T')[0],
-    page_size: '50',
-  });
-
-  if (!res.ok) {
-    if (res.status === 404) return [];
-    const text = await res.text();
-    throw new Error(`Zoom recordings list failed (${res.status}): ${text}`);
+  const out: ZoomRecording[] = [];
+  let nextPageToken = '';
+  while (true) {
+    const params: Record<string, string> = { from, to, page_size: '300' };
+    if (nextPageToken) params.next_page_token = nextPageToken;
+    const res = await zoomFetch(`/users/${encodeURIComponent(userEmail)}/recordings`, params);
+    if (!res.ok) {
+      if (res.status === 404) return out;
+      const text = await res.text();
+      throw new Error(`Zoom recordings list failed (${res.status}): ${text}`);
+    }
+    const data: ListRecordingsResponse = await res.json();
+    out.push(...(data.meetings ?? []));
+    if (!data.next_page_token) break;
+    nextPageToken = data.next_page_token;
   }
-
-  const data: ListRecordingsResponse = await res.json();
-  return data.meetings ?? [];
+  return out;
 }
 
 export async function fetchTranscript(meetingId: string | number, userEmail: string): Promise<{ transcript: string; meetingTopic: string } | null> {
@@ -165,6 +171,41 @@ export async function listAllRecordingsForCoach(
     cursor = new Date(windowEnd.getTime() + 24 * 60 * 60 * 1000);
   }
 
+  return out;
+}
+
+export interface ZoomUser {
+  id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  type?: number;
+  status?: string;
+}
+
+/**
+ * List all active+inactive users in the Zoom account. Paginated.
+ */
+export async function listAllUsers(): Promise<ZoomUser[]> {
+  const out: ZoomUser[] = [];
+  for (const status of ['active', 'inactive', 'pending'] as const) {
+    let nextPageToken = '';
+    while (true) {
+      const params: Record<string, string> = { status, page_size: '300' };
+      if (nextPageToken) params.next_page_token = nextPageToken;
+      const res = await zoomFetch('/users', params);
+      if (!res.ok) {
+        if (res.status === 404) break;
+        const text = await res.text();
+        throw new Error(`Zoom list users failed (${res.status}): ${text}`);
+      }
+      const data = await res.json();
+      const users: ZoomUser[] = Array.isArray(data.users) ? data.users : [];
+      out.push(...users);
+      if (!data.next_page_token) break;
+      nextPageToken = data.next_page_token;
+    }
+  }
   return out;
 }
 

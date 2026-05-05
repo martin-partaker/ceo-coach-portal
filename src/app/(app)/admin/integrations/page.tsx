@@ -3,6 +3,7 @@ import { Plug2 } from 'lucide-react';
 import { createServerCaller } from '@/lib/trpc/server';
 import { InboxDiscoveredForms } from '@/components/admin/inbox-discovered-forms';
 import { TallySyncButton } from '@/components/admin/tally-sync-button';
+import { ZoomSyncButton } from '@/components/admin/zoom-sync-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +38,22 @@ export default async function IntegrationsPage() {
           <TallySyncButton />
         </div>
         <InboxDiscoveredForms />
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">Zoom recordings</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Zoom transcripts sync automatically every few hours via cron.
+              Use <span className="font-medium">Sync now</span> to backfill the
+              last 12 months across every coach with a Zoom email — useful if
+              meetings were missed or transcripts uploaded late. Duplicates are
+              skipped, so it&apos;s safe to run repeatedly.
+            </p>
+          </div>
+          <ZoomSyncButton />
+        </div>
       </section>
     </div>
   );

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { eq, desc, and, sql, inArray } from 'drizzle-orm';
+import { eq, desc, and, sql, inArray, isNotNull } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
@@ -30,6 +30,8 @@ import { listForms, getFormQuestions, listSubmissionsSince } from '@/lib/tally/c
 import { upsertTallyForm, getActiveTallyForms } from '@/lib/tally/registry';
 import { inferIdentityFields } from '@/lib/tally/heuristics';
 import { ingestTallySubmission } from '@/lib/ingestion/ingest-tally';
+import { listAllRecordingsForCoach } from '@/lib/zoom/client';
+import { ingestZoomMeeting } from '@/lib/ingestion/ingest-zoom';
 
 /**
  * When a Tally form is deactivated/ignored, archive any pending raw_inputs
@@ -480,6 +482,138 @@ export const inboxRouter = createTRPCRouter({
       matched,
       pendingCeo,
       pendingCycle,
+      duplicates,
+      discarded,
+      errors,
+    };
+  }),
+
+  /**
+   * Latest "we successfully ran the Zoom cron" timestamp, surfaced on
+   * the Integrations page. Aggregates across every coach's
+   * `zoom:coach:*` cursor row plus any error messages still on those rows.
+   */
+  lastZoomSync: adminProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select()
+      .from(ingestionCursors)
+      .where(sql`${ingestionCursors.source} like 'zoom:%'`);
+    let lastRunAt: Date | null = null;
+    let lastSuccessAt: Date | null = null;
+    const errors: Array<{ source: string; message: string }> = [];
+    for (const r of rows) {
+      if (!lastRunAt || r.lastRunAt > lastRunAt) lastRunAt = r.lastRunAt;
+      if (r.lastSuccessAt && (!lastSuccessAt || r.lastSuccessAt > lastSuccessAt)) {
+        lastSuccessAt = r.lastSuccessAt;
+      }
+      if (r.lastError) errors.push({ source: r.source, message: r.lastError });
+    }
+    return { lastRunAt, lastSuccessAt, errors };
+  }),
+
+  /**
+   * Manual "Sync now" trigger for Zoom. Unlike the cron (which only
+   * walks the cursor-based overlap window), this pulls the full 12-month
+   * window for every coach with a Zoom email so the operator can backfill
+   * anything that was missed. Idempotent — duplicates are skipped at the
+   * `(source, externalId)` unique constraint in `ingestZoomMeeting`.
+   *
+   * Per-coach errors don't fail the whole run; they're collected and
+   * returned so the UI can surface them.
+   */
+  syncZoom: adminProcedure.mutation(async ({ ctx }) => {
+    const errors: Array<{ coachId: string; phase: 'list' | 'ingest'; message: string }> = [];
+
+    const coachRows = await ctx.db
+      .select({ id: coaches.id, zoomUserEmail: coaches.zoomUserEmail })
+      .from(coaches)
+      .where(isNotNull(coaches.zoomUserEmail));
+
+    let totalMeetings = 0;
+    let ingested = 0;
+    let matched = 0;
+    let pendingCeo = 0;
+    let duplicates = 0;
+    let discarded = 0;
+
+    // Manual sync deliberately overrides the cursor and pulls the full
+    // 12 months. Zoom's API caps each request at a 30-day window, but
+    // listAllRecordingsForCoach walks the range internally.
+    const now = new Date();
+    const twelveMonthsAgo = new Date(now);
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+
+    for (const coach of coachRows) {
+      const zoomEmail = coach.zoomUserEmail!;
+      const cursorSource = `zoom:coach:${coach.id}`;
+
+      try {
+        const meetings = await listAllRecordingsForCoach(zoomEmail, twelveMonthsAgo, now);
+        totalMeetings += meetings.length;
+
+        for (const meeting of meetings) {
+          try {
+            const outcome = await ingestZoomMeeting({
+              coachId: coach.id,
+              zoomEmail,
+              meeting,
+            });
+            ingested += 1;
+            if (outcome === 'duplicate') duplicates += 1;
+            else if (outcome === 'matched') matched += 1;
+            else if (outcome === 'pending_ceo') pendingCeo += 1;
+            else if (outcome === 'discarded') discarded += 1;
+          } catch (err) {
+            errors.push({
+              coachId: coach.id,
+              phase: 'ingest',
+              message: err instanceof Error ? err.message : 'unknown error',
+            });
+          }
+        }
+
+        await ctx.db
+          .insert(ingestionCursors)
+          .values({
+            source: cursorSource,
+            cursor: now.toISOString(),
+            lastRunAt: now,
+            lastSuccessAt: now,
+            lastError: null,
+          })
+          .onConflictDoUpdate({
+            target: ingestionCursors.source,
+            set: {
+              cursor: now.toISOString(),
+              lastRunAt: now,
+              lastSuccessAt: now,
+              lastError: null,
+            },
+          });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        errors.push({ coachId: coach.id, phase: 'list', message: msg });
+        await ctx.db
+          .insert(ingestionCursors)
+          .values({
+            source: cursorSource,
+            cursor: '',
+            lastRunAt: new Date(),
+            lastError: msg,
+          })
+          .onConflictDoUpdate({
+            target: ingestionCursors.source,
+            set: { lastRunAt: new Date(), lastError: msg },
+          });
+      }
+    }
+
+    return {
+      coaches: coachRows.length,
+      meetings: totalMeetings,
+      ingested,
+      matched,
+      pendingCeo,
       duplicates,
       discarded,
       errors,

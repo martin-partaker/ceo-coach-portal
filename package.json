@@ -14,6 +14,7 @@
     "backfill:tally": "tsx --env-file=.env scripts/backfill-tally.ts",
     "backfill:zoom": "tsx --env-file=.env scripts/backfill-zoom.ts",
     "seed:test-data": "tsx --env-file=.env scripts/seed-test-data.ts",
+    "seed:prod-ceos": "tsx --env-file=.env scripts/seed-prod-ceos.ts",
     "inspect:state": "tsx --env-file=.env scripts/inspect-state.ts",
     "reset:ingestion": "tsx --env-file=.env scripts/reset-ingestion.ts",
     "activate:forms": "tsx --env-file=.env scripts/activate-forms.ts",

@@ -65,7 +65,10 @@
       "WebFetch(domain:www.recall.ai)",
       "WebFetch(domain:devforum.zoom.us)",
       "Bash(vercel git *)",
-      "Bash(vercel project *)"
+      "Bash(vercel project *)",
+      "Bash(node *)",
+      "Bash(xargs -I{} basename {})",
+      "Bash(python3 *)"
     ]
   }
 }

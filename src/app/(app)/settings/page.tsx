@@ -1,8 +1,6 @@
 import { createServerCaller } from '@/lib/trpc/server';
 import {
   CheckCircle2,
-  Database,
-  Download,
   Mail,
   ShieldCheck,
   User,
@@ -118,34 +116,6 @@ export default async function SettingsPage() {
         )}
       </SettingsSection>
 
-      {/* Data export section — one-click ZIP of everything the caller
-          can see (their CEOs, cycles, journals, transcripts, KPIs,
-          generated reports). Scope mirrors the tRPC isUnscopedAdmin
-          rule, so an admin gets all CEOs + a coach gets only theirs. */}
-      <SettingsSection
-        icon={<Database className="h-4 w-4" />}
-        title="Data export"
-        description="Download a zip of every CEO, cycle, journal, transcript, KPI value, and generated report you have access to. Useful for archives, audits, or moving data out of the portal."
-      >
-        <SettingsRow
-          label="Export everything"
-          description={
-            coach.isSuperAdmin
-              ? 'As a super admin (not impersonating), this includes every CEO across every coach. Impersonating a coach narrows the export to that coach\'s roster.'
-              : 'Includes only the CEOs assigned to you, with their cycle history.'
-          }
-        >
-          <a
-            href="/api/export/zip"
-            download
-            rel="noreferrer"
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Download ZIP
-          </a>
-        </SettingsRow>
-      </SettingsSection>
     </div>
   );
 }

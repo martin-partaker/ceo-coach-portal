@@ -22,6 +22,7 @@ const adminItems = [
   { href: '/admin/ceos', label: 'Dashboard', icon: Users },
   { href: '/admin/triage', label: 'Triage', icon: ListChecks, showPendingBadge: true },
   { href: '/admin/integrations', label: 'Integrations', icon: Plug2 },
+  { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];
 
 interface SidebarProps {

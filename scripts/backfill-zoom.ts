@@ -11,7 +11,7 @@ import path from 'node:path';
 import { eq, isNotNull } from 'drizzle-orm';
 import { db } from '../src/db';
 import { coaches } from '../src/db/schema';
-import { listAllRecordingsForCoach } from '../src/lib/zoom/client';
+import { listAllRecordingsForCoach, listAllUsers } from '../src/lib/zoom/client';
 import { ingestZoomMeeting } from '../src/lib/ingestion/ingest-zoom';
 import {
   ensureCoachByZoomEmail,
@@ -181,7 +181,7 @@ async function replayLocal(initialCoachList: CoachLite[]) {
   return counts;
 }
 
-async function replayLive(coachList: CoachLite[]) {
+async function replayLive(coachList: CoachLite[], months: number = 12) {
   const counts = {
     processed: 0,
     matched: 0,
@@ -191,11 +191,11 @@ async function replayLive(coachList: CoachLite[]) {
     errors: 0,
   };
   const now = new Date();
-  const twelveMonthsAgo = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+  const fromDate = new Date(now.getTime() - months * 30 * 24 * 60 * 60 * 1000);
 
   for (const coach of coachList) {
     try {
-      const meetings = await listAllRecordingsForCoach(coach.zoomEmail, twelveMonthsAgo, now);
+      const meetings = await listAllRecordingsForCoach(coach.zoomEmail, fromDate, now);
       console.log(`  ↳ ${coach.zoomEmail}: ${meetings.length} meetings`);
       for (const meeting of meetings) {
         try {
@@ -222,23 +222,58 @@ async function replayLive(coachList: CoachLite[]) {
   return counts;
 }
 
+async function discoverInternalCoachesFromZoom(): Promise<number> {
+  let created = 0;
+  try {
+    const users = await listAllUsers();
+    for (const u of users) {
+      if (!u.email || !isInternalEmail(u.email)) continue;
+      const fullName =
+        [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || undefined;
+      const { created: wasCreated } = await ensureCoachByZoomEmail({
+        email: u.email,
+        name: fullName,
+      });
+      if (wasCreated) {
+        created++;
+        console.log(`    + discovered coach ${u.email} (${fullName ?? '(no name)'})`);
+      }
+    }
+  } catch (err) {
+    console.error(
+      '  ⚠ Zoom user discovery failed (continuing with local data):',
+      err instanceof Error ? err.message : err
+    );
+  }
+  return created;
+}
+
 async function main() {
   const useLive = process.argv.includes('--live');
-  console.log('→ Zoom backfill starting');
+  const monthsArg = process.argv.find((a) => a.startsWith('--months='));
+  const months = monthsArg ? parseInt(monthsArg.split('=')[1], 10) : 12;
+  console.log(`→ Zoom backfill starting (live=${useLive}, range=${months}mo)`);
 
-  const coachList = await loadCoaches();
-  if (coachList.length === 0) {
-    console.log('  ⚠ no coaches with zoomUserEmail set');
-    return;
+  // Discover all @partaker.com users from Zoom up front so live replay
+  // covers every coach — not just those who happened to host a transcript
+  // we have locally cached.
+  if (useLive) {
+    console.log('\n  discovering internal coaches via Zoom /users');
+    const newCount = await discoverInternalCoachesFromZoom();
+    console.log(`  discovered: +${newCount} new coach record(s)`);
   }
 
   console.log('\n  local replay');
-  const local = await replayLocal(coachList);
+  const initialCoaches = await loadCoaches();
+  const local = await replayLocal(initialCoaches);
   console.log(`  local result: ${JSON.stringify(local)}`);
 
   if (useLive) {
-    console.log('\n  live replay (last 12 months)');
-    const live = await replayLive(coachList);
+    // Reload from DB — local replay may have auto-created coaches we now
+    // need to query Zoom for.
+    const coachList = await loadCoaches();
+    console.log(`\n  live replay (last ${months}mo) across ${coachList.length} coach(es)`);
+    const live = await replayLive(coachList, months);
     console.log(`  live result: ${JSON.stringify(live)}`);
   }
 

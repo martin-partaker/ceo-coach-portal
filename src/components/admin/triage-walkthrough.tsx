@@ -82,10 +82,16 @@ export function TriageWalkthrough() {
   const [historyOffset, setHistoryOffset] = useState(0); // 0 = current item, 1 = last actioned, ...
   const [discardOpen, setDiscardOpen] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
-  // Manual pick — set when the operator clicks an alternative or picks via
-  // the dialog. Replaces the displayed "AI proposes" with their selection
-  // until they Confirm or revert.
-  const [manualPick, setManualPick] = useState<ManualPick | null>(null);
+  // Manual picks — populated when the operator clicks an alternative,
+  // picks via the dialog, or hits "+ Add another CEO". Empty means the AI
+  // suggestion is still in play. The first entry is the primary CEO
+  // (drives raw_inputs.ceoId / cycleId / coachId on confirm); the rest are
+  // additional members of the same recording.
+  const [manualPicks, setManualPicks] = useState<ManualPick[]>([]);
+  // True when the dialog was opened via "+ Add another CEO" rather than
+  // "Match" / "Change pick". Tells onPickFromDialog whether to replace
+  // the current pick set or append to it.
+  const [addingAnother, setAddingAnother] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   // Reset manual pick when the current row changes (advance / back)
@@ -144,9 +150,9 @@ export function TriageWalkthrough() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Reset manualPick when current row changes
+  // Reset manual picks when current row changes
   useEffect(() => {
-    setManualPick(null);
+    setManualPicks([]);
   }, [currentLive?.rawInputId]);
 
   const recordAction = useCallback(
@@ -179,10 +185,10 @@ export function TriageWalkthrough() {
     if (!currentCardData) return;
     const id = currentCardData.rawInputId;
 
-    // If the operator manually picked a CEO (via alternative or picker),
-    // assign that one. Otherwise fall back to AI's top suggestion (or cycle
-    // assignment for pending_cycle rows).
-    if (manualPick) {
+    // If the operator manually picked one or more CEOs (via alternative,
+    // picker, or "+ add another"), assign that list. Otherwise fall back
+    // to AI's top suggestion (or cycle assignment for pending_cycle rows).
+    if (manualPicks.length > 0) {
       setStats((s) => ({ ...s, overridden: s.overridden + 1 }));
       markActed(id);
       recordAction({
@@ -193,7 +199,7 @@ export function TriageWalkthrough() {
       try {
         await assignMutation.mutateAsync({
           rawInputId: id,
-          ceoId: manualPick.ceoId,
+          ceoIds: manualPicks.map((p) => p.ceoId),
           addAliasFromSubmission: !!currentCardData.submitterEmail,
         });
         utils.inbox.pendingCounts.invalidate();
@@ -220,7 +226,7 @@ export function TriageWalkthrough() {
       } else {
         await assignMutation.mutateAsync({
           rawInputId: id,
-          ceoId: currentCardData.topSuggestion.ceoId,
+          ceoIds: [currentCardData.topSuggestion.ceoId],
           addAliasFromSubmission: !!currentCardData.submitterEmail,
         });
       }
@@ -232,7 +238,7 @@ export function TriageWalkthrough() {
   }, [
     inHistoryView,
     currentCardData,
-    manualPick,
+    manualPicks,
     markActed,
     recordAction,
     assignMutation,
@@ -246,15 +252,18 @@ export function TriageWalkthrough() {
       // Find the alternative's full data from the current card
       const alt = currentCardData.alternatives.find((a) => a.ceoId === ceoId);
       if (!alt) return;
-      setManualPick({
-        ceoId: alt.ceoId,
-        ceoName: alt.ceoName,
-        ceoEmail: alt.ceoEmail,
-        ceoAvatarUrl: alt.ceoAvatarUrl,
-        coachName: alt.coachName,
-      });
-      // Visually surface that this was a manual choice. No mutation yet —
-      // operator must press Confirm.
+      // Picking an alternative replaces the current primary pick — this is
+      // the "you picked the wrong one, here's the right CEO" path. To add
+      // a second CEO, use "+ Add another CEO" instead.
+      setManualPicks([
+        {
+          ceoId: alt.ceoId,
+          ceoName: alt.ceoName,
+          ceoEmail: alt.ceoEmail,
+          ceoAvatarUrl: alt.ceoAvatarUrl,
+          coachName: alt.coachName,
+        },
+      ]);
       void ceoName;
     },
     [inHistoryView, currentCardData]
@@ -262,19 +271,51 @@ export function TriageWalkthrough() {
 
   const onPickFromDialog = useCallback(
     (ceo: { id: string; name: string; email: string | null; avatarUrl: string | null; coachName: string }) => {
-      setManualPick({
+      const newPick: ManualPick = {
         ceoId: ceo.id,
         ceoName: ceo.name,
         ceoEmail: ceo.email,
         ceoAvatarUrl: ceo.avatarUrl,
         coachName: ceo.coachName,
+      };
+      setManualPicks((prev) => {
+        if (addingAnother) {
+          // Append mode (clicked "+ Add another CEO"). If there are no
+          // manual picks yet but the AI offered a suggestion, seed it as
+          // the primary so we don't silently lose the AI's pick when the
+          // operator just wanted to add a co-attendee.
+          if (prev.length === 0 && currentCardData?.topSuggestion) {
+            const ai = currentCardData.topSuggestion;
+            if (ai.ceoId === newPick.ceoId) return [newPick];
+            return [
+              {
+                ceoId: ai.ceoId,
+                ceoName: ai.ceoName,
+                ceoEmail: ai.ceoEmail,
+                ceoAvatarUrl: ai.ceoAvatarUrl,
+                coachName: ai.coachName,
+              },
+              newPick,
+            ];
+          }
+          if (prev.some((p) => p.ceoId === newPick.ceoId)) return prev;
+          return [...prev, newPick];
+        }
+        // Replace mode (Match / Change pick): drop everything and pick this
+        // CEO as the new primary.
+        return [newPick];
       });
+      setAddingAnother(false);
     },
-    []
+    [currentCardData, addingAnother]
   );
 
+  const onRemovePick = useCallback((ceoId: string) => {
+    setManualPicks((prev) => prev.filter((p) => p.ceoId !== ceoId));
+  }, []);
+
   const onRevertToAi = useCallback(() => {
-    setManualPick(null);
+    setManualPicks([]);
   }, []);
 
   const onArchive = useCallback(async () => {
@@ -412,7 +453,7 @@ export function TriageWalkthrough() {
   // than numeric scores; if the AI is unsure the operator just hits
   // "Match" / "Pick another" instead of fighting a disabled button.
   const confirmDisabled =
-    inHistoryView || (!manualPick && !currentLive?.topSuggestion);
+    inHistoryView || (manualPicks.length === 0 && !currentLive?.topSuggestion);
 
   // Keyboard
   useEffect(() => {
@@ -562,15 +603,15 @@ export function TriageWalkthrough() {
 
       <TriageCard
         data={
-          manualPick
+          manualPicks.length > 0
             ? {
                 ...currentCardData,
                 topSuggestion: {
-                  ceoId: manualPick.ceoId,
-                  ceoName: manualPick.ceoName,
-                  ceoEmail: manualPick.ceoEmail,
-                  ceoAvatarUrl: manualPick.ceoAvatarUrl,
-                  coachName: manualPick.coachName,
+                  ceoId: manualPicks[0].ceoId,
+                  ceoName: manualPicks[0].ceoName,
+                  ceoEmail: manualPicks[0].ceoEmail,
+                  ceoAvatarUrl: manualPicks[0].ceoAvatarUrl,
+                  coachName: manualPicks[0].coachName,
                   confidence: 100,
                   reasoning: 'manual override',
                 },
@@ -578,13 +619,49 @@ export function TriageWalkthrough() {
               }
             : currentCardData
         }
-        proposalLabel={manualPick ? 'You picked' : undefined}
-        proposalToneOverride={manualPick ? 'manual' : undefined}
-        previousAiSuggestion={manualPick ? currentCardData.topSuggestion : null}
-        onRevertToAi={manualPick ? onRevertToAi : undefined}
+        additionalPicks={manualPicks.slice(1).map((p) => ({
+          ceoId: p.ceoId,
+          ceoName: p.ceoName,
+          ceoEmail: p.ceoEmail,
+          ceoAvatarUrl: p.ceoAvatarUrl,
+          coachName: p.coachName,
+          confidence: 100,
+          reasoning: 'manual override',
+        }))}
+        onRemovePick={
+          manualPicks.length > 0 && !inHistoryView ? onRemovePick : undefined
+        }
+        onAddAnotherClick={
+          inHistoryView
+            ? undefined
+            : () => {
+                setAddingAnother(true);
+                setMatchOpen(true);
+              }
+        }
+        proposalLabel={manualPicks.length > 0 ? 'You picked' : undefined}
+        proposalToneOverride={manualPicks.length > 0 ? 'manual' : undefined}
+        previousAiSuggestion={
+          manualPicks.length > 0 ? currentCardData.topSuggestion : null
+        }
+        onRevertToAi={manualPicks.length > 0 ? onRevertToAi : undefined}
         onPickAlternative={inHistoryView ? undefined : onPickAlternative}
-        onPickCeoClick={inHistoryView ? undefined : () => setMatchOpen(true)}
-        onChangeClick={inHistoryView ? undefined : () => setMatchOpen(true)}
+        onPickCeoClick={
+          inHistoryView
+            ? undefined
+            : () => {
+                setAddingAnother(false);
+                setMatchOpen(true);
+              }
+        }
+        onChangeClick={
+          inHistoryView
+            ? undefined
+            : () => {
+                setAddingAnother(false);
+                setMatchOpen(true);
+              }
+        }
       />
 
       {/* Action bar */}
@@ -600,22 +677,27 @@ export function TriageWalkthrough() {
               (currentLive?.matchStatus === 'pending_cycle' && !currentLive.cycleSuggestion)
             }
           >
-            {manualPick
-              ? `Confirm → ${manualPick.ceoName}`
-              : currentLive?.matchStatus === 'pending_cycle' && currentLive.cycleSuggestion
-                ? `Confirm cycle → ${currentLive.cycleSuggestion.cycleLabel}`
-                : currentLive?.topSuggestion
-                  ? `Confirm → ${currentLive.topSuggestion.ceoName}`
-                  : 'Confirm'}
+            {manualPicks.length === 1
+              ? `Confirm → ${manualPicks[0].ceoName}`
+              : manualPicks.length > 1
+                ? `Confirm → ${manualPicks.length} CEOs`
+                : currentLive?.matchStatus === 'pending_cycle' && currentLive.cycleSuggestion
+                  ? `Confirm cycle → ${currentLive.cycleSuggestion.cycleLabel}`
+                  : currentLive?.topSuggestion
+                    ? `Confirm → ${currentLive.topSuggestion.ceoName}`
+                    : 'Confirm'}
             <Kbd>↵</Kbd>
           </Button>
           {!inHistoryView && currentLive && (
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setMatchOpen(true)}
+              onClick={() => {
+                setAddingAnother(false);
+                setMatchOpen(true);
+              }}
             >
-              {manualPick ? 'Change pick' : 'Match'}
+              {manualPicks.length > 0 ? 'Change pick' : 'Match'}
               <Kbd>Tab</Kbd>
             </Button>
           )}
@@ -624,7 +706,10 @@ export function TriageWalkthrough() {
               rawInputId={currentLive.rawInputId}
               submissionEmail={currentLive.submitterEmail}
               open={matchOpen}
-              onOpenChange={setMatchOpen}
+              onOpenChange={(v) => {
+                setMatchOpen(v);
+                if (!v) setAddingAnother(false);
+              }}
               hideTrigger
               onPick={onPickFromDialog}
             />

@@ -194,7 +194,7 @@ export function MatchToExistingButton({
     }
     assign.mutate({
       rawInputId,
-      ceoId: row.ceo.id,
+      ceoIds: [row.ceo.id],
       addAliasFromSubmission: !!submissionEmail && addAlias,
     });
   };

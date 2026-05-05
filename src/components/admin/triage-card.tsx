@@ -1,6 +1,6 @@
 'use client';
 
-import { Mail, FileText, Video, Pencil, Sparkles, Undo2 } from 'lucide-react';
+import { Mail, FileText, Video, Pencil, Sparkles, Undo2, Plus, X } from 'lucide-react';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import { cn } from '@/lib/utils';
 
@@ -81,6 +81,15 @@ export interface TriageCardProps {
   proposalToneOverride?: 'manual';
   previousAiSuggestion?: TriageSuggestionView | null;
   onRevertToAi?: () => void;
+  /** Extra CEOs picked alongside the primary (`data.topSuggestion` is the
+   *  primary). Rendered as compact chips below the primary card. */
+  additionalPicks?: TriageSuggestionView[];
+  /** Called when the operator clicks the X on a chip — both the primary
+   *  match card (when manual) and any additional pick chip. */
+  onRemovePick?: (ceoId: string) => void;
+  /** Renders a "+ Add another CEO" button below the match block. Used by
+   *  the triage walkthrough to support multi-CEO assignment. */
+  onAddAnotherClick?: () => void;
 }
 
 /**
@@ -109,6 +118,9 @@ export function TriageCard({
   proposalToneOverride,
   previousAiSuggestion,
   onRevertToAi,
+  additionalPicks,
+  onRemovePick,
+  onAddAnotherClick,
 }: TriageCardProps) {
   const SourceIcon = sourceIcon(data.source);
   const occurred = new Date(data.occurredAt);
@@ -204,6 +216,9 @@ export function TriageCard({
             suggestion={top}
             isManual={isManual}
             cycleSuggestion={data.cycleSuggestion}
+            onRemove={
+              isManual && onRemovePick ? () => onRemovePick(top.ceoId) : undefined
+            }
           />
         ) : (
           <button
@@ -218,6 +233,55 @@ export function TriageCard({
             <span className="text-[12px] font-medium text-foreground underline-offset-4 hover:underline">
               Pick a CEO →
             </span>
+          </button>
+        )}
+
+        {/* Additional picks — chips below the primary match card. Only
+            rendered when the operator has explicitly added more CEOs via
+            "+ Add another CEO". */}
+        {additionalPicks && additionalPicks.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {additionalPicks.map((pick) => (
+              <span
+                key={pick.ceoId}
+                className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/[0.08] py-1 pl-2 pr-1 text-xs"
+              >
+                <CeoAvatar
+                  name={pick.ceoName}
+                  avatarUrl={pick.ceoAvatarUrl}
+                  size="sm"
+                />
+                <span className="font-medium text-foreground">{pick.ceoName}</span>
+                {pick.coachName && (
+                  <span className="text-muted-foreground">· {pick.coachName}</span>
+                )}
+                {onRemovePick && (
+                  <button
+                    type="button"
+                    onClick={() => onRemovePick(pick.ceoId)}
+                    aria-label={`Remove ${pick.ceoName}`}
+                    className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-amber-500/20 hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* "+ Add another CEO" — surfaced when the walkthrough is in pick
+            mode (top exists, either AI or manual). Lets the operator
+            attach a transcript to multiple CEOs (e.g. group sessions or
+            two-CEO kickoffs). */}
+        {top && onAddAnotherClick && (
+          <button
+            type="button"
+            onClick={onAddAnotherClick}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-dashed border-border bg-background px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+          >
+            <Plus className="h-3 w-3" />
+            Add another CEO
           </button>
         )}
 
@@ -335,10 +399,12 @@ function MatchCard({
   suggestion,
   isManual,
   cycleSuggestion,
+  onRemove,
 }: {
   suggestion: TriageSuggestionView;
   isManual: boolean;
   cycleSuggestion: TriageCycleSuggestionView | null;
+  onRemove?: () => void;
 }) {
   return (
     <div
@@ -375,6 +441,16 @@ function MatchCard({
             </p>
           )}
         </div>
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`Remove ${suggestion.ceoName}`}
+            className="shrink-0 rounded-full p-1 text-muted-foreground transition-colors hover:bg-amber-500/20 hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {/* Cycle preview only matters when the row is pending_cycle (CEO

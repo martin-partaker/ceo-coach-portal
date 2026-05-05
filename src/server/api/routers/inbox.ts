@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
   rawInputs,
+  rawInputCeos,
   ceos,
   coaches,
   cycles,
@@ -677,7 +678,12 @@ export const inboxRouter = createTRPCRouter({
     .input(
       z.object({
         rawInputId: z.string().uuid(),
-        ceoId: z.string().uuid(),
+        // First entry is the "primary" CEO — sets ceoId/cycleId/coachId on
+        // the raw_inputs row for backwards compat. Every entry is mirrored
+        // into raw_input_ceos so the projector can fan out into each CEO's
+        // own cycle. Group sessions, two-CEO kickoffs, etc. all flow through
+        // here. Single-CEO assignments are just `ceoIds: [id]`.
+        ceoIds: z.array(z.string().uuid()).min(1),
         addAliasFromSubmission: z.boolean().default(false),
       })
     )
@@ -689,50 +695,69 @@ export const inboxRouter = createTRPCRouter({
         .limit(1);
       if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const [ceo] = await ctx.db
+      // De-dupe while preserving order. The first remaining entry is the
+      // primary CEO (drives raw_inputs.ceoId/coachId/cycleId).
+      const uniqueCeoIds = Array.from(new Set(input.ceoIds));
+
+      const ceoRows = await ctx.db
         .select()
         .from(ceos)
-        .where(eq(ceos.id, input.ceoId))
-        .limit(1);
-      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND', message: 'CEO not found' });
+        .where(inArray(ceos.id, uniqueCeoIds));
+      if (ceoRows.length !== uniqueCeoIds.length) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'One or more CEOs not found' });
+      }
+      const ceoById = new Map(ceoRows.map((c) => [c.id, c]));
+      const primaryCeo = ceoById.get(uniqueCeoIds[0])!;
 
-      // Optionally add submission's email as a new alias
+      // Optionally add submission's email as a new alias on the primary CEO.
+      // Aliases are 1:1 with email→CEO; no sensible meaning to attach the
+      // same email to multiple CEOs, so primary-only is correct here.
       if (input.addAliasFromSubmission && raw.matchCandidates) {
         const candidates = raw.matchCandidates as { email?: string };
         if (candidates?.email) {
-          await ensureAlias(ceo.id, candidates.email);
+          await ensureAlias(primaryCeo.id, candidates.email);
         }
       }
 
-      // Auto-attach a cycle for the row's date — exact CEO match means we
-      // can resolve the cycle deterministically (creating a monthly default
-      // when none covers the date). Without this, projection silently no-ops
-      // and the row never reaches the typed transcripts / journal_entries
-      // tables, so it doesn't show up on the roster's cycle strip.
-      const cycleMatch = await ensureCycleForCeoAndDate({
-        ceoId: ceo.id,
+      // Resolve the primary CEO's cycle for the meeting date. The projector
+      // will resolve cycles for the additional CEOs internally when it
+      // fans out into the typed transcripts table.
+      const primaryCycle = await ensureCycleForCeoAndDate({
+        ceoId: primaryCeo.id,
         occurredAt: raw.occurredAt,
       });
 
       await ctx.db
         .update(rawInputs)
         .set({
-          ceoId: ceo.id,
-          coachId: ceo.coachId,
-          cycleId: cycleMatch.cycleId,
+          ceoId: primaryCeo.id,
+          coachId: primaryCeo.coachId,
+          cycleId: primaryCycle.cycleId,
           matchStatus: 'matched',
-          matchConfidence: cycleMatch.confident ? 100 : 75,
+          matchConfidence: primaryCycle.confident ? 100 : 75,
           resolvedAt: new Date(),
           resolvedBy: ctx.coach.id,
         })
         .where(eq(rawInputs.id, input.rawInputId));
 
-      // Trigger projection
+      // Replace raw_input_ceos membership for this row. Wiping first keeps
+      // the join table consistent if the operator changed their picks on
+      // re-assignment; the projector also cleans up orphan transcripts.
+      await ctx.db.delete(rawInputCeos).where(eq(rawInputCeos.rawInputId, input.rawInputId));
+      if (uniqueCeoIds.length > 0) {
+        await ctx.db
+          .insert(rawInputCeos)
+          .values(uniqueCeoIds.map((ceoId) => ({ rawInputId: input.rawInputId, ceoId })))
+          .onConflictDoNothing();
+      }
+
+      // Trigger projection — fans out into one transcripts row per linked
+      // CEO/cycle.
       await projectRawInput(input.rawInputId);
 
-      // Sweep other pending rows — the new alias may unlock more matches
+      // Sweep other pending rows — the new alias may unlock more matches.
       const { resolved } = await rematchPendingRows({
-        coachId: ceo.coachId ?? undefined,
+        coachId: primaryCeo.coachId ?? undefined,
       });
       return { ok: true, autoResolved: resolved };
     }),

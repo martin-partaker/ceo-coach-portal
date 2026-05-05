@@ -60,10 +60,44 @@ async function main() {
 
   // === Cross-pattern check: same UUID prefix in two external_id formats ===
   console.log(`\n=== ZOOM external_id format mix ===`);
-  const synthetic = zoom.filter(r => r.externalId.includes(':')).length;
-  const raw = zoom.filter(r => !r.externalId.includes(':')).length;
-  console.log(`  synthetic (uuid:start): ${synthetic}`);
-  console.log(`  raw (uuid only):        ${raw}`);
+  const synthetic = zoom.filter(r => r.externalId.includes(':'));
+  const rawIds = new Set(zoom.filter(r => !r.externalId.includes(':')).map(r => r.externalId));
+  console.log(`  synthetic (uuid:start): ${synthetic.length}`);
+  console.log(`  raw (uuid only):        ${rawIds.size}`);
+
+  // Cross-format dup: synthetic ${uuid}:${start} where raw ${uuid} also exists
+  const crossFormatDups = synthetic.filter(s => {
+    const uuid = s.externalId.split(':')[0];
+    return rawIds.has(uuid);
+  });
+  console.log(`  cross-format dups (same uuid in both formats): ${crossFormatDups.length}`);
+  for (const r of crossFormatDups.slice(0, 10)) {
+    const p = (r.payloadJson ?? {}) as PayloadShape;
+    const topic = p.topic ?? p.meeting?.topic ?? '(no topic)';
+    const start = p.start_time ?? p.meeting?.start_time ?? '';
+    console.log(`     · ${start.slice(0,10)}  ${topic}  syn=${r.externalId.slice(0,40)}…`);
+  }
+
+  // Topic+start grouping — catches recurring meetings that share topic but different UUIDs
+  console.log(`\n=== ZOOM same topic + same start_time across different rows ===`);
+  const byTopicStart = new Map<string, typeof zoom>();
+  for (const r of zoom) {
+    const p = (r.payloadJson ?? {}) as PayloadShape;
+    const topic = p.topic ?? p.meeting?.topic ?? '';
+    const start = p.start_time ?? p.meeting?.start_time ?? '';
+    if (!topic || !start) continue;
+    const key = `${topic}|${start}`;
+    if (!byTopicStart.has(key)) byTopicStart.set(key, []);
+    byTopicStart.get(key)!.push(r);
+  }
+  const tsdups = [...byTopicStart.entries()].filter(([, rs]) => rs.length > 1);
+  console.log(`  groups with >1 row: ${tsdups.length}, extra rows: ${tsdups.reduce((s,[,rs]) => s + rs.length - 1, 0)}`);
+  for (const [key, rows] of tsdups.slice(0, 15)) {
+    console.log(`  ${rows.length}x  ${key.replace('|', '  @  ').slice(0,90)}`);
+    for (const r of rows) {
+      console.log(`     · external_id=${r.externalId.slice(0,55)}  ceo=${r.ceoId?.slice(0,8) ?? 'none'}  status=${r.matchStatus}`);
+    }
+  }
 
   // === TALLY ===
   console.log(`\n=== TALLY duplicates (by external_id collisions) ===`);

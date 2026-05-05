@@ -68,7 +68,8 @@
       "Bash(vercel project *)",
       "Bash(node *)",
       "Bash(xargs -I{} basename {})",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(grep -nB1 -A2 \"sourceRawInputId\\\\|raw_input_ceos\" src/db/schema.ts)"
     ]
   }
 }

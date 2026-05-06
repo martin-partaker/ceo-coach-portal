@@ -234,7 +234,7 @@ export function ReportDocumentModal({
             </p>
           </div>
           {/* (Re-)generate dropdown. Three speed/quality modes:
-              Instant (~45s), Quick (~2 min), Full polish (~5 min).
+              Instant (~50s), Quick (~5 min), Full polish (~15 min).
               Stage A + B (extract facts + patterns) are reused
               automatically across regenerations and the workflow
               re-extracts on its own when ANY cycle input has changed
@@ -247,7 +247,7 @@ export function ReportDocumentModal({
                 size="sm"
                 className="h-7 text-[11px]"
                 disabled={generate.isPending || isRunning}
-                title="Choose Quick (~2 min) or Full polish (~5 min)."
+                title="Choose Quick (~5 min) or Full polish (~15 min)."
               >
                 {generate.isPending || isRunning ? (
                   <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -266,7 +266,7 @@ export function ReportDocumentModal({
               >
                 <Zap className="mr-2 h-3.5 w-3.5" />
                 <div className="flex flex-col">
-                  <span className="text-xs font-medium">Instant (~45s)</span>
+                  <span className="text-xs font-medium">Instant (~50s)</span>
                   <span className="text-[10.5px] text-muted-foreground">
                     Single-shot legacy generator. Fastest, no grounding.
                   </span>
@@ -280,7 +280,7 @@ export function ReportDocumentModal({
               >
                 <Zap className="mr-2 h-3.5 w-3.5" />
                 <div className="flex flex-col">
-                  <span className="text-xs font-medium">Quick (~2 min)</span>
+                  <span className="text-xs font-medium">Quick (~5 min)</span>
                   <span className="text-[10.5px] text-muted-foreground">
                     Facts + patterns + draft. No rubric self-check.
                   </span>
@@ -294,7 +294,7 @@ export function ReportDocumentModal({
               >
                 <Sparkles className="mr-2 h-3.5 w-3.5" />
                 <div className="flex flex-col">
-                  <span className="text-xs font-medium">Full polish (~5 min)</span>
+                  <span className="text-xs font-medium">Full polish (~15 min)</span>
                   <span className="text-[10.5px] text-muted-foreground">
                     Rubric self-check + up to 2 revision passes.
                   </span>
@@ -338,6 +338,10 @@ export function ReportDocumentModal({
                 null
               }
               startedAt={job?.startedAt ?? null}
+              mode={
+                ((job?.stageDetail as { mode?: 'instant' | 'quick' | 'full' } | null)
+                  ?.mode) ?? 'full'
+              }
               onCancel={
                 job?.id ? () => cancel.mutate({ jobId: job.id }) : undefined
               }
@@ -503,11 +507,20 @@ function EmptyState({
  * pill is responsible for ambient progress; this screen just sets
  * expectations and gets out of the way.
  */
+function modeLabel(mode: 'instant' | 'quick' | 'full'): string {
+  return mode === 'instant'
+    ? 'instant (~50s)'
+    : mode === 'quick'
+      ? 'quick (~5 min)'
+      : 'full polish (~15 min)';
+}
+
 function GeneratingScreen({
   status,
   revisionsApplied,
   topFix,
   startedAt,
+  mode,
   onCancel,
   cancelling,
 }: {
@@ -515,16 +528,27 @@ function GeneratingScreen({
   revisionsApplied: number;
   topFix: string | null;
   startedAt: Date | string | null;
+  mode: 'instant' | 'quick' | 'full';
   onCancel?: () => void;
   cancelling?: boolean;
 }) {
   const elapsed = useElapsedSeconds(startedAt);
-  // Vercel functions cap at 300s. After ~6 min with no terminal status,
-  // the orchestrator's almost certainly dead and the reaper on the
-  // server side will mark this job as error on the next poll. Surface
-  // a hint so the operator knows the spinner isn't going to clear
-  // itself by waiting longer.
-  const looksStalled = elapsed != null && elapsed > 360;
+  // Stall threshold scales with the mode's expected duration — instant
+  // generations should clear in <1 min, quick in ~5 min, full in
+  // ~15 min. We pad each by ~50% before suggesting the run is wedged.
+  const stallThreshold =
+    mode === 'instant' ? 90 : mode === 'quick' ? 480 : 1200;
+  const looksStalled = elapsed != null && elapsed > stallThreshold;
+
+  // Mode-specific copy under the title. The numbers match the button
+  // labels (Instant ~50s · Quick ~5 min · Full polish ~15 min) so the
+  // coach's expectation lines up with what they clicked.
+  const description =
+    mode === 'instant'
+      ? 'About 50 seconds — single-shot legacy generator. No fact extraction, no rubric review.'
+      : mode === 'quick'
+        ? 'About 5 minutes — extracting typed facts, comparing to prior cycles, and writing the first full draft.'
+        : 'About 15 minutes — extracting facts, comparing to prior cycles, drafting, then checking and polishing against the rubric.';
 
   return (
     <div className="flex flex-1 items-center justify-center bg-muted/10 p-6 sm:p-10">
@@ -534,9 +558,7 @@ function GeneratingScreen({
           We&apos;re generating your report
         </h3>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          The full pipeline takes about 10 minutes — extracting facts
-          from your inputs, comparing to prior cycles, drafting, then
-          checking and polishing against the rubric.
+          {description}
         </p>
 
         {/* Live stage strip + elapsed timer. Compact size for tight fit;
@@ -553,9 +575,10 @@ function GeneratingScreen({
 
         {looksStalled && (
           <p className="mx-auto mt-3 max-w-xl rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-[11.5px] leading-relaxed text-amber-700 dark:text-amber-400">
-            This is taking longer than usual. The function may have hit
-            the 5-minute Vercel timeout. Cancel and re-generate (fast) to
-            try again — cached facts will be reused.
+            This is taking longer than usual for {modeLabel(mode)} mode.
+            One of the workflow steps may be wedged — cancel and
+            re-generate to try again. Cached facts will be reused so the
+            next run skips Stages A + B.
           </p>
         )}
 

@@ -1170,9 +1170,9 @@ function ReadinessCard({
         {!liveJob && (cycle.phase === 'ready' || cycle.phase === 'gathering') && (
           <>
             {/* Three-mode generate.
-                  Instant — single-shot legacy generator (~45s).
-                  Quick   — facts + patterns + draft, no rubric (~2 min).
-                  Full    — adds rubric self-check + revisions (~5 min).
+                  Instant — single-shot legacy generator (~50s).
+                  Quick   — facts + patterns + draft, no rubric (~5 min).
+                  Full    — adds rubric self-check + revisions (~15 min).
                 Buttons share visual weight; the only state-driven cue
                 is the "missing inputs" chip below, hoisted out of the
                 middle button so the three options read as parallel
@@ -1211,7 +1211,7 @@ function ReadinessCard({
               ) : (
                 <Zap className="mr-1.5 h-3 w-3" />
               )}
-              Instant (~45s)
+              Instant (~50s)
             </Button>
             <Button
               size="sm"
@@ -1232,7 +1232,7 @@ function ReadinessCard({
               ) : (
                 <Mail className="mr-1.5 h-3 w-3" />
               )}
-              {generate.isPending ? 'Generating…' : 'Quick (~2 min)'}
+              {generate.isPending ? 'Generating…' : 'Quick (~5 min)'}
             </Button>
             <Button
               size="sm"
@@ -1249,7 +1249,7 @@ function ReadinessCard({
               title="Runs the rubric self-check + up to 2 polish passes for the highest-quality output."
             >
               <Sparkles className="mr-1.5 h-3 w-3" />
-              Full polish (~5 min)
+              Full polish (~15 min)
             </Button>
             {generate.error && (
               <p className="mt-1 text-[11px] text-destructive">

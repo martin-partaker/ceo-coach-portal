@@ -8,7 +8,7 @@ import {
   LayoutDashboard,
   Settings,
   Plug2,
-  ListChecks,
+  Database,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { trpc } from '@/lib/trpc/client';
@@ -20,7 +20,7 @@ const navItems = [
 
 const adminItems = [
   { href: '/admin/ceos', label: 'Dashboard', icon: Users },
-  { href: '/admin/triage', label: 'Triage', icon: ListChecks, showPendingBadge: true },
+  { href: '/admin/data', label: 'Data', icon: Database, showPendingBadge: true },
   { href: '/admin/integrations', label: 'Integrations', icon: Plug2 },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { eq, desc, and, sql, inArray, isNotNull } from 'drizzle-orm';
+import { eq, desc, and, sql, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
@@ -323,6 +323,68 @@ export const inboxRouter = createTRPCRouter({
 
     return out;
   }),
+
+  /**
+   * Browse every raw_input with arbitrary filters. Powers the All-data
+   * tab on the Data admin page — full ad-hoc query over the ingestion
+   * layer. Joins ceos/coaches once so the table can render the assigned
+   * CEO + coach without N+1 lookups. Returns total count alongside the
+   * page so the UI can paginate.
+   */
+  dataView: adminProcedure
+    .input(
+      z.object({
+        statuses: z.array(z.enum(STATUS_VALUES)).optional(),
+        source: z.enum(['zoom', 'tally']).optional(),
+        contentType: z.enum(CONTENT_TYPES).optional(),
+        // 'unassigned' = ceo_id IS NULL (rows that have no CEO yet —
+        // pending_ceo, internal, or any newly-arrived row).
+        ceoId: z.union([z.string().uuid(), z.literal('unassigned')]).optional(),
+        search: z.string().trim().optional(),
+        limit: z.number().min(1).max(500).default(100),
+        offset: z.number().min(0).default(0),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const filters = [];
+      if (input.statuses && input.statuses.length > 0) {
+        filters.push(inArray(rawInputs.matchStatus, input.statuses));
+      }
+      if (input.source) filters.push(eq(rawInputs.source, input.source));
+      if (input.contentType) filters.push(eq(rawInputs.contentType, input.contentType));
+      if (input.ceoId === 'unassigned') filters.push(isNull(rawInputs.ceoId));
+      else if (input.ceoId) filters.push(eq(rawInputs.ceoId, input.ceoId));
+      if (input.search && input.search.length > 0) {
+        const needle = `%${input.search.replace(/[%_]/g, (c) => `\\${c}`)}%`;
+        filters.push(sql`${rawInputs.textContent} ILIKE ${needle}`);
+      }
+      const where = filters.length > 0 ? and(...filters) : undefined;
+
+      const [items, totalRow] = await Promise.all([
+        ctx.db
+          .select({
+            rawInput: rawInputs,
+            ceo: { id: ceos.id, name: ceos.name, email: ceos.email },
+            coach: { id: coachesTbl.id, name: coachesTbl.name },
+          })
+          .from(rawInputs)
+          .leftJoin(ceos, eq(rawInputs.ceoId, ceos.id))
+          .leftJoin(coachesTbl, eq(rawInputs.coachId, coachesTbl.id))
+          .where(where)
+          .orderBy(desc(rawInputs.occurredAt))
+          .limit(input.limit)
+          .offset(input.offset),
+        ctx.db
+          .select({ count: sql<number>`count(*)` })
+          .from(rawInputs)
+          .where(where),
+      ]);
+
+      return {
+        items,
+        total: Number(totalRow[0]?.count ?? 0),
+      };
+    }),
 
   pendingCounts: adminProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
@@ -942,6 +1004,73 @@ export const inboxRouter = createTRPCRouter({
           resolvedBy: ctx.coach.id,
         })
         .where(eq(rawInputs.id, input.rawInputId));
+
+      return { ok: true };
+    }),
+
+  /**
+   * Generic status changer used by the Data admin table. Unlike the
+   * focused mutations (archive, markInternal, discard), this lets the
+   * operator set ANY status from the dropdown, including moving a row
+   * back to a pending bucket for re-triage.
+   *
+   * Side effects:
+   *   - Resolved statuses (matched, archived, internal, discarded) stamp
+   *     resolved_at / resolved_by.
+   *   - Pending statuses clear those stamps and invalidate the cached AI
+   *     suggestion so the next triage view recomputes.
+   *   - Moving away from `matched` clears any projected rows in the
+   *     typed tables (transcripts, journal_entries) — otherwise the row
+   *     would still show up under a CEO it's no longer matched to.
+   */
+  setStatus: adminProcedure
+    .input(
+      z.object({
+        rawInputId: z.string().uuid(),
+        status: z.enum(STATUS_VALUES),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const isPending =
+        input.status === 'pending_ceo' ||
+        input.status === 'pending_cycle' ||
+        input.status === 'pending_classification';
+
+      // Leaving 'matched' means the row should no longer surface in the
+      // CEO's typed views. Clearing the projected rows is the safest way
+      // to keep the typed layer in sync with raw_inputs.matchStatus.
+      if (raw.matchStatus === 'matched' && input.status !== 'matched') {
+        await ctx.db
+          .delete(journalEntries)
+          .where(eq(journalEntries.sourceRawInputId, input.rawInputId));
+        await ctx.db
+          .delete(transcripts)
+          .where(eq(transcripts.sourceRawInputId, input.rawInputId));
+      }
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          matchStatus: input.status,
+          resolvedAt: isPending ? null : new Date(),
+          resolvedBy: isPending ? null : ctx.coach.id,
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+
+      if (isPending) {
+        await invalidatePendingSuggestions({ rawInputIds: [input.rawInputId] });
+      } else if (input.status === 'matched' && raw.ceoId) {
+        // Moving INTO matched (from archived etc.) re-projects so the
+        // typed tables come back in sync.
+        await projectRawInput(input.rawInputId);
+      }
 
       return { ok: true };
     }),

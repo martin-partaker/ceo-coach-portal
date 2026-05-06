@@ -338,6 +338,7 @@ export function ReportDocumentModal({
                 ((job?.stageDetail as { topFix?: string | null } | null)?.topFix) ??
                 null
               }
+              startedAt={job?.startedAt ?? null}
             />
           ) : diffMode && firstDraftShape && versions.data?.v2 ? (
             <div className="flex-1 overflow-y-auto bg-muted/10 p-6">
@@ -447,13 +448,17 @@ function GeneratingScreen({
   status,
   revisionsApplied,
   topFix,
+  startedAt,
 }: {
   status: PipelineStatus;
   revisionsApplied: number;
   topFix: string | null;
+  startedAt: Date | string | null;
 }) {
+  const elapsed = useElapsedSeconds(startedAt);
+
   return (
-    <div className="flex flex-1 items-center justify-center bg-muted/10 p-10">
+    <div className="flex flex-1 items-center justify-center bg-muted/10 p-6 sm:p-10">
       <div className="w-full max-w-2xl text-center">
         <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
         <h3 className="mt-4 text-base font-semibold">
@@ -465,12 +470,15 @@ function GeneratingScreen({
           checking and polishing against the rubric.
         </p>
 
-        {/* Live stage strip — shows which step is active right now. */}
-        <div className="mx-auto mt-6 max-w-xl rounded-lg border border-border bg-background px-4 py-3 text-left">
+        {/* Live stage strip + elapsed timer. Compact size for tight fit;
+            details are shown in the line under the bar. */}
+        <div className="mx-auto mt-6 max-w-xl rounded-lg border border-border bg-background px-3 py-3 text-left sm:px-4">
           <PipelineProgressBar
+            size="compact"
             status={status}
             revisionsApplied={revisionsApplied}
             topFix={topFix}
+            elapsedSeconds={elapsed}
           />
         </div>
 
@@ -482,6 +490,27 @@ function GeneratingScreen({
       </div>
     </div>
   );
+}
+
+/** Tick once a second so the elapsed time on the generating screen
+ *  reads "0:14 → 0:15 → 0:16" rather than freezing. Returns null if
+ *  no startedAt provided. */
+function useElapsedSeconds(startedAt: Date | string | null): number | null {
+  const [elapsed, setElapsed] = useState<number | null>(() =>
+    startedAt ? Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)) : null,
+  );
+  useEffect(() => {
+    if (!startedAt) {
+      setElapsed(null);
+      return;
+    }
+    const start = new Date(startedAt).getTime();
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  return elapsed;
 }
 
 function DownloadPdfButton({

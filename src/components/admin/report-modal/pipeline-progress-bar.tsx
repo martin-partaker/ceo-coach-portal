@@ -50,12 +50,19 @@ export function PipelineProgressBar({
   topFix,
   size = 'normal',
   errorText,
+  /** When true, render compactly with no long detail line and short
+   *  labels — for embedding in tight UI like the generating screen
+   *  card or the corner pill. */
+  hideDetail = false,
+  elapsedSeconds,
 }: {
   status: PipelineStatus;
   revisionsApplied?: number;
   topFix?: string | null;
   size?: 'normal' | 'compact';
   errorText?: string | null;
+  hideDetail?: boolean;
+  elapsedSeconds?: number | null;
 }) {
   const isError = status === 'error';
   const isComplete = status === 'complete';
@@ -65,21 +72,28 @@ export function PipelineProgressBar({
       ? STAGES.length
       : STATUS_INDEX[status];
 
+  const compact = size === 'compact';
+
   return (
-    <div className={cn('w-full', size === 'compact' ? 'space-y-1.5' : 'space-y-2')}>
-      <div className="flex items-center gap-1">
+    <div className={cn('w-full', compact ? 'space-y-1.5' : 'space-y-2')}>
+      {/* The bar itself — flex-wrap on small screens so each stage drops
+          to a new line instead of overflowing. */}
+      <div className="flex flex-wrap items-start gap-x-1 gap-y-2 sm:flex-nowrap">
         {STAGES.map((stage, i) => {
           const done = i < activeIdx;
           const active = i === activeIdx && !isError && !isComplete;
           const isLast = i === STAGES.length - 1;
           return (
-            <div key={stage.shortLabel} className="flex flex-1 items-center gap-1">
-              <div className="flex flex-1 flex-col items-start">
-                <div className="flex w-full items-center gap-1.5">
+            <div
+              key={stage.shortLabel}
+              className="flex min-w-0 basis-1/2 sm:flex-1 sm:basis-0 items-center gap-1"
+            >
+              <div className="flex min-w-0 flex-1 flex-col items-start">
+                <div className="flex w-full min-w-0 items-center gap-1.5">
                   <StageDot done={done} active={active} error={isError && i === 0} />
                   <span
                     className={cn(
-                      size === 'compact' ? 'text-[10px]' : 'text-[11px]',
+                      compact ? 'text-[10px]' : 'text-[11px]',
                       'truncate font-medium',
                       done
                         ? 'text-foreground/80'
@@ -87,14 +101,15 @@ export function PipelineProgressBar({
                           ? 'text-foreground'
                           : 'text-muted-foreground/60',
                     )}
+                    title={stage.label}
                   >
-                    {size === 'compact' ? stage.shortLabel : stage.label}
+                    {stage.shortLabel}
                   </span>
                 </div>
                 {!isLast && (
                   <div
                     className={cn(
-                      'mt-1 h-0.5 w-full rounded-full transition-colors',
+                      'mt-1 hidden h-0.5 w-full rounded-full transition-colors sm:block',
                       done
                         ? 'bg-emerald-500/60'
                         : active
@@ -109,26 +124,57 @@ export function PipelineProgressBar({
         })}
       </div>
 
-      {/* Sub-line: status detail */}
-      {!isError && !isComplete && (
-        <p className={cn('text-muted-foreground', size === 'compact' ? 'text-[10px]' : 'text-[11px]')}>
-          {statusDetailLine(status, revisionsApplied, topFix)}
+      {/* Sub-line: status detail. Hidden when hideDetail=true; topFix
+          truncated so a long sentence doesn't blow up the layout. */}
+      {!hideDetail && !isError && !isComplete && (
+        <div
+          className={cn(
+            'flex items-baseline gap-2',
+            compact ? 'text-[10px]' : 'text-[11px]',
+          )}
+        >
+          <span className="line-clamp-2 flex-1 text-muted-foreground">
+            {statusDetailLine(status, revisionsApplied, topFix)}
+          </span>
+          {typeof elapsedSeconds === 'number' && (
+            <span className="shrink-0 font-mono tabular-nums text-muted-foreground/70">
+              {formatElapsed(elapsedSeconds)}
+            </span>
+          )}
+        </div>
+      )}
+      {hideDetail && typeof elapsedSeconds === 'number' && !isError && !isComplete && (
+        <p
+          className={cn(
+            'font-mono tabular-nums text-muted-foreground/70',
+            compact ? 'text-[10px]' : 'text-[11px]',
+          )}
+        >
+          {formatElapsed(elapsedSeconds)} elapsed
         </p>
       )}
       {isComplete && (
-        <p className={cn('text-emerald-600 dark:text-emerald-400', size === 'compact' ? 'text-[10px]' : 'text-[11px]')}>
+        <p className={cn('text-emerald-600 dark:text-emerald-400', compact ? 'text-[10px]' : 'text-[11px]')}>
           Complete{revisionsApplied && revisionsApplied > 0
             ? ` · polished ${revisionsApplied}× to clear the rubric`
             : ' · cleared the rubric on the first pass'}
+          {typeof elapsedSeconds === 'number' && ` · took ${formatElapsed(elapsedSeconds)}`}
         </p>
       )}
       {isError && (
-        <p className={cn('text-destructive', size === 'compact' ? 'text-[10px]' : 'text-[11px]')}>
+        <p className={cn('text-destructive', compact ? 'text-[10px]' : 'text-[11px]')}>
           Error · {errorText ?? 'see logs'}
         </p>
       )}
     </div>
   );
+}
+
+function formatElapsed(s: number): string {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r.toString().padStart(2, '0')}`;
 }
 
 function StageDot({

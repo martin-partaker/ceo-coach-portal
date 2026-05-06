@@ -104,28 +104,47 @@ export function AuthForm({ mode }: AuthFormProps) {
           </div>
 
           {error && (
-            <p className="text-sm text-destructive">{error}</p>
+            <p
+              className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive"
+              role="alert"
+            >
+              {error}
+            </p>
           )}
 
-          <Button type="submit" className="w-full" disabled={loading}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={loading}
+            style={{
+              background: 'oklch(58% 0.14 258)',
+              color: 'white',
+            }}
+          >
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {mode === 'sign-up' ? 'Create account' : 'Sign in'}
           </Button>
         </CardContent>
 
         <CardFooter className="justify-center border-t px-6 py-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-[13px] text-muted-foreground">
             {mode === 'sign-up' ? (
               <>
-                Already have an accountsss?{' '}
-                <Link href="/auth/sign-in" className="font-medium text-foreground hover:underline">
+                Already have an account?{' '}
+                <Link
+                  href="/auth/sign-in"
+                  className="font-medium text-foreground hover:underline"
+                >
                   Sign in
                 </Link>
               </>
             ) : (
               <>
                 Don&apos;t have an account?{' '}
-                <Link href="/auth/sign-up" className="font-medium text-foreground hover:underline">
+                <Link
+                  href="/auth/sign-up"
+                  className="font-medium text-foreground hover:underline"
+                >
                   Sign up
                 </Link>
               </>

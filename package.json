@@ -14,6 +14,7 @@
     "backfill:tally": "tsx --env-file=.env scripts/backfill-tally.ts",
     "backfill:zoom": "tsx --env-file=.env scripts/backfill-zoom.ts",
     "fix:zoom-transcripts": "tsx --env-file=.env scripts/fix-zoom-transcripts.ts",
+    "repair:zoom": "tsx --env-file=.env scripts/repair-zoom-transcripts.ts",
     "wipe:zoom": "tsx --env-file=.env scripts/wipe-zoom-transcripts.ts",
     "seed:test-data": "tsx --env-file=.env scripts/seed-test-data.ts",
     "seed:prod-ceos": "tsx --env-file=.env scripts/seed-prod-ceos.ts",

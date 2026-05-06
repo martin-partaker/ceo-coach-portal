@@ -124,6 +124,19 @@ export function ReportDocumentModal({
     },
   });
 
+  // Cancel mutation — flips the job to error. The underlying serverless
+  // invocation may still be in flight (we can't reach in and kill it),
+  // but the UI exits the running state immediately and the operator can
+  // start a fresh run.
+  const cancel = trpc.reports.cancelGeneration.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.reports.getActiveJob.invalidate({ cycleId }),
+        utils.reports.listActiveJobs.invalidate(),
+      ]);
+    },
+  });
+
   // v2 is the only generator surfaced in the UI now. Legacy v1 reports
   // (cycles that finished on the old single-shot generator before the
   // v2 pipeline launched) are no longer viewable here — coaches who
@@ -247,6 +260,20 @@ export function ReportDocumentModal({
             <DropdownMenuContent align="end" className="w-[280px]">
               <DropdownMenuItem
                 onClick={() =>
+                  generate.mutate({ cycleId, forceRefreshFacts: false, mode: 'instant' })
+                }
+                disabled={generate.isPending || isRunning}
+              >
+                <Zap className="mr-2 h-3.5 w-3.5" />
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium">Instant (~45s)</span>
+                  <span className="text-[10.5px] text-muted-foreground">
+                    Single-shot legacy generator. Fastest, no grounding.
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
                   generate.mutate({ cycleId, forceRefreshFacts: false, mode: 'quick' })
                 }
                 disabled={generate.isPending || isRunning}
@@ -255,7 +282,7 @@ export function ReportDocumentModal({
                 <div className="flex flex-col">
                   <span className="text-xs font-medium">Quick (~2 min)</span>
                   <span className="text-[10.5px] text-muted-foreground">
-                    First draft only, no rubric self-check.
+                    Facts + patterns + draft. No rubric self-check.
                   </span>
                 </div>
               </DropdownMenuItem>
@@ -330,6 +357,10 @@ export function ReportDocumentModal({
                 null
               }
               startedAt={job?.startedAt ?? null}
+              onCancel={
+                job?.id ? () => cancel.mutate({ jobId: job.id }) : undefined
+              }
+              cancelling={cancel.isPending}
             />
           ) : (
             <div className="flex flex-1 overflow-y-auto bg-muted/10">
@@ -496,20 +527,30 @@ function GeneratingScreen({
   revisionsApplied,
   topFix,
   startedAt,
+  onCancel,
+  cancelling,
 }: {
   status: PipelineStatus;
   revisionsApplied: number;
   topFix: string | null;
   startedAt: Date | string | null;
+  onCancel?: () => void;
+  cancelling?: boolean;
 }) {
   const elapsed = useElapsedSeconds(startedAt);
+  // Vercel functions cap at 300s. After ~6 min with no terminal status,
+  // the orchestrator's almost certainly dead and the reaper on the
+  // server side will mark this job as error on the next poll. Surface
+  // a hint so the operator knows the spinner isn't going to clear
+  // itself by waiting longer.
+  const looksStalled = elapsed != null && elapsed > 360;
 
   return (
     <div className="flex flex-1 items-center justify-center bg-muted/10 p-6 sm:p-10">
       <div className="w-full max-w-2xl text-center">
         <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
         <h3 className="mt-4 text-base font-semibold">
-          We're generating your report
+          We&apos;re generating your report
         </h3>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           The full pipeline takes about 10 minutes — extracting facts
@@ -529,7 +570,34 @@ function GeneratingScreen({
           />
         </div>
 
-        <p className="mt-5 text-[12px] leading-relaxed text-muted-foreground/80">
+        {looksStalled && (
+          <p className="mx-auto mt-3 max-w-xl rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-[11.5px] leading-relaxed text-amber-700 dark:text-amber-400">
+            This is taking longer than usual. The function may have hit
+            the 5-minute Vercel timeout. Cancel and re-generate (fast) to
+            try again — cached facts will be reused.
+          </p>
+        )}
+
+        <div className="mt-4 flex items-center justify-center gap-3">
+          {onCancel && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onCancel}
+              disabled={cancelling}
+            >
+              {cancelling ? (
+                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              ) : (
+                <X className="mr-1.5 h-3 w-3" />
+              )}
+              Cancel generation
+            </Button>
+          )}
+        </div>
+
+        <p className="mt-4 text-[12px] leading-relaxed text-muted-foreground/80">
           Feel free to close this and keep working. The corner pill in
           the bottom right will track progress, and the polished report
           will be here when you come back.

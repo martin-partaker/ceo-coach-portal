@@ -15,6 +15,7 @@ import { extractFacts } from './extract-facts';
 import { matchPatterns } from './match-patterns';
 import { draftReport } from './draft';
 import { critiqueReport } from './critique';
+import { runInstantDraft } from './instant';
 import {
   CycleFactsSchema,
   PatternsSchema,
@@ -49,7 +50,7 @@ import { sanitiseSuggestedResources } from './resources';
 
 const MAX_REVISIONS = 2;
 
-export type GenerationMode = 'quick' | 'full';
+export type GenerationMode = 'instant' | 'quick' | 'full';
 
 export type OrchestrateArgs = {
   jobId: string;
@@ -64,9 +65,11 @@ export type OrchestrateArgs = {
    *  the operator has actually changed the cycle inputs and needs a
    *  fresh extraction. */
   forceRefreshFacts?: boolean;
-  /** 'quick' skips Stage D (critique) and Stage E (revisions): the
-   *  first draft is persisted as the final report. ~80–200s faster on
-   *  the upper bound vs 'full', at the cost of no rubric self-check.
+  /** Generation mode:
+   *  - 'instant' — single-shot legacy generator. No facts/patterns/
+   *    critique. ~30–60s. Fastest, lowest grounding.
+   *  - 'quick'   — extract facts → patterns → draft, no critique. ~1–2 min.
+   *  - 'full'    — adds rubric self-check + up to 2 polish passes. ~3–5 min.
    *  Default: 'full'. */
   mode?: GenerationMode;
 };
@@ -77,8 +80,9 @@ export type OrchestrateResult = {
   contentJson: DraftedReport;
   rawText: string;
   modelUsed: string;
-  factsId: string;
-  /** Null in quick mode (no critique row was inserted). */
+  /** Null in instant mode (Stages A + B were skipped). */
+  factsId: string | null;
+  /** Null in quick + instant mode (no critique row was inserted). */
   critiqueId: string | null;
   passed: boolean;
   topFix: string | null;
@@ -136,6 +140,74 @@ export async function runGenerationJob(args: OrchestrateArgs): Promise<Orchestra
 
   try {
     const ctx = await fetchCycleContext(args);
+    const mode: GenerationMode = args.mode ?? 'full';
+
+    // ── Instant mode short-circuit ───────────────────────────────────
+    // Skips Stages A/B/C/D/E entirely and runs the legacy single-shot
+    // generator. Persists the result as a v2 report (promptVersion: 3)
+    // so the modal renders it identically to quick/full output. No
+    // facts row, no critique row.
+    if (mode === 'instant') {
+      await updateJob(jobId, {
+        status: 'drafting_first',
+        stageDetail: { stage: 'drafting_first', mode: 'instant' },
+      });
+      const instant = await runInstantDraft(ctx);
+      let instantDraft: DraftedReport = instant.drafted;
+
+      await updateJob(jobId, {
+        firstDraftJson: instantDraft as unknown,
+        status: 'finalising',
+        stageDetail: { stage: 'finalising', mode: 'instant' },
+      });
+
+      instantDraft.report.suggestedResourceIds = await sanitiseSuggestedResources(
+        db,
+        instantDraft.report.suggestedResourceIds,
+      );
+
+      const instantRawText = composeEmailRawText(instantDraft);
+
+      const [instantReportRow] = await db
+        .insert(reportsTable)
+        .values({
+          cycleId: args.cycle.id,
+          contentJson: instantDraft as unknown as Record<string, unknown>,
+          rawText: instantRawText,
+          modelUsed: instant.modelUsed,
+          promptVersion: 3,
+        })
+        .returning();
+
+      await updateJob(jobId, {
+        status: 'complete',
+        stageDetail: {
+          stage: 'complete',
+          mode: 'instant',
+          passed: null,
+          revisions: 0,
+        },
+        finalReportId: instantReportRow.id,
+        critiqueId: null,
+        revisionsApplied: 0,
+        completedAt: new Date(),
+      });
+
+      return {
+        jobId,
+        reportId: instantReportRow.id,
+        contentJson: instantDraft,
+        rawText: instantRawText,
+        modelUsed: instant.modelUsed,
+        factsId: null,
+        critiqueId: null,
+        passed: true,
+        topFix: null,
+        weakSections: [],
+        revisionsApplied: 0,
+        missing: instant.missing,
+      };
+    }
 
     // ── Stages A + B (or reuse from cache) ───────────────────────────
     // If a prior run for this cycle already persisted facts + patterns,
@@ -221,7 +293,7 @@ export async function runGenerationJob(args: OrchestrateArgs): Promise<Orchestra
     // Stage D + E — critique + revision loop. SKIPPED in quick mode:
     // the first draft becomes the final report and we jump straight
     // to finalising. Trades self-correction for ~80–200s of wall time.
-    const mode: GenerationMode = args.mode ?? 'full';
+    // (Instant mode already returned above before reaching here.)
     let critique: Awaited<ReturnType<typeof critiqueReport>>['critique'] | null = null;
     let revisionsApplied = 0;
 

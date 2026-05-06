@@ -952,6 +952,30 @@ function BodyText({ children, ai }: { children: React.ReactNode; ai?: boolean })
   );
 }
 
+/** Short, human-readable label for a v2 generation job's current
+ *  stage. Used inline next to the "View generation" button while the
+ *  pipeline is running. */
+function jobStageLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return 'Queued';
+    case 'extracting_facts':
+      return 'Reading inputs';
+    case 'matching_patterns':
+      return 'Comparing cycles';
+    case 'drafting_first':
+      return 'Drafting';
+    case 'critiquing':
+      return 'Reviewing';
+    case 'revising':
+      return 'Polishing';
+    case 'finalising':
+      return 'Finalising';
+    default:
+      return status;
+  }
+}
+
 function ReadinessCard({
   ceoId,
   ceoName,
@@ -974,15 +998,29 @@ function ReadinessCard({
   const [reviewOpen, setReviewOpen] = useState(false);
   // Captured when the coach clicks Quick / Full while inputs have gaps,
   // so the ConfirmGapsDialog's confirm button knows which mode to fire.
-  const [pendingMode, setPendingMode] = useState<'quick' | 'full'>('quick');
+  const [pendingMode, setPendingMode] = useState<'instant' | 'quick' | 'full'>('quick');
+
+  // Detect a v2 generation already in flight for THIS cycle. Reuses
+  // the global listActiveJobs query the row + corner pill already poll
+  // — same cache key, so no duplicate network traffic. While a job is
+  // live, the per-phase generate / review buttons collapse to a single
+  // "View generation" button that opens the modal in its GeneratingScreen
+  // state. Prevents a coach from kicking off a duplicate run by re-
+  // clicking Generate while the prior one is still polishing.
+  const activeJobs = trpc.reports.listActiveJobs.useQuery(undefined, {
+    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? 2000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const liveJob = (activeJobs.data ?? []).find((j) => j.cycleId === cycle.id);
 
   // Auto-open the report reviewer when the parent row's "Review →" button
   // is clicked. The row bumps `reviewKey` each time so consecutive clicks
-  // re-open the dialog after the user has dismissed it. Only fires when
-  // a report is actually available for this cycle.
+  // re-open the dialog after the user has dismissed it. Opens whenever
+  // there's something to look at — a finished report (generated/sent) OR
+  // a generation in flight (modal will show its GeneratingScreen state).
   useEffect(() => {
     if (reviewKey === undefined || reviewKey === 0) return;
-    if (cycle.phase === 'generated' || cycle.phase === 'sent') {
+    if (cycle.phase === 'generated' || cycle.phase === 'sent' || liveJob) {
       setReviewOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1096,12 +1134,30 @@ function ReadinessCard({
         })}
       </div>
       <div className="grid gap-1.5">
-        {cycle.phase === 'sent' && (
+        {liveJob && (
+          <>
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              style={{ background: 'oklch(58% 0.14 258)' }}
+              onClick={() => setReviewOpen(true)}
+              title={`Open the live generation for ${cycle.label}.`}
+            >
+              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              View generation
+            </Button>
+            <p className="text-[10.5px] leading-snug text-muted-foreground">
+              {jobStageLabel(liveJob.status)} · waiting for the pipeline to
+              finish before you can re-generate.
+            </p>
+          </>
+        )}
+        {!liveJob && cycle.phase === 'sent' && (
           <Button asChild variant="outline" size="sm" className="h-7 text-xs">
             <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>View sent report</Link>
           </Button>
         )}
-        {cycle.phase === 'generated' && (
+        {!liveJob && cycle.phase === 'generated' && (
           <Button
             size="sm"
             className="h-7 text-xs"
@@ -1111,13 +1167,36 @@ function ReadinessCard({
             Review report
           </Button>
         )}
-        {(cycle.phase === 'ready' || cycle.phase === 'gathering') && (
+        {!liveJob && (cycle.phase === 'ready' || cycle.phase === 'gathering') && (
           <>
-            {/* Two-mode generate. Quick = first draft only (~1–2 min);
-                Full = first draft + rubric self-check + up to 2 polish
-                passes (~3–5 min). The coach picks based on how much
+            {/* Three-mode generate. Instant = legacy single-shot (~45s,
+                fastest, no structural grounding). Quick = facts +
+                patterns + draft, no rubric (~1–2 min). Full = adds
+                rubric self-check + up to 2 polish passes (~3–5 min,
+                highest quality). The coach picks based on how much
                 time they have / how much editing they're willing to do
                 themselves. */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={generate.isPending}
+              onClick={() => {
+                if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'instant' });
+                else {
+                  setPendingMode('instant');
+                  setConfirmGapsOpen(true);
+                }
+              }}
+              title="Single-shot legacy generator. Fastest but no structural grounding."
+            >
+              {generate.isPending ? (
+                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              ) : (
+                <Zap className="mr-1.5 h-3 w-3" />
+              )}
+              Instant (~45s)
+            </Button>
             <Button
               size="sm"
               className="h-7 text-xs"
@@ -1138,16 +1217,19 @@ function ReadinessCard({
                   setConfirmGapsOpen(true);
                 }
               }}
+              title="Extract typed facts + cross-cycle patterns + draft. No rubric review."
             >
               {generate.isPending ? (
                 <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              ) : isReady ? (
+                <Mail className="mr-1.5 h-3 w-3" />
               ) : (
-                <Zap className="mr-1.5 h-3 w-3" />
+                <AlertTriangle className="mr-1.5 h-3 w-3" />
               )}
               {generate.isPending
                 ? 'Generating…'
                 : isReady
-                  ? 'Quick generate (~2 min)'
+                  ? 'Quick (~2 min)'
                   : 'Quick generate with gaps'}
             </Button>
             <Button
@@ -1194,7 +1276,7 @@ function ReadinessCard({
           open={reviewOpen}
           onOpenChange={setReviewOpen}
         />
-        {cycle.phase === 'idle' && (
+        {!liveJob && cycle.phase === 'idle' && (
           <Button variant="ghost" size="sm" className="h-7 text-xs">
             Send nudge
           </Button>

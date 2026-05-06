@@ -83,6 +83,50 @@ function contentJsonToRawText(json: GeneratedContent): string {
 }
 
 /**
+ * Stale-job reaper. Vercel function maxDuration is 300s; in worst-case
+ * runs (long Stage C + 2 revision loops) the pipeline can hit the wall
+ * and the function exits without writing a terminal status. The job row
+ * is then frozen in a non-terminal state and the UI spins forever.
+ *
+ * Detection: any non-terminal row whose `updatedAt` is older than the
+ * stall threshold is presumed dead — the orchestrator updates the row
+ * at every stage transition, so an `updatedAt` gap that long means
+ * either the function timed out, was killed by a deploy, or hung on
+ * an Anthropic call past the request budget.
+ *
+ * The reaper writes the terminal state inside the read query (idempotent
+ * — once written, subsequent reads see status='error' and skip the
+ * reap branch). Avoids needing a separate cron.
+ */
+const STALE_THRESHOLD_MS = 6 * 60 * 1000; // 1 min beyond Vercel maxDuration=300s
+async function reapIfStale<
+  T extends {
+    id: string;
+    status: string;
+    updatedAt: Date;
+  },
+>(db: typeof import('@/db').db, job: T): Promise<T> {
+  if (job.status === 'complete' || job.status === 'error') return job;
+  const ageMs = Date.now() - new Date(job.updatedAt).getTime();
+  if (ageMs <= STALE_THRESHOLD_MS) return job;
+  const ageMin = Math.floor(ageMs / 60_000);
+  const errMsg =
+    `Generation timed out — no progress for ${ageMin} min. ` +
+    `Vercel functions cap at 5 min, and the pipeline likely exited mid-stage. ` +
+    `Click Re-generate (fast) to retry; cached facts are reused so it'll start at the drafting step.`;
+  await db
+    .update(reportGenerationJobs)
+    .set({
+      status: 'error',
+      error: errMsg,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(reportGenerationJobs.id, job.id));
+  return { ...job, status: 'error', error: errMsg } as T;
+}
+
+/**
  * Validate `report.suggestedResourceIds` against the curriculum table.
  * The model occasionally invents UUIDs — keep only ones that resolve.
  */
@@ -699,11 +743,11 @@ export const reportsRouter = createTRPCRouter({
         // when the operator has actually changed the cycle inputs and
         // wants the model to re-read them from scratch.
         forceRefreshFacts: z.boolean().default(false),
-        // 'quick' skips Stage D (critique) + Stage E (revisions): the
-        // first draft is persisted as the final report. ~80–200s faster
-        // upper bound. 'full' runs the rubric self-check + up to 2
-        // revision passes for the highest-quality output.
-        mode: z.enum(['quick', 'full']).default('full'),
+        // Generation mode:
+        //  - 'instant' — single-shot legacy generator. ~30–60s.
+        //  - 'quick'   — extract + match + draft (no rubric). ~1–2 min.
+        //  - 'full'    — adds critique + revisions. ~3–5 min.
+        mode: z.enum(['instant', 'quick', 'full']).default('full'),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -803,7 +847,43 @@ export const reportsRouter = createTRPCRouter({
         .where(eq(reportGenerationJobs.cycleId, input.cycleId))
         .orderBy(desc(reportGenerationJobs.startedAt))
         .limit(1);
-      return latest ?? null;
+      if (!latest) return null;
+      return await reapIfStale(ctx.db, latest);
+    }),
+
+  /**
+   * Cancel an in-flight generation. Sets the job to status='error' with
+   * a "Cancelled by user" message so the UI exits the running state and
+   * stops polling. The underlying Vercel function may still be running
+   * (we can't kill it remotely), but the result will be ignored — the
+   * orchestrator's writes use this same row, so when it finishes it
+   * harmlessly overwrites the cancellation. The user can immediately
+   * trigger a new generation, which spawns a fresh job row.
+   */
+  cancelGeneration: protectedProcedure
+    .input(z.object({ jobId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [job] = await ctx.db
+        .select()
+        .from(reportGenerationJobs)
+        .where(eq(reportGenerationJobs.id, input.jobId))
+        .limit(1);
+      if (!job) throw new TRPCError({ code: 'NOT_FOUND' });
+      // Verify auth via the cycle's CEO ownership (same as elsewhere).
+      await loadCycleAndCeo(ctx, job.cycleId);
+      if (job.status === 'complete' || job.status === 'error') {
+        return { ok: true, alreadyTerminal: true };
+      }
+      await ctx.db
+        .update(reportGenerationJobs)
+        .set({
+          status: 'error',
+          error: 'Cancelled by user.',
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(reportGenerationJobs.id, input.jobId));
+      return { ok: true, alreadyTerminal: false };
     }),
 
   /** Job row for a specific report — used to surface the firstDraftJson
@@ -870,7 +950,15 @@ export const reportsRouter = createTRPCRouter({
       )
       .orderBy(desc(reportGenerationJobs.startedAt));
 
-    return active.map((j) => {
+    // Reap stale rows so the global pill clears for jobs whose function
+    // died mid-pipeline. Each row that's reaped becomes 'error', which
+    // drops it out of the active set on the next poll naturally.
+    const reaped = await Promise.all(active.map((j) => reapIfStale(ctx.db, j)));
+    const stillActive = reaped.filter(
+      (j) => j.status !== 'complete' && j.status !== 'error',
+    );
+
+    return stillActive.map((j) => {
       const c = cycleById.get(j.cycleId);
       return {
         ...j,

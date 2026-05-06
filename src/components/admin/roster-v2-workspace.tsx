@@ -47,6 +47,7 @@ import { ManualTranscriptDialog } from './manual-transcript-dialog';
 import { AddWeekDialog } from './add-week-dialog';
 import { ReportDocumentModal } from './report-modal/report-document-modal';
 import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
+import { RosterEditCeoDialog } from './roster-edit-ceo-dialog';
 
 interface Props {
   summary: RosterCeoSummary;
@@ -190,7 +191,7 @@ function CycleBody({
         {/* 10x goal callout — context for the AI summary, prominent so the
             super admin can see what each CEO is working toward without
             jumping to the profile. */}
-        <TenXGoalCallout ceoName={ceo.name} ceoId={ceo.id} tenXGoal={ceo.tenXGoal} />
+        <TenXGoalCallout ceo={ceo} />
 
         {/* Header row — cycle title is itself a button so it's obvious
             you can edit the cycle (rename, change dates, or delete it)
@@ -716,91 +717,97 @@ function AiBadge() {
 }
 
 function TenXGoalCallout({
-  ceoName,
-  ceoId,
-  tenXGoal,
+  ceo,
 }: {
-  ceoName: string;
-  ceoId: string;
-  tenXGoal: string | null;
+  ceo: { id: string; name: string; email: string | null; tenXGoal: string | null };
 }) {
-  const has = !!tenXGoal?.trim();
+  const has = !!ceo.tenXGoal?.trim();
   const [expanded, setExpanded] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   return (
-    <div
-      className="rounded-lg border px-3 py-2.5"
-      style={
-        has
-          ? {
-              background: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 94%)',
-              borderColor: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 65%)',
-            }
-          : { background: 'var(--muted)', borderColor: 'var(--border)' }
-      }
-    >
-      <div className="mb-1 flex items-center gap-1.5">
-        <Target
-          className="h-3 w-3"
-          style={{ color: has ? 'oklch(55% 0.12 152)' : 'var(--muted-foreground)' }}
-        />
-        <span
-          className="font-mono text-[10px] uppercase tracking-wider"
-          style={{ color: has ? 'oklch(55% 0.12 152)' : 'var(--muted-foreground)' }}
-        >
-          {ceoName}&apos;s 10x goal
-        </span>
-        <span className="flex-1" />
-        {has && (
+    <>
+      <div
+        className="rounded-lg border px-3 py-2.5"
+        style={
+          has
+            ? {
+                background: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 94%)',
+                borderColor: 'color-mix(in oklab, oklch(55% 0.12 152), transparent 65%)',
+              }
+            : { background: 'var(--muted)', borderColor: 'var(--border)' }
+        }
+      >
+        <div className="mb-1 flex items-center gap-1.5">
+          <Target
+            className="h-3 w-3"
+            style={{ color: has ? 'oklch(55% 0.12 152)' : 'var(--muted-foreground)' }}
+          />
+          <span
+            className="font-mono text-[10px] uppercase tracking-wider"
+            style={{ color: has ? 'oklch(55% 0.12 152)' : 'var(--muted-foreground)' }}
+          >
+            {ceo.name}&apos;s 10x goal
+          </span>
+          <span className="flex-1" />
+          {has && (
+            <button
+              type="button"
+              onClick={() => setExpanded((e) => !e)}
+              className="inline-flex items-center gap-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+              aria-expanded={expanded}
+            >
+              {expanded ? (
+                <>
+                  collapse <ChevronDown className="h-3 w-3" />
+                </>
+              ) : (
+                <>
+                  expand <ChevronRight className="h-3 w-3" />
+                </>
+              )}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setExpanded((e) => !e)}
-            className="inline-flex items-center gap-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
-            aria-expanded={expanded}
+            onClick={() => setEditOpen(true)}
+            className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground hover:text-foreground"
           >
-            {expanded ? (
-              <>
-                collapse <ChevronDown className="h-3 w-3" />
-              </>
-            ) : (
-              <>
-                expand <ChevronRight className="h-3 w-3" />
-              </>
-            )}
+            <Pencil className="h-3 w-3" />
+            edit
+          </button>
+        </div>
+        {has ? (
+          expanded ? (
+            <div className="max-h-40 overflow-y-auto pr-1">
+              <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">
+                {ceo.tenXGoal}
+              </p>
+            </div>
+          ) : (
+            <p
+              className="text-[12.5px] leading-relaxed text-foreground/90"
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              {ceo.tenXGoal}
+            </p>
+          )
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditOpen(true)}
+            className="text-left text-[12px] italic text-muted-foreground hover:text-foreground hover:underline"
+          >
+            No 10x goal set — click to capture one.
           </button>
         )}
-        <Link
-          href={`/ceos/${ceoId}`}
-          className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
-        >
-          edit on profile →
-        </Link>
       </div>
-      {has ? (
-        expanded ? (
-          <div className="max-h-40 overflow-y-auto pr-1">
-            <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">
-              {tenXGoal}
-            </p>
-          </div>
-        ) : (
-          <p
-            className="text-[12.5px] leading-relaxed text-foreground/90"
-            style={{
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}
-          >
-            {tenXGoal}
-          </p>
-        )
-      ) : (
-        <p className="text-[12px] italic text-muted-foreground">
-          No 10x goal set — open the CEO profile to capture one.
-        </p>
-      )}
-    </div>
+      <RosterEditCeoDialog ceo={ceo} open={editOpen} onOpenChange={setEditOpen} />
+    </>
   );
 }
 

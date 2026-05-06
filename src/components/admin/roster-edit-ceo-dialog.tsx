@@ -30,6 +30,11 @@ export function RosterEditCeoDialog({ ceo, open, onOpenChange }: Props) {
   const update = trpc.admin.updateCeo.useMutation({
     onSuccess: () => {
       utils.admin.listAllCeos.invalidate();
+      // Refresh the roster workspace so an in-flight edit shows up
+      // immediately instead of after a navigation. cycleSummary holds the
+      // CEO + 10x goal; cycleDetail holds the per-cycle data.
+      utils.roster.cycleSummary.invalidate();
+      utils.roster.cycleDetail.invalidate();
       onOpenChange(false);
     },
   });

@@ -1,6 +1,6 @@
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODELS } from '@/lib/anthropic/models';
+import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
 import type {
   CycleFacts,
   Patterns,
@@ -8,6 +8,7 @@ import type {
   DraftedReport,
 } from './schemas';
 import type { CycleContext } from './context';
+import { stripEm, assertNotTruncated } from './post-process';
 
 const anthropic = new Anthropic();
 
@@ -189,13 +190,19 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
   ];
 
   const modelId = MODELS.reportPrimary;
+  const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
-  const message = await anthropic.messages.create({
-    model: modelId,
-    max_tokens: 2048,
-    system: SYSTEM_TEMPLATE(ceoFirstName, ctx.coachName, section, isList),
-    messages,
-  });
+  // Streaming required — see Stage C draft.ts for rationale.
+  const message = await anthropic.messages
+    .stream({
+      model: modelId,
+      max_tokens: maxTokens,
+      system: SYSTEM_TEMPLATE(ceoFirstName, ctx.coachName, section, isList),
+      messages,
+    })
+    .finalMessage();
+
+  assertNotTruncated(message, 'Stage E', maxTokens);
 
   const textBlock = message.content.find(
     (b): b is Anthropic.TextBlock => b.type === 'text',
@@ -215,7 +222,7 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
     if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) {
       throw new Error(`Stage E: list section "${section}" must be a JSON array of strings`);
     }
-    const newValue = parsed as string[];
+    const newValue = (parsed as string[]).map(stripEm);
     return {
       newValue,
       snapshot: newValue.join('\n• '),
@@ -224,9 +231,10 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
     };
   }
 
+  const cleanedText = stripEm(rawText);
   return {
-    newValue: rawText,
-    snapshot: rawText,
+    newValue: cleanedText,
+    snapshot: cleanedText,
     modelUsed: modelId,
     rawText,
   };

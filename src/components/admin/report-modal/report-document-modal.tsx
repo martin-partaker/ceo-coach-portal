@@ -446,7 +446,7 @@ function GeneratingScreen({
           We're generating your report
         </h3>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          The full pipeline takes about 1–2 minutes — extracting facts
+          The full pipeline takes about 10 minutes — extracting facts
           from your inputs, comparing to prior cycles, drafting, then
           checking and polishing against the rubric.
         </p>

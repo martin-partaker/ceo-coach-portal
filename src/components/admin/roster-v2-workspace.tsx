@@ -552,7 +552,7 @@ function CycleBody({
           prevCycle={prevCycle}
           submissionsCount={data?.rawInputs.length ?? cycle.submissions.length}
         />
-        <RecentReports ceoId={ceo.id} ceoName={ceo.name} />
+        {/* <RecentReports ceoId={ceo.id} ceoName={ceo.name} /> */}
       </div>
     </div>
   );
@@ -983,11 +983,24 @@ function ReadinessCard({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewKey]);
-  const generate = trpc.reports.generate.useMutation({
-    onSuccess: () => {
-      utils.roster.cycleSummary.invalidate();
-      utils.roster.cycleDetail.invalidate({ cycleId: cycle.id });
-      utils.reports.getForCycle.invalidate({ cycleId: cycle.id });
+  // Fire the v2 async job so the user sees the same pipeline progress
+  // bar that regenerate uses. The mutation returns ~immediately with a
+  // jobId; we open the report modal at the same time so its built-in
+  // GeneratingScreen polls getActiveJob and renders the live stage
+  // strip. Roster / cycle invalidations fire once the job completes
+  // (handled by the modal's onJobComplete logic).
+  const generate = trpc.reports.generateV2.useMutation({
+    onSuccess: async () => {
+      // Invalidate BOTH the per-cycle active-job query (drives the
+      // modal's progress screen) AND the roster-wide listActiveJobs
+      // query (drives every row's "Generating" pill). The row polling
+      // is gated on `data.length > 0`, so without this invalidate a
+      // freshly-started job from a state of zero active jobs would be
+      // invisible at the row level until the next page-level refresh.
+      await Promise.all([
+        utils.reports.getActiveJob.invalidate({ cycleId: cycle.id }),
+        utils.reports.listActiveJobs.invalidate(),
+      ]);
       setConfirmGapsOpen(false);
       setReviewOpen(true);
     },

@@ -14,9 +14,14 @@ export interface CycleMatch {
 /**
  * Pick the cycle for a given CEO + occurrence date.
  *
- * - Confident match: occurredAt falls within [periodStart, periodEnd].
- * - Fallback match: most recent cycle whose periodStart <= occurredAt (UI flags for confirm).
- * - No match: returns null → caller marks raw_input as pending_cycle.
+ * Strict membership: occurredAt MUST fall inside [periodStart, periodEnd]
+ * of an existing cycle. If no cycle's window contains the date we
+ * return null — the caller (ensureCycleForCeoAndDate) decides whether
+ * to create a fresh monthly cycle or hand off to manual triage. We
+ * removed the older "use the most recent prior cycle as a sloppy
+ * fallback" branch on 2026-05-06 because it was attaching May
+ * submissions to April cycles (and similar boundary-spanning cases),
+ * polluting the AI's view of a cycle's inputs.
  */
 export async function findCycleForOccurredAt(args: {
   ceoId: string;
@@ -39,17 +44,6 @@ export async function findCycleForOccurredAt(args: {
 
   if (exact) {
     return { cycleId: exact.id, confident: true };
-  }
-
-  const [fallback] = await db
-    .select({ id: cycles.id })
-    .from(cycles)
-    .where(and(eq(cycles.ceoId, args.ceoId), lte(cycles.periodStart, occurredDate)))
-    .orderBy(desc(cycles.periodStart))
-    .limit(1);
-
-  if (fallback) {
-    return { cycleId: fallback.id, confident: false };
   }
 
   return null;

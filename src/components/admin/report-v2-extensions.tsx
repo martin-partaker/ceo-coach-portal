@@ -50,6 +50,7 @@ export function V2GenerateButton({
     onSuccess: async (res) => {
       await Promise.all([
         utils.reports.getActiveJob.invalidate({ cycleId }),
+        utils.reports.listActiveJobs.invalidate(),
         utils.reports.getForCycle.invalidate({ cycleId }),
         utils.reports.getFacts.invalidate({ cycleId }),
       ]);

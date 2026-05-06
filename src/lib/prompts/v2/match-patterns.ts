@@ -1,9 +1,10 @@
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import { MODELS } from '@/lib/anthropic/models';
+import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
 import { PatternsSchema, type Patterns, type CycleFacts } from './schemas';
 import type { CycleContext } from './context';
+import { assertNotTruncated } from './post-process';
 
 const anthropic = new Anthropic();
 
@@ -92,20 +93,26 @@ Now identify the cross-cycle patterns. Call ${PATTERNS_TOOL_NAME}.`;
 
   const modelId = MODELS.draft;
 
-  const message = await anthropic.messages.create({
-    model: modelId,
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    tools: [
-      {
-        name: PATTERNS_TOOL_NAME,
-        description: 'Submit cross-cycle patterns found between current and prior cycles.',
-        input_schema: PATTERNS_TOOL_INPUT_SCHEMA as Anthropic.Tool.InputSchema,
-      },
-    ],
-    tool_choice: { type: 'tool', name: PATTERNS_TOOL_NAME },
-    messages: [{ role: 'user', content: userPrompt }],
-  });
+  const maxTokens = MAX_OUTPUT_TOKENS[modelId];
+  // Streaming required — see Stage C draft.ts for rationale.
+  const message = await anthropic.messages
+    .stream({
+      model: modelId,
+      max_tokens: maxTokens,
+      system: SYSTEM_PROMPT,
+      tools: [
+        {
+          name: PATTERNS_TOOL_NAME,
+          description: 'Submit cross-cycle patterns found between current and prior cycles.',
+          input_schema: PATTERNS_TOOL_INPUT_SCHEMA as Anthropic.Tool.InputSchema,
+        },
+      ],
+      tool_choice: { type: 'tool', name: PATTERNS_TOOL_NAME },
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+    .finalMessage();
+
+  assertNotTruncated(message, 'Stage B', maxTokens);
 
   const toolUse = message.content.find(
     (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === PATTERNS_TOOL_NAME,

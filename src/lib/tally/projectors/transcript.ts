@@ -96,16 +96,20 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
     }
   }
 
-  // Clean up transcripts for cycles no longer in the membership (handles
-  // CEO removals on a re-assignment).
-  if (existing.length > targetCycleIds.length) {
+  // Always clean up transcripts whose cycleId is no longer a target.
+  // Handles CEO removal on re-assignment AND — critically — moving a
+  // rawInput from one cycle to another for the same CEO. The previous
+  // `existing.length > targetCycleIds.length` guard skipped cleanup
+  // when the counts matched, leaving orphan rows pointing at the old
+  // cycle.
+  if (targetCycleIds.length > 0) {
     await db
       .delete(transcripts)
       .where(
         and(
           eq(transcripts.sourceRawInputId, rawInput.id),
-          notInArray(transcripts.cycleId, targetCycleIds)
-        )
+          notInArray(transcripts.cycleId, targetCycleIds),
+        ),
       );
   }
 };

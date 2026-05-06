@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '@/db';
 import { curriculum } from '@/db/schema';
 import { asc } from 'drizzle-orm';
-import { MODELS } from '@/lib/anthropic/models';
+import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
 import {
   DraftedReportSchema,
   RUBRIC_ITEMS,
@@ -18,6 +18,7 @@ import {
   type CycleContext,
 } from './context';
 import { FEWSHOT_BLOCK } from './fewshot';
+import { stripEmDashesFromDraft, assertNotTruncated } from './post-process';
 
 const anthropic = new Anthropic();
 
@@ -227,21 +228,35 @@ ${pinnedParagraphs
     .filter((s) => s !== '')
     .join('\n\n');
 
-  // ── Call Claude with prompt caching on the system block.
+  // Single call with max_tokens at the model's documented ceiling
+  // (see MAX_OUTPUT_TOKENS). The cap is required by the API but acts
+  // as a sanity ceiling — the model stops naturally when done, so this
+  // never truncates legitimate output. assertNotTruncated catches the
+  // catastrophic edge case (model loop / degenerate input) loudly.
   const modelId = MODELS.reportPrimary;
+  const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
-  const message = await anthropic.messages.create({
-    model: modelId,
-    max_tokens: 6144,
-    system: [
-      {
-        type: 'text',
-        text: systemPrompt,
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
-    messages: [{ role: 'user', content: userPrompt }],
-  });
+  // Streaming: the SDK rejects synchronous calls when
+  // max_tokens × estimated tokens-per-second exceeds 10 minutes.
+  // Our model-max cap always trips that threshold even though the
+  // actual response is far shorter. `.stream().finalMessage()` returns
+  // the same Message shape so the rest of this function is unchanged.
+  const message = await anthropic.messages
+    .stream({
+      model: modelId,
+      max_tokens: maxTokens,
+      system: [
+        {
+          type: 'text',
+          text: systemPrompt,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+    .finalMessage();
+
+  assertNotTruncated(message, 'Stage C', maxTokens);
 
   const textBlock = message.content.find(
     (b): b is Anthropic.TextBlock => b.type === 'text',
@@ -263,7 +278,7 @@ ${pinnedParagraphs
   }
 
   return {
-    drafted: validated.data,
+    drafted: stripEmDashesFromDraft(validated.data),
     modelUsed: modelId,
     systemPrompt,
     userPrompt,

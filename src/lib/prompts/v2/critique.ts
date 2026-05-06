@@ -1,7 +1,7 @@
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import { MODELS } from '@/lib/anthropic/models';
+import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
 import {
   CritiqueSchema,
   RUBRIC_ITEMS,
@@ -10,6 +10,7 @@ import {
   type Patterns,
   type DraftedReport,
 } from './schemas';
+import { assertNotTruncated } from './post-process';
 
 const anthropic = new Anthropic();
 
@@ -77,22 +78,34 @@ ${JSON.stringify(draft, null, 2)}
 
 Now call ${CRITIQUE_TOOL_NAME}.`;
 
-  const modelId = MODELS.classifier; // Haiku — rubric scoring is structured, doesn't need Sonnet/Opus
+  // Sonnet — the critic is the quality gate that decides whether the
+  // drafter revises. It has to make calibrated comparison calls (e.g.
+  // "does this paragraph cite a specific evidenceClaim, or is it
+  // generic?"), which is judgment, not classification. A weak critic
+  // either lets bad drafts through or burns Opus tokens on unneeded
+  // revisions — both costlier than the Haiku→Sonnet delta on ≤3 calls.
+  const modelId = MODELS.draft;
 
-  const message = await anthropic.messages.create({
-    model: modelId,
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    tools: [
-      {
-        name: CRITIQUE_TOOL_NAME,
-        description: 'Submit a rubric-based critique of the drafted report.',
-        input_schema: CRITIQUE_TOOL_INPUT_SCHEMA as Anthropic.Tool.InputSchema,
-      },
-    ],
-    tool_choice: { type: 'tool', name: CRITIQUE_TOOL_NAME },
-    messages: [{ role: 'user', content: userPrompt }],
-  });
+  const maxTokens = MAX_OUTPUT_TOKENS[modelId];
+  // Streaming required — see Stage C draft.ts for rationale.
+  const message = await anthropic.messages
+    .stream({
+      model: modelId,
+      max_tokens: maxTokens,
+      system: SYSTEM_PROMPT,
+      tools: [
+        {
+          name: CRITIQUE_TOOL_NAME,
+          description: 'Submit a rubric-based critique of the drafted report.',
+          input_schema: CRITIQUE_TOOL_INPUT_SCHEMA as Anthropic.Tool.InputSchema,
+        },
+      ],
+      tool_choice: { type: 'tool', name: CRITIQUE_TOOL_NAME },
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+    .finalMessage();
+
+  assertNotTruncated(message, 'Stage D', maxTokens);
 
   const toolUse = message.content.find(
     (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === CRITIQUE_TOOL_NAME,

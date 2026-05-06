@@ -1,5 +1,6 @@
 import 'server-only';
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
+import { streamWithOverloadRetry } from '@/lib/anthropic/client';
 import { db } from '@/db';
 import { curriculum } from '@/db/schema';
 import { asc } from 'drizzle-orm';
@@ -20,7 +21,6 @@ import {
 import { FEWSHOT_BLOCK } from './fewshot';
 import { stripEmDashesFromDraft, assertNotTruncated } from './post-process';
 
-const anthropic = new Anthropic();
 
 /**
  * Stage C — drafter v2.
@@ -236,13 +236,14 @@ ${pinnedParagraphs
   const modelId = MODELS.reportPrimary;
   const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
-  // Streaming: the SDK rejects synchronous calls when
-  // max_tokens × estimated tokens-per-second exceeds 10 minutes.
-  // Our model-max cap always trips that threshold even though the
-  // actual response is far shorter. `.stream().finalMessage()` returns
-  // the same Message shape so the rest of this function is unchanged.
-  const message = await anthropic.messages
-    .stream({
+  // Streaming + overload-retry: the SDK rejects synchronous calls when
+  // max_tokens × estimated tokens-per-second exceeds 10 minutes (our
+  // model-max cap always trips that threshold). `streamWithOverloadRetry`
+  // wraps `.stream().finalMessage()` and retries on Anthropic
+  // `overloaded_error` (HTTP 529) with exponential backoff. Same Message
+  // shape comes back so the rest of this function is unchanged.
+  const message = await streamWithOverloadRetry(
+    {
       model: modelId,
       max_tokens: maxTokens,
       system: [
@@ -253,8 +254,9 @@ ${pinnedParagraphs
         },
       ],
       messages: [{ role: 'user', content: userPrompt }],
-    })
-    .finalMessage();
+    },
+    'Stage C',
+  );
 
   assertNotTruncated(message, 'Stage C', maxTokens);
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { after } from 'next/server';
 import { eq, and, asc, desc, inArray, ne } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic } from '@/lib/anthropic/client';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import {
   cycles,
@@ -38,8 +38,6 @@ import {
   type DraftedReport,
   type RefinableSection,
 } from '@/lib/prompts/v2/schemas';
-
-const anthropic = new Anthropic();
 
 /**
  * Shape of the JSON the model is asked to return — see the prompt

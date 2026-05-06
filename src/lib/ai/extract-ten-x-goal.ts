@@ -2,10 +2,9 @@
 // invoked from the `backfill:ten-x-goals` tsx script (Node, not Next.js)
 // where the `server-only` shim throws. The function is server-side
 // either way; nothing in `app/` client components imports it.
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { MODELS } from '@/lib/anthropic/models';
-
-const anthropic = new Anthropic();
+import { anthropic } from '@/lib/anthropic/client';
 
 const SYSTEM_PROMPT = `You extract a CEO's current "10x goal" from their completed goal worksheet.
 

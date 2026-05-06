@@ -1,14 +1,12 @@
 import { z } from 'zod';
 import { eq, desc, and, asc, lt, or, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { actionItems, ceos, cycles, journalEntries, transcripts, rawInputs } from '@/db/schema';
 import { buildPrefillPrompt } from '@/lib/prompts/prefill';
 import { refreshAiActionItems } from '@/lib/cycles/ai-action-items';
 import { MODELS } from '@/lib/anthropic/models';
-
-const anthropic = new Anthropic();
+import { anthropic } from '@/lib/anthropic/client';
 
 export const cyclesRouter = createTRPCRouter({
   get: protectedProcedure

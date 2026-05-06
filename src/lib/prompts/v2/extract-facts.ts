@@ -1,12 +1,11 @@
 import 'server-only';
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
+import { streamWithOverloadRetry } from '@/lib/anthropic/client';
 import { CycleFactsSchema, type CycleFacts } from './schemas';
 import { renderContextForModel, listMissingInputs, type CycleContext } from './context';
 import { assertNotTruncated } from './post-process';
-
-const anthropic = new Anthropic();
 
 /**
  * Stage A — extract typed facts from raw cycle inputs.
@@ -169,8 +168,8 @@ async function runFactsCall(
   toolInput: unknown;
   toolUseId: string;
 }> {
-  const message = await anthropic.messages
-    .stream({
+  const message = await streamWithOverloadRetry(
+    {
       model: modelId,
       max_tokens: maxTokens,
       system: SYSTEM_PROMPT,
@@ -183,8 +182,9 @@ async function runFactsCall(
       ],
       tool_choice: { type: 'tool', name: FACTS_TOOL_NAME },
       messages,
-    })
-    .finalMessage();
+    },
+    'Stage A',
+  );
   assertNotTruncated(message, 'Stage A', maxTokens);
   const toolUse = message.content.find(
     (b): b is Anthropic.ToolUseBlock =>

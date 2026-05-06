@@ -1,6 +1,7 @@
 import 'server-only';
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
+import { streamWithOverloadRetry } from '@/lib/anthropic/client';
 import type {
   CycleFacts,
   Patterns,
@@ -10,7 +11,6 @@ import type {
 import type { CycleContext } from './context';
 import { stripEm, assertNotTruncated } from './post-process';
 
-const anthropic = new Anthropic();
 
 /**
  * Stage E — per-section refinement chat.
@@ -192,15 +192,16 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
   const modelId = MODELS.reportPrimary;
   const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
-  // Streaming required — see Stage C draft.ts for rationale.
-  const message = await anthropic.messages
-    .stream({
+  // Streaming + overload-retry — see draft.ts (Stage C) for rationale.
+  const message = await streamWithOverloadRetry(
+    {
       model: modelId,
       max_tokens: maxTokens,
       system: SYSTEM_TEMPLATE(ceoFirstName, ctx.coachName, section, isList),
       messages,
-    })
-    .finalMessage();
+    },
+    'Stage E',
+  );
 
   assertNotTruncated(message, 'Stage E', maxTokens);
 

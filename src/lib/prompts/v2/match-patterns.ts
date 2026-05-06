@@ -1,12 +1,11 @@
 import 'server-only';
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
+import { streamWithOverloadRetry } from '@/lib/anthropic/client';
 import { PatternsSchema, type Patterns, type CycleFacts } from './schemas';
 import type { CycleContext } from './context';
 import { assertNotTruncated } from './post-process';
-
-const anthropic = new Anthropic();
 
 /**
  * Stage B — given the current cycle's CycleFacts plus prior cycles'
@@ -94,9 +93,9 @@ Now identify the cross-cycle patterns. Call ${PATTERNS_TOOL_NAME}.`;
   const modelId = MODELS.draft;
 
   const maxTokens = MAX_OUTPUT_TOKENS[modelId];
-  // Streaming required — see Stage C draft.ts for rationale.
-  const message = await anthropic.messages
-    .stream({
+  // Streaming + overload-retry — see draft.ts (Stage C) for rationale.
+  const message = await streamWithOverloadRetry(
+    {
       model: modelId,
       max_tokens: maxTokens,
       system: SYSTEM_PROMPT,
@@ -109,8 +108,9 @@ Now identify the cross-cycle patterns. Call ${PATTERNS_TOOL_NAME}.`;
       ],
       tool_choice: { type: 'tool', name: PATTERNS_TOOL_NAME },
       messages: [{ role: 'user', content: userPrompt }],
-    })
-    .finalMessage();
+    },
+    'Stage B',
+  );
 
   assertNotTruncated(message, 'Stage B', maxTokens);
 

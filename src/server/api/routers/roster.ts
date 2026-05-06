@@ -1,6 +1,6 @@
 import { eq, asc, and, desc, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic } from '@/lib/anthropic/client';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import {
@@ -27,8 +27,6 @@ import {
   rawInputEffectiveDate,
   transcriptEffectiveDate,
 } from '@/lib/cycles/membership';
-
-const anthropic = new Anthropic();
 
 export type RosterPhase = 'gathering' | 'ready' | 'generated' | 'sent' | 'idle';
 

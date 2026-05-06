@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { db } from '@/db';
 import {
   ceos,
@@ -11,8 +10,7 @@ import {
 import { eq, inArray, isNull, and } from 'drizzle-orm';
 import { INGESTION_CONFIG } from './config';
 import { MODELS } from '@/lib/anthropic/models';
-
-const anthropic = new Anthropic();
+import { anthropic } from '@/lib/anthropic/client';
 
 const NAME_MATCH_AUTO_THRESHOLD = 0.95;
 

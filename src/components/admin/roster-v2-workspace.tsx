@@ -1169,13 +1169,29 @@ function ReadinessCard({
         )}
         {!liveJob && (cycle.phase === 'ready' || cycle.phase === 'gathering') && (
           <>
-            {/* Three-mode generate. Instant = legacy single-shot (~45s,
-                fastest, no structural grounding). Quick = facts +
-                patterns + draft, no rubric (~1–2 min). Full = adds
-                rubric self-check + up to 2 polish passes (~3–5 min,
-                highest quality). The coach picks based on how much
-                time they have / how much editing they're willing to do
-                themselves. */}
+            {/* Three-mode generate.
+                  Instant — single-shot legacy generator (~45s).
+                  Quick   — facts + patterns + draft, no rubric (~2 min).
+                  Full    — adds rubric self-check + revisions (~5 min).
+                Buttons share visual weight; the only state-driven cue
+                is the "missing inputs" chip below, hoisted out of the
+                middle button so the three options read as parallel
+                choices rather than three different categories. Quick
+                stays the highlighted/primary option as the recommended
+                balance of speed and quality. */}
+            {!isReady && (
+              <div
+                className="mb-0.5 flex items-center gap-1.5 text-[11px]"
+                style={{ color: 'oklch(58% 0.13 64)' }}
+              >
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                <span>
+                  Missing {missingLabels.length === 1 ? 'input' : 'inputs'}:{' '}
+                  {missingLabels.slice(0, 2).join(', ')}
+                  {missingLabels.length > 2 ? ` +${missingLabels.length - 2}` : ''}
+                </span>
+              </div>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -1201,15 +1217,7 @@ function ReadinessCard({
               size="sm"
               className="h-7 text-xs"
               disabled={generate.isPending}
-              style={
-                isReady
-                  ? { background: 'oklch(58% 0.14 258)' }
-                  : {
-                      background: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 88%)',
-                      color: 'oklch(58% 0.13 64)',
-                      border: '1px solid color-mix(in oklab, oklch(58% 0.13 64), transparent 60%)',
-                    }
-              }
+              style={{ background: 'oklch(58% 0.14 258)' }}
               onClick={() => {
                 if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'quick' });
                 else {
@@ -1221,16 +1229,10 @@ function ReadinessCard({
             >
               {generate.isPending ? (
                 <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-              ) : isReady ? (
-                <Mail className="mr-1.5 h-3 w-3" />
               ) : (
-                <AlertTriangle className="mr-1.5 h-3 w-3" />
+                <Mail className="mr-1.5 h-3 w-3" />
               )}
-              {generate.isPending
-                ? 'Generating…'
-                : isReady
-                  ? 'Quick (~2 min)'
-                  : 'Quick generate with gaps'}
+              {generate.isPending ? 'Generating…' : 'Quick (~2 min)'}
             </Button>
             <Button
               size="sm"

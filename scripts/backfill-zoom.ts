@@ -250,9 +250,10 @@ async function discoverInternalCoachesFromZoom(): Promise<number> {
 
 async function main() {
   const useLive = process.argv.includes('--live');
+  const skipLocal = process.argv.includes('--skip-local');
   const monthsArg = process.argv.find((a) => a.startsWith('--months='));
   const months = monthsArg ? parseInt(monthsArg.split('=')[1], 10) : 12;
-  console.log(`→ Zoom backfill starting (live=${useLive}, range=${months}mo)`);
+  console.log(`→ Zoom backfill starting (live=${useLive}, skipLocal=${skipLocal}, range=${months}mo)`);
 
   // Discover all @partaker.com users from Zoom up front so live replay
   // covers every coach — not just those who happened to host a transcript
@@ -263,10 +264,14 @@ async function main() {
     console.log(`  discovered: +${newCount} new coach record(s)`);
   }
 
-  console.log('\n  local replay');
-  const initialCoaches = await loadCoaches();
-  const local = await replayLocal(initialCoaches);
-  console.log(`  local result: ${JSON.stringify(local)}`);
+  if (!skipLocal) {
+    console.log('\n  local replay');
+    const initialCoaches = await loadCoaches();
+    const local = await replayLocal(initialCoaches);
+    console.log(`  local result: ${JSON.stringify(local)}`);
+  } else {
+    console.log('\n  local replay: SKIPPED (--skip-local)');
+  }
 
   if (useLive) {
     // Reload from DB — local replay may have auto-created coaches we now

@@ -233,14 +233,21 @@ export const reportsRouter = createTRPCRouter({
 
       const previousReports = await loadPreviousReports(ctx, ceo.id, input.cycleId);
 
-      const { systemPrompt, userPrompt, missing } = await buildPrompt({
+      const { systemPrompt, userPrompt, missing, contextFiles } = await buildPrompt({
         cycle,
         ceo,
         coachName: coach?.name ?? '(unknown coach)',
         previousReports,
       });
 
-      return { systemPrompt, userPrompt, missing };
+      return {
+        systemPrompt,
+        userPrompt,
+        missing,
+        contextFiles,
+        ceoName: ceo.name,
+        cycleLabel: cycle.label,
+      };
     }),
 
   generate: protectedProcedure

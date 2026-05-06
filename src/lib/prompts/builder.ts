@@ -329,5 +329,119 @@ ${missingWarning}
 
 Write the coaching update email now.`;
 
-  return { systemPrompt, userPrompt, missing };
+  // ── Bundle: ALL raw context inputs as individual files, so the
+  // operator can download a zip and reproduce the generation in any
+  // off-platform LLM (ChatGPT, Claude.ai, etc.). The same data that
+  // gets inlined into the prompts above is also exposed here as
+  // discrete files so the user can attach them as uploads.
+  const contextFiles: Array<{ path: string; content: string }> = [];
+
+  contextFiles.push({
+    path: 'context/00-ceo-profile.md',
+    content: [
+      `# CEO Profile`,
+      ``,
+      `- **Name:** ${ceo.name}`,
+      `- **10x Goal:** ${ceo.tenXGoal?.trim() || '(not set)'}`,
+      ``,
+      `## Cycle`,
+      `- **Label:** ${cycle.label}`,
+      cycle.periodStart ? `- **Period start:** ${cycle.periodStart}` : null,
+      cycle.periodEnd ? `- **Period end:** ${cycle.periodEnd}` : null,
+      `- **Coach:** ${coachName}`,
+    ].filter(Boolean).join('\n'),
+  });
+
+  contextFiles.push({
+    path: 'context/01-monthly-goals.md',
+    content: `# Monthly Goals & Commitments\n\n${cycle.monthlyGoals?.trim() || '(not provided)'}\n`,
+  });
+
+  if (journals.length > 0) {
+    for (const j of journals) {
+      const slug = slugifyForFile(`week-${j.weekNumber}-${j.title}`);
+      contextFiles.push({
+        path: `context/02-journals/${slug}.md`,
+        content: `# ${j.title}\n\nWeek ${j.weekNumber}${j.entryDate ? ` · ${j.entryDate}` : ''}\n\n${j.content}\n`,
+      });
+    }
+  } else {
+    contextFiles.push({
+      path: 'context/02-journals/README.md',
+      content: '# Weekly Journals\n\n(no journals provided for this cycle)\n',
+    });
+  }
+
+  contextFiles.push({
+    path: 'context/03-monthly-reflection.md',
+    content: `# Monthly Reflection\n\n${cycle.monthlyReflection?.trim() || '(not provided)'}\n`,
+  });
+
+  contextFiles.push({
+    path: 'context/04-kpis.md',
+    content: `# KPIs / Metric Updates\n\n${kpiText}\n`,
+  });
+
+  if (cycleTranscripts.length > 0) {
+    for (const t of cycleTranscripts) {
+      const slug = slugifyForFile(t.title || 'transcript');
+      contextFiles.push({
+        path: `context/05-transcripts/${slug}.md`,
+        content: `# ${t.title}\n\nRecorded: ${t.recordedAt ? t.recordedAt.toISOString() : '(unknown)'}\n\n---\n\n${t.content}\n`,
+      });
+    }
+  } else {
+    contextFiles.push({
+      path: 'context/05-transcripts/README.md',
+      content: `# Zoom Session Transcript\n\n${cycle.transcriptSkipped ? '(transcript skipped for this session)' : '(not provided)'}\n`,
+    });
+  }
+
+  if (cycle.additionalContext?.trim()) {
+    contextFiles.push({
+      path: 'context/06-additional-context.md',
+      content: `# Additional Context (coach notes, emails, etc.)\n\n${cycle.additionalContext}\n`,
+    });
+  }
+
+  if (previousReports.length > 0) {
+    for (const r of previousReports) {
+      const slug = slugifyForFile(r.cycleLabel);
+      contextFiles.push({
+        path: `context/07-previous-reports/${slug}.md`,
+        content: `# Previous coaching email — ${r.cycleLabel}\n\n${r.rawText}\n`,
+      });
+    }
+  } else {
+    contextFiles.push({
+      path: 'context/07-previous-reports/README.md',
+      content: '# Previous Coaching Emails\n\n(none yet — this is the first coaching email generated for this CEO.)\n',
+    });
+  }
+
+  contextFiles.push({
+    path: 'context/08-prior-pattern-observations.md',
+    content: `# Prior Pattern Observations\n\n${priorPatternsText}\n`,
+  });
+
+  contextFiles.push({
+    path: 'context/09-curriculum-framework.md',
+    content: `# Curriculum Framework Reference\n\n${curriculumText || '(no framework rows in curriculum)'}\n`,
+  });
+
+  contextFiles.push({
+    path: 'context/10-resource-catalog.md',
+    content: `# Suggested Resources Catalog\n\nThe model picks 1–3 entries from this list as next-cycle reading.\n\n${resourceCatalog || '(no class catalog available)'}\n`,
+  });
+
+  return { systemPrompt, userPrompt, missing, contextFiles };
+}
+
+function slugifyForFile(s: string): string {
+  const cleaned = s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return cleaned || 'item';
 }

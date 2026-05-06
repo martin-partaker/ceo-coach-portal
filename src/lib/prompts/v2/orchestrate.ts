@@ -15,7 +15,14 @@ import { extractFacts } from './extract-facts';
 import { matchPatterns } from './match-patterns';
 import { draftReport } from './draft';
 import { critiqueReport } from './critique';
-import type { DraftedReport, RefinableSection } from './schemas';
+import {
+  CycleFactsSchema,
+  PatternsSchema,
+  type DraftedReport,
+  type CycleFacts,
+  type Patterns,
+  type RefinableSection,
+} from './schemas';
 import { sanitiseSuggestedResources } from './resources';
 
 /**
@@ -47,6 +54,14 @@ export type OrchestrateArgs = {
   cycle: Cycle;
   ceo: Ceo;
   coachName: string;
+  /** When true, skip the cycle_facts cache and always re-run Stage A
+   *  (extract-facts) + Stage B (match-patterns). Default false: if a
+   *  prior run already persisted facts/patterns for this cycle, we reuse
+   *  them and jump straight to Stage C, which makes retries after a
+   *  Stage C/D/E hiccup ~50–80s faster on a typical cycle. Set this when
+   *  the operator has actually changed the cycle inputs and needs a
+   *  fresh extraction. */
+  forceRefreshFacts?: boolean;
 };
 
 export type OrchestrateResult = {
@@ -114,43 +129,71 @@ export async function runGenerationJob(args: OrchestrateArgs): Promise<Orchestra
   try {
     const ctx = await fetchCycleContext(args);
 
-    // Stage A
-    await updateJob(jobId, {
-      status: 'extracting_facts',
-      stageDetail: { stage: 'extracting_facts' },
-    });
-    const { facts, modelUsed: factsModel } = await extractFacts(ctx);
+    // ── Stages A + B (or reuse from cache) ───────────────────────────
+    // If a prior run for this cycle already persisted facts + patterns,
+    // and the operator hasn't asked for a fresh extraction, skip the two
+    // slowest LLM-bound stages entirely. This is the retry escape hatch:
+    // when Stage C/D/E fails the operator can re-run the pipeline without
+    // paying the ~50–80s cost of re-extracting facts that haven't changed.
+    let facts: CycleFacts;
+    let patterns: Patterns;
+    let factsRow: { id: string };
+    const cached = args.forceRefreshFacts ? null : await tryLoadCachedFacts(args.cycle.id);
 
-    // Stage B
-    await updateJob(jobId, {
-      status: 'matching_patterns',
-      stageDetail: { stage: 'matching_patterns', isFirstCycle: ctx.isFirstCycle },
-    });
-    const { patterns, modelUsed: patternsModel } = await matchPatterns({
-      ctx,
-      currentFacts: facts,
-    });
+    if (cached) {
+      facts = cached.facts;
+      patterns = cached.patterns;
+      factsRow = { id: cached.factsRowId };
+      // Briefly mark A + B as "reused" so the progress bar's earlier
+      // stages flip to complete before the live stage advances. Each
+      // status flip is its own row update, so the UI sees the transition.
+      await updateJob(jobId, {
+        status: 'extracting_facts',
+        stageDetail: { stage: 'extracting_facts', reused: true },
+      });
+      await updateJob(jobId, {
+        status: 'matching_patterns',
+        stageDetail: { stage: 'matching_patterns', reused: true, isFirstCycle: ctx.isFirstCycle },
+      });
+    } else {
+      // Stage A
+      await updateJob(jobId, {
+        status: 'extracting_facts',
+        stageDetail: { stage: 'extracting_facts' },
+      });
+      const aResult = await extractFacts(ctx);
+      facts = aResult.facts;
 
-    // Persist Facts + Patterns (upsert by cycleId).
-    const factsModelLabel = `${factsModel}+${patternsModel}`;
-    const [factsRow] = await db
-      .insert(cycleFactsTable)
-      .values({
-        cycleId: args.cycle.id,
-        factsJson: facts as unknown as Record<string, unknown>,
-        patternsJson: patterns as unknown as Record<string, unknown>,
-        modelUsed: factsModelLabel,
-      })
-      .onConflictDoUpdate({
-        target: cycleFactsTable.cycleId,
-        set: {
+      // Stage B
+      await updateJob(jobId, {
+        status: 'matching_patterns',
+        stageDetail: { stage: 'matching_patterns', isFirstCycle: ctx.isFirstCycle },
+      });
+      const bResult = await matchPatterns({ ctx, currentFacts: facts });
+      patterns = bResult.patterns;
+
+      // Persist Facts + Patterns (upsert by cycleId).
+      const factsModelLabel = `${aResult.modelUsed}+${bResult.modelUsed}`;
+      const [inserted] = await db
+        .insert(cycleFactsTable)
+        .values({
+          cycleId: args.cycle.id,
           factsJson: facts as unknown as Record<string, unknown>,
           patternsJson: patterns as unknown as Record<string, unknown>,
           modelUsed: factsModelLabel,
-          generatedAt: new Date(),
-        },
-      })
-      .returning();
+        })
+        .onConflictDoUpdate({
+          target: cycleFactsTable.cycleId,
+          set: {
+            factsJson: facts as unknown as Record<string, unknown>,
+            patternsJson: patterns as unknown as Record<string, unknown>,
+            modelUsed: factsModelLabel,
+            generatedAt: new Date(),
+          },
+        })
+        .returning();
+      factsRow = { id: inserted.id };
+    }
 
     // Stage C — first draft
     await updateJob(jobId, {
@@ -310,4 +353,37 @@ export async function loadCycleFactsRow(cycleId: string) {
     .where(eq(cycleFactsTable.cycleId, cycleId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Load cached facts + patterns for a cycle and validate them against
+ * their schemas. Returns null on any failure path — schema drift, missing
+ * patterns, missing row — so the orchestrator falls back to a clean
+ * Stage A + B run instead of feeding malformed data into Stage C.
+ *
+ * Validation matters because the schema can evolve between deploys; an
+ * old cached row from before a schema change should be re-extracted, not
+ * pushed through with mismatched types that explode in Stage C.
+ */
+async function tryLoadCachedFacts(
+  cycleId: string,
+): Promise<{ facts: CycleFacts; patterns: Patterns; factsRowId: string } | null> {
+  const row = await loadCycleFactsRow(cycleId);
+  if (!row) return null;
+  if (!row.patternsJson) return null; // partial cache (Stage B never finished) — re-run
+  const factsParsed = CycleFactsSchema.safeParse(row.factsJson);
+  if (!factsParsed.success) {
+    console.warn(
+      `[orchestrate] cached cycle_facts.factsJson failed schema validation for cycleId=${cycleId}; re-extracting.`,
+    );
+    return null;
+  }
+  const patternsParsed = PatternsSchema.safeParse(row.patternsJson);
+  if (!patternsParsed.success) {
+    console.warn(
+      `[orchestrate] cached cycle_facts.patternsJson failed schema validation for cycleId=${cycleId}; re-extracting.`,
+    );
+    return null;
+  }
+  return { facts: factsParsed.data, patterns: patternsParsed.data, factsRowId: row.id };
 }

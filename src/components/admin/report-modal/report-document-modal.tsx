@@ -12,10 +12,18 @@ import { Button } from '@/components/ui/button';
 import {
   Download,
   Loader2,
+  RotateCcw,
   Sparkles,
   Wand2,
   X,
 } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { PipelineProgressBar, type PipelineStatus } from './pipeline-progress-bar';
 import {
   DocumentRenderer,
@@ -213,21 +221,66 @@ export function ReportDocumentModal({
               {periodEnd ? ` · ends ${new Date(periodEnd).toLocaleDateString()}` : ''}
             </p>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            className="h-7 text-[11px]"
-            onClick={() => generate.mutate({ cycleId })}
-            disabled={generate.isPending || isRunning}
-            title="Run the full extract → match → draft → critique → polish pipeline."
-          >
-            {generate.isPending || isRunning ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <Sparkles className="mr-1 h-3 w-3" />
-            )}
-            {hasV2 ? 'Re-generate' : 'Generate'}
-          </Button>
+          {/* Re-generate dropdown. Default click reuses cached facts +
+              patterns (fast retry — ~50–80s saved when Stage C/D/E
+              failed). The "Re-extract from scratch" entry forces a fresh
+              Stage A + B run, for cases where the operator has actually
+              changed the cycle inputs and the model needs to re-read
+              them. New cycles (no cache yet) take the same code path
+              either way. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 text-[11px]"
+                disabled={generate.isPending || isRunning}
+                title="Run the full extract → match → draft → critique → polish pipeline."
+              >
+                {generate.isPending || isRunning ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-1 h-3 w-3" />
+                )}
+                {hasV2 ? 'Re-generate' : 'Generate'}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[260px]">
+              <DropdownMenuItem
+                onClick={() => generate.mutate({ cycleId, forceRefreshFacts: false })}
+                disabled={generate.isPending || isRunning}
+              >
+                <Sparkles className="mr-2 h-3.5 w-3.5" />
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium">
+                    {hasV2 ? 'Re-generate (fast)' : 'Generate'}
+                  </span>
+                  <span className="text-[10.5px] text-muted-foreground">
+                    {hasV2
+                      ? 'Reuse extracted facts; redo draft + critique.'
+                      : 'Full pipeline.'}
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              {hasV2 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => generate.mutate({ cycleId, forceRefreshFacts: true })}
+                    disabled={generate.isPending || isRunning}
+                  >
+                    <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                    <div className="flex flex-col">
+                      <span className="text-xs font-medium">Re-extract from scratch</span>
+                      <span className="text-[10.5px] text-muted-foreground">
+                        Re-run Stage A + B. Use after changing cycle inputs.
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             type="button"
             size="icon"

@@ -691,7 +691,16 @@ export const reportsRouter = createTRPCRouter({
    *  to 2 revision passes). Persists CycleFacts, the report, the
    *  critique, and updates the job row at every stage transition. */
   generateV2: protectedProcedure
-    .input(z.object({ cycleId: z.string().uuid() }))
+    .input(
+      z.object({
+        cycleId: z.string().uuid(),
+        // Default false: a retry after a Stage C/D/E failure reuses the
+        // already-extracted facts and patterns, saving ~50–80s. Set true
+        // when the operator has actually changed the cycle inputs and
+        // wants the model to re-read them from scratch.
+        forceRefreshFacts: z.boolean().default(false),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const { cycle, ceo } = await loadCycleAndCeo(ctx, input.cycleId);
       const [assignedCoach] = ceo.coachId
@@ -713,7 +722,13 @@ export const reportsRouter = createTRPCRouter({
       // milliseconds and polls getActiveJob for progress.
       after(async () => {
         try {
-          await runGenerationJob({ jobId, cycle, ceo, coachName });
+          await runGenerationJob({
+            jobId,
+            cycle,
+            ceo,
+            coachName,
+            forceRefreshFacts: input.forceRefreshFacts,
+          });
         } catch (e) {
           // The job row already records the error in its `error` field
           // via runGenerationJob's catch — log and move on.

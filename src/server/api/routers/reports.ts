@@ -25,6 +25,7 @@ import {
   loadCycleFactsRow,
   composeEmailRawText,
 } from '@/lib/prompts/v2/orchestrate';
+import { buildV2IterationBundle } from '@/lib/prompts/v2/iteration-bundle';
 import { fetchCycleContext } from '@/lib/prompts/v2/context';
 import {
   refineSection as refineSectionAi,
@@ -723,6 +724,19 @@ export const reportsRouter = createTRPCRouter({
       });
 
       return { jobId, cycleId: input.cycleId };
+    }),
+
+  /** Bundle for "break out to LLM" — v2 equivalent of previewPrompt.
+   *  Returns the polished report, typed CycleFacts, Patterns, the
+   *  Critique, raw context, the v1-shaped contextFiles list (so the
+   *  download-zip flow can reuse the existing renderer), and a
+   *  fully-loaded "let's iterate" markdown prompt the coach can paste
+   *  into any off-platform LLM. */
+  getV2IterationBundle: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      await loadCycleAndCeo(ctx, input.cycleId);
+      return buildV2IterationBundle({ cycleId: input.cycleId });
     }),
 
   /** Returns the latest v1 (promptVersion < 3) and latest v2

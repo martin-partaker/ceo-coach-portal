@@ -15,6 +15,7 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
+  Wand2,
   X,
 } from 'lucide-react';
 import { PipelineProgressBar, type PipelineStatus } from './pipeline-progress-bar';
@@ -30,6 +31,7 @@ import {
 } from './comment-gutter';
 import { VersionToggle, type VersionKey } from './version-toggle';
 import { DiffView } from './diff-view';
+import { V2IterationInspector } from './v2-iteration-inspector';
 
 /**
  * Full-screen modal that replaces the side-drawer report reviewer.
@@ -223,6 +225,10 @@ export function ReportDocumentModal({
     | DocumentReportShape
     | null;
 
+  // "Break out to LLM" inspector state — shown via a button in the
+  // footer next to PDF download. Only meaningful when v2 has run.
+  const [breakoutOpen, setBreakoutOpen] = useState(false);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -403,8 +409,26 @@ export function ReportDocumentModal({
                     ? `Polished version generated ${formatTimestamp(versions.data.v2.generatedAt)}.`
                     : 'No report generated yet.'}
           </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setBreakoutOpen(true)}
+            disabled={!versions.data?.v2}
+            title="Open the iteration bundle (final report + facts + critique + raw inputs + a self-contained 'iterate' prompt)."
+          >
+            <Wand2 className="mr-1 h-3 w-3" />
+            Break out to LLM
+          </Button>
           <DownloadPdfButton cycleId={cycleId} disabled={!versions.data?.v2} />
         </footer>
+        <V2IterationInspector
+          cycleId={cycleId}
+          cycleLabel={cycleLabel}
+          ceoName={ceoName}
+          open={breakoutOpen}
+          onOpenChange={setBreakoutOpen}
+        />
       </DialogContent>
     </Dialog>
   );

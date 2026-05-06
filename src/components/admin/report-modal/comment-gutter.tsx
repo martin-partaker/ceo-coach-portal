@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState, useLayoutEffect } from 'react';
+import { useEffect, useMemo, useState, useLayoutEffect } from 'react';
 import { cn } from '@/lib/utils';
 import {
   AlertCircle,
   AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronRight,
   Info,
   MessageSquare,
   Pin,
@@ -57,6 +59,46 @@ export function CommentGutter({
   // extends far enough that absolutely-positioned comments at the
   // bottom remain inside their parent (and thus inside the scroll).
   const [containerHeight, setContainerHeight] = useState<number>(600);
+  // Per-section expanded flag — when a section anchor has 3+ comments
+  // we collapse to the first 2 and a "+N more" chip; click to expand.
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+
+  // Group comments by their target section so we can collapse dense
+  // anchors into a "show more" chip. `__global__` is the bucket for
+  // gutter-level comments (top-fix etc).
+  const grouped = useMemo(() => {
+    const out: Record<string, GutterComment[]> = {};
+    for (const c of comments) {
+      const key = c.targetSection ?? '__global__';
+      (out[key] ??= []).push(c);
+    }
+    return out;
+  }, [comments]);
+
+  // Visible vs hidden per section — the visible ones get measured tops;
+  // hidden ones live behind the "+N more" chip until the section is
+  // expanded. Always show at least 2 per anchor; expanding shows all.
+  const VISIBLE_PER_ANCHOR = 2;
+  const visibleComments = useMemo<GutterComment[]>(() => {
+    const out: GutterComment[] = [];
+    for (const [section, list] of Object.entries(grouped)) {
+      const expanded = expandedSections.has(section);
+      const limit = expanded ? list.length : Math.min(VISIBLE_PER_ANCHOR, list.length);
+      for (let i = 0; i < limit; i++) out.push(list[i]);
+    }
+    return out;
+  }, [grouped, expandedSections]);
+
+  const hiddenCountBySection = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const [section, list] of Object.entries(grouped)) {
+      const expanded = expandedSections.has(section);
+      if (!expanded && list.length > VISIBLE_PER_ANCHOR) {
+        out[section] = list.length - VISIBLE_PER_ANCHOR;
+      }
+    }
+    return out;
+  }, [grouped, expandedSections]);
 
   // Re-measure on layout, on resize, and whenever comments change.
   useLayoutEffect(() => {
@@ -65,16 +107,16 @@ export function CommentGutter({
       const containerRect = documentContainer.getBoundingClientRect();
       setContainerHeight(documentContainer.offsetHeight);
       const out: Record<string, number> = {};
-      // Sort comments so deterministic stacking order — global first,
-      // then by document order of their target sections.
-      const ordered = [...comments].sort((a, b) => {
+      // Sort visible comments so deterministic stacking order — global
+      // first, then by document order of their target sections.
+      const ordered = [...visibleComments].sort((a, b) => {
         if (!a.targetSection && b.targetSection) return -1;
         if (a.targetSection && !b.targetSection) return 1;
         return 0;
       });
       const placed: Array<{ top: number; height: number }> = [];
-      const COMMENT_HEIGHT_EST = 96; // includes margin
-      const MIN_GAP = 8;
+      const COMMENT_HEIGHT_EST = 60; // tighter card design
+      const MIN_GAP = 6;
       for (const c of ordered) {
         let raw = 0;
         if (!c.targetSection) {
@@ -113,7 +155,7 @@ export function CommentGutter({
       mo.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [documentContainer, comments]);
+  }, [documentContainer, visibleComments]);
 
   if (comments.length === 0) {
     return (
@@ -125,14 +167,28 @@ export function CommentGutter({
     );
   }
 
+  // Compute "+N more" chip positions — anchored just below the last
+  // visible card for that section. Done after `tops` is set so the chip
+  // sits at the right vertical position.
+  const moreChipTops: Record<string, number> = {};
+  for (const [section, hiddenCount] of Object.entries(hiddenCountBySection)) {
+    if (hiddenCount === 0) continue;
+    // Find the bottom of the last visible comment in this section.
+    const sectionComments = (grouped[section] ?? []).slice(0, VISIBLE_PER_ANCHOR);
+    const lastVisible = sectionComments[sectionComments.length - 1];
+    if (!lastVisible) continue;
+    const t = tops[lastVisible.id];
+    if (typeof t === 'number') moreChipTops[section] = t + 56; // below last card
+  }
+
   return (
-    <aside className="relative hidden w-72 shrink-0 px-3 lg:block">
+    <aside className="relative hidden w-64 shrink-0 px-3 lg:block">
       <div className="sticky top-2 z-10 mb-2 flex items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
         <MessageSquare className="h-3 w-3" />
         Comments ({comments.length})
       </div>
       <div className="relative" style={{ minHeight: `${containerHeight}px` }}>
-        {comments.map((c) => (
+        {visibleComments.map((c) => (
           <CommentCard
             key={c.id}
             comment={c}
@@ -142,6 +198,50 @@ export function CommentGutter({
             onClick={() => onCommentClick?.(c)}
           />
         ))}
+        {Object.entries(moreChipTops).map(([section, top]) => (
+          <button
+            key={`more-${section}`}
+            type="button"
+            onClick={() =>
+              setExpandedSections((s) => {
+                const next = new Set(s);
+                next.add(section);
+                return next;
+              })
+            }
+            className="absolute left-0 right-0 inline-flex items-center justify-center gap-1 rounded-md border border-dashed border-border bg-muted/20 px-2 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+            style={{ top: `${top}px` }}
+            title={`Show ${hiddenCountBySection[section]} more comment${
+              hiddenCountBySection[section] === 1 ? '' : 's'
+            } on this section`}
+          >
+            <ChevronDown className="h-2.5 w-2.5" />
+            +{hiddenCountBySection[section]} more
+          </button>
+        ))}
+        {Array.from(expandedSections).map((section) => {
+          const t = (grouped[section]?.[0] && tops[grouped[section][0].id]) ?? 0;
+          if (!grouped[section] || grouped[section].length <= VISIBLE_PER_ANCHOR) return null;
+          // Place "collapse" chip at the very top of this section's stack.
+          return (
+            <button
+              key={`collapse-${section}`}
+              type="button"
+              onClick={() =>
+                setExpandedSections((s) => {
+                  const next = new Set(s);
+                  next.delete(section);
+                  return next;
+                })
+              }
+              className="absolute left-0 right-0 inline-flex items-center justify-center gap-1 rounded-md border border-dashed border-border bg-muted/20 px-2 py-0.5 text-[9px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              style={{ top: `${Math.max(0, t - 18)}px` }}
+            >
+              <ChevronRight className="h-2.5 w-2.5" />
+              collapse
+            </button>
+          );
+        })}
       </div>
     </aside>
   );
@@ -160,77 +260,118 @@ function CommentCard({
   onLeave: () => void;
   onClick: () => void;
 }) {
-  const { Icon, accent, label } = kindStyle(c.kind, c.urgency);
+  const { Icon, accentBorder, accentBg, accentText } = kindStyle(c.kind, c.urgency);
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
-      onClick={onClick}
+      onClick={() => {
+        setExpanded((e) => !e);
+        onClick();
+      }}
       className={cn(
-        'absolute left-0 right-0 cursor-pointer rounded-md border px-2.5 py-2 text-[11.5px] leading-snug shadow-sm transition-all',
-        accent,
-        'hover:translate-x-[-2px] hover:shadow-md',
+        'group absolute left-0 right-0 cursor-pointer rounded-md border bg-background px-2 py-1.5 text-[11px] leading-snug shadow-sm transition-all',
+        'border-l-[3px]',
+        accentBorder,
+        'hover:shadow-md hover:translate-x-[-1px]',
       )}
       style={{ top: `${top}px` }}
     >
       <div className="flex items-start gap-1.5">
-        <Icon className="mt-0.5 h-3 w-3 shrink-0" />
+        <span
+          className={cn(
+            'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full',
+            accentBg,
+            accentText,
+          )}
+          aria-hidden
+        >
+          <Icon className="h-2.5 w-2.5" />
+        </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wider opacity-70">
-            {label}
+          <p className={cn('font-medium text-foreground', expanded ? '' : 'line-clamp-2')}>
+            {c.title}
           </p>
-          <p className="mt-0.5 font-medium">{c.title}</p>
-          <p className="mt-1 line-clamp-3 opacity-80">{c.body}</p>
+          {expanded && (
+            <p className="mt-1 text-foreground/75">{c.body}</p>
+          )}
+          {!expanded && (
+            <p className="mt-0.5 line-clamp-1 text-[10.5px] text-muted-foreground/80">
+              {c.body}
+            </p>
+          )}
         </div>
+        <ChevronDown
+          className={cn(
+            'mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50 transition-transform',
+            expanded && 'rotate-180',
+          )}
+        />
       </div>
     </div>
   );
 }
 
 function kindStyle(kind: CommentKind, urgency?: 'info' | 'attention' | 'urgent') {
+  // Returns the accent palette for the new compact card design:
+  //   accentBorder — applied as the 3px left border
+  //   accentBg / accentText — the small icon chip color
+  // No big background flood; the card body itself is bg-background so
+  // a stack of cards reads as a list, not a wall of red.
   if (kind === 'rubric-pass') {
     return {
       Icon: Check,
-      accent:
-        'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400',
+      accentBorder: 'border-l-emerald-500',
+      accentBg: 'bg-emerald-500/15',
+      accentText: 'text-emerald-700 dark:text-emerald-400',
       label: 'Rubric ✓',
     };
   }
   if (kind === 'rubric-fail') {
     return {
       Icon: AlertTriangle,
-      accent:
-        'border-amber-500/40 bg-amber-500/8 text-amber-800 dark:text-amber-300',
-      label: 'Rubric needs work',
+      accentBorder: 'border-l-amber-500',
+      accentBg: 'bg-amber-500/15',
+      accentText: 'text-amber-700 dark:text-amber-400',
+      label: 'Rubric',
     };
   }
   if (kind === 'top-fix') {
     return {
       Icon: Sparkles,
-      accent:
-        'border-blue-500/40 bg-blue-500/8 text-blue-800 dark:text-blue-300',
+      accentBorder: 'border-l-blue-500',
+      accentBg: 'bg-blue-500/15',
+      accentText: 'text-blue-700 dark:text-blue-400',
       label: 'Top fix',
     };
   }
-  // flag
+  // flag — vary by urgency so the gutter has visual hierarchy when
+  // multiple flags exist.
   if (urgency === 'urgent') {
     return {
       Icon: AlertCircle,
-      accent: 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300',
-      label: 'Coach review · urgent',
+      accentBorder: 'border-l-red-500',
+      accentBg: 'bg-red-500/15',
+      accentText: 'text-red-700 dark:text-red-400',
+      label: 'Urgent',
     };
   }
   if (urgency === 'info') {
     return {
       Icon: Info,
-      accent: 'border-blue-500/30 bg-blue-500/5 text-blue-700 dark:text-blue-300',
-      label: 'Coach review',
+      accentBorder: 'border-l-sky-500',
+      accentBg: 'bg-sky-500/15',
+      accentText: 'text-sky-700 dark:text-sky-400',
+      label: 'Note',
     };
   }
   return {
     Icon: Pin,
-    accent:
-      'border-amber-500/40 bg-amber-500/8 text-amber-800 dark:text-amber-300',
+    accentBorder: 'border-l-amber-500',
+    accentBg: 'bg-amber-500/15',
+    accentText: 'text-amber-700 dark:text-amber-400',
     label: 'Coach review',
   };
 }

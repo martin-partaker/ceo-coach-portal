@@ -22,7 +22,7 @@
  * so the polling progress bar keeps working unchanged.
  */
 import { db } from '@/db';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   cycles,
   ceos,
@@ -87,10 +87,30 @@ async function setJobStatusStep(
   },
 ): Promise<void> {
   'use step';
+  // CRITICAL: don't overwrite a job that has already been terminated
+  // (typically by `cancelGeneration`). Without this guard, the workflow
+  // happily continues running its remaining steps and each step's call
+  // here would clobber the user's cancellation with the next stage's
+  // status. From the user's POV: clicking Cancel "didn't work" because
+  // the GeneratingScreen flickered back on within a couple of seconds.
+  //
+  // We treat `completedAt IS NOT NULL` as the terminal flag — both
+  // normal completion and user cancellation set it. The narrow
+  // exception: the workflow's OWN final write that sets completedAt
+  // for the first time. Drizzle WHERE always evaluates against the
+  // *current* row, so an UPDATE that sets completedAt on a row whose
+  // completedAt is still NULL passes the guard. If two writers race
+  // (cancel vs. workflow finalise), the first one wins — which is the
+  // behaviour we want.
   await db
     .update(reportGenerationJobs)
     .set({ ...patch, updatedAt: new Date() })
-    .where(eq(reportGenerationJobs.id, jobId));
+    .where(
+      and(
+        eq(reportGenerationJobs.id, jobId),
+        sql`${reportGenerationJobs.completedAt} IS NULL`,
+      ),
+    );
 }
 
 interface CycleAndCeo {

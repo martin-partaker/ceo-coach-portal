@@ -54,6 +54,16 @@ export const cycles = pgTable('cycles', {
   monthlyGoalsAiSuggested: boolean('monthly_goals_ai_suggested').notNull().default(false),
   monthlyReflectionAiSuggested: boolean('monthly_reflection_ai_suggested').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  // Bumped automatically on every drizzle update via $onUpdate. The v2
+  // pipeline compares this against `cycle_facts.generatedAt` to decide
+  // whether the cached facts are still fresh — if a coach edited
+  // monthlyGoals / monthlyReflection / additionalContext after the
+  // facts were extracted, we re-extract. Without this column, edits
+  // would be invisible to the staleness check.
+  updatedAt: timestamp('updated_at')
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
 });
 
 

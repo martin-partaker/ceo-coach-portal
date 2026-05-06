@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/button';
 import {
   Download,
   Loader2,
-  RotateCcw,
   Sparkles,
   Wand2,
   X,
@@ -22,7 +21,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { PipelineProgressBar, type PipelineStatus } from './pipeline-progress-bar';
@@ -235,11 +233,13 @@ export function ReportDocumentModal({
               {periodEnd ? ` · ends ${new Date(periodEnd).toLocaleDateString()}` : ''}
             </p>
           </div>
-          {/* (Re-)generate dropdown. Coach picks Quick (skip critique +
-              revisions, ~1–2 min) or Full (with rubric self-check + up
-              to 2 polish passes, ~3–5 min). When a v2 already exists,
-              a "Re-extract from scratch" entry forces a fresh Stage A
-              + B run for cases where the inputs actually changed. */}
+          {/* (Re-)generate dropdown. Three speed/quality modes:
+              Instant (~45s), Quick (~2 min), Full polish (~5 min).
+              Stage A + B (extract facts + patterns) are reused
+              automatically across regenerations and the workflow
+              re-extracts on its own when ANY cycle input has changed
+              since the cached facts were generated. The operator
+              never has to choose "fresh extraction" manually. */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -300,25 +300,6 @@ export function ReportDocumentModal({
                   </span>
                 </div>
               </DropdownMenuItem>
-              {hasV2 && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() =>
-                      generate.mutate({ cycleId, forceRefreshFacts: true, mode: 'full' })
-                    }
-                    disabled={generate.isPending || isRunning}
-                  >
-                    <RotateCcw className="mr-2 h-3.5 w-3.5" />
-                    <div className="flex flex-col">
-                      <span className="text-xs font-medium">Re-extract from scratch</span>
-                      <span className="text-[10.5px] text-muted-foreground">
-                        Re-run Stage A + B. Use after changing cycle inputs.
-                      </span>
-                    </div>
-                  </DropdownMenuItem>
-                </>
-              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button

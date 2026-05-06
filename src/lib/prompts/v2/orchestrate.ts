@@ -1,10 +1,15 @@
 import 'server-only';
 import { db } from '@/db';
 import {
+  ceos,
+  cycles,
   cycleFacts as cycleFactsTable,
+  cycleKpiValues,
+  journalEntries,
   reportGenerationJobs,
+  transcripts,
 } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   CycleFactsSchema,
   PatternsSchema,
@@ -59,12 +64,20 @@ export async function loadCycleFactsRow(cycleId: string) {
 /**
  * Load cached facts + patterns for a cycle and validate them against
  * their schemas. Returns null on any failure path — schema drift, missing
- * patterns, missing row — so the workflow falls back to a clean
- * Stage A + B run instead of feeding malformed data into Stage C.
+ * patterns, missing row, or stale-against-inputs — so the workflow falls
+ * back to a clean Stage A + B run instead of feeding malformed or
+ * outdated data into Stage C.
  *
- * Validation matters because the schema can evolve between deploys; an
- * old cached row from before a schema change should be re-extracted, not
- * pushed through with mismatched types that explode in Stage C.
+ * Staleness check: if any input that feeds `fetchCycleContext` has been
+ * touched since the facts were generated, we re-extract automatically.
+ * The operator never has to choose "fast vs re-extract" — adding a new
+ * journal, transcript, KPI, or editing the cycle/CEO triggers a fresh
+ * Stage A on the next regenerate.
+ *
+ * Schema validation matters because the schema can evolve between
+ * deploys; an old cached row from before a schema change should be
+ * re-extracted, not pushed through with mismatched types that explode
+ * in Stage C.
  */
 export async function tryLoadCachedFacts(
   cycleId: string,
@@ -72,6 +85,16 @@ export async function tryLoadCachedFacts(
   const row = await loadCycleFactsRow(cycleId);
   if (!row) return null;
   if (!row.patternsJson) return null; // partial cache (Stage B never finished) — re-run
+
+  const latestInput = await latestInputTimestamp(cycleId);
+  if (latestInput && latestInput > row.generatedAt) {
+    console.log(
+      `[orchestrate] cycle_facts stale for cycleId=${cycleId} ` +
+        `(latest input ${latestInput.toISOString()} > generated ${row.generatedAt.toISOString()}); re-extracting.`,
+    );
+    return null;
+  }
+
   const factsParsed = CycleFactsSchema.safeParse(row.factsJson);
   if (!factsParsed.success) {
     console.warn(
@@ -87,4 +110,47 @@ export async function tryLoadCachedFacts(
     return null;
   }
   return { facts: factsParsed.data, patterns: patternsParsed.data, factsRowId: row.id };
+}
+
+/**
+ * The most recent timestamp across every input that feeds the v2
+ * extractor for this cycle. Compared against `cycle_facts.generatedAt`
+ * to decide if the cache is still fresh.
+ *
+ * Sources covered (mirrors what `fetchCycleContext` reads):
+ *   - the cycle row itself (monthlyGoals / monthlyReflection /
+ *     additionalContext edits) via `cycles.updatedAt`
+ *   - the CEO's 10x goal via `ceos.tenXGoalUpdatedAt`
+ *   - journal entries belonging to ANY of this CEO's cycles (because
+ *     fetchCycleContext pulls journals across siblings via derived
+ *     date-membership)
+ *   - transcripts attached to this cycle
+ *   - KPI values attached to this cycle
+ *
+ * Returns null if there are no inputs at all (fresh cycle); in that
+ * case the cache (if any) cannot possibly be stale relative to inputs.
+ */
+async function latestInputTimestamp(cycleId: string): Promise<Date | null> {
+  const [row] = await db
+    .select({
+      latest: sql<Date | null>`GREATEST(
+        ${cycles.updatedAt},
+        ${ceos.tenXGoalUpdatedAt},
+        (SELECT MAX(${journalEntries.createdAt})
+           FROM ${journalEntries}
+           INNER JOIN ${cycles} AS jc ON ${journalEntries.cycleId} = jc.id
+           WHERE jc.ceo_id = ${cycles.ceoId}),
+        (SELECT MAX(${transcripts.createdAt})
+           FROM ${transcripts}
+           WHERE ${transcripts.cycleId} = ${cycles.id}),
+        (SELECT MAX(${cycleKpiValues.createdAt})
+           FROM ${cycleKpiValues}
+           WHERE ${cycleKpiValues.cycleId} = ${cycles.id})
+      )`,
+    })
+    .from(cycles)
+    .leftJoin(ceos, eq(cycles.ceoId, ceos.id))
+    .where(eq(cycles.id, cycleId))
+    .limit(1);
+  return row?.latest ?? null;
 }

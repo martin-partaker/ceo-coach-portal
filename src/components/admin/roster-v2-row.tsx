@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ChevronRight, MoreHorizontal, Pencil, ArrowRightLeft, Trash2 } from 'lucide-react';
+import { ChevronRight, MoreHorizontal, Pencil, ArrowRightLeft, Trash2, Loader2 } from 'lucide-react';
+import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -306,6 +307,16 @@ const TONE_FG: Record<'green' | 'amber' | 'blue' | 'neutral', string> = {
   neutral: 'var(--muted-foreground)',
 };
 
+const JOB_STATUS_LABELS: Record<string, string> = {
+  pending: 'Queued',
+  extracting_facts: 'Reading inputs',
+  matching_patterns: 'Comparing cycles',
+  drafting_first: 'Drafting',
+  critiquing: 'Reviewing',
+  revising: 'Polishing',
+  finalising: 'Finalising',
+};
+
 /**
  * Single-line status summary for a CEO row. Phase is the headline, then
  * one supporting fact tailored to the phase: missing-inputs hint when
@@ -314,9 +325,51 @@ const TONE_FG: Record<'green' | 'amber' | 'blue' | 'neutral', string> = {
  * + 7-color legend, which were noise the operator had to decode.
  */
 function StatusLine({ cycle }: { cycle: RosterCycle | null }) {
+  // Pull the global active-jobs query (already polled by the corner
+  // background pill — sharing the cache costs nothing) so each row
+  // can override its phase pill when a v2 generation is in flight.
+  // This makes "we're working on a polished version right now" obvious
+  // at the workspace level, not just inside the modal.
+  const activeJobs = trpc.reports.listActiveJobs.useQuery(undefined, {
+    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? 2000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const liveJob = cycle
+    ? (activeJobs.data ?? []).find((j) => j.cycleId === cycle.id)
+    : undefined;
+
   if (!cycle) {
     return <span className="text-[12px] italic text-muted-foreground">No cycle yet</span>;
   }
+
+  // When a v2 generation is mid-flight for this cycle, swap the phase
+  // pill for a "Generating polished" pill. The previous report (if
+  // any) is still in the DB and viewable; this just signals that a
+  // newer one is on the way.
+  if (liveJob) {
+    const stageLabel = JOB_STATUS_LABELS[liveJob.status as keyof typeof JOB_STATUS_LABELS] ?? liveJob.status;
+    return (
+      <div className="flex min-w-0 items-center gap-2 text-[12.5px]">
+        <span
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+          style={{
+            background: 'color-mix(in oklab, oklch(58% 0.14 258), transparent 88%)',
+            color: 'oklch(58% 0.14 258)',
+          }}
+        >
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Generating polished
+        </span>
+        <span className="truncate text-[12px] text-muted-foreground">
+          {stageLabel}
+          {liveJob.revisionsApplied > 0 ? ` · revision ${liveJob.revisionsApplied}` : ''}
+          {' · '}
+          {deriveCycleLabel(cycle)}
+        </span>
+      </div>
+    );
+  }
+
   const palette = PHASE_PALETTE[cycle.phase];
   const cycleLabel = deriveCycleLabel(cycle);
   const { done, total, missing } = readinessSummary(cycle.readiness);

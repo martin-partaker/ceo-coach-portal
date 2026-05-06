@@ -17,7 +17,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { type PipelineStatus } from './pipeline-progress-bar';
+import { PipelineProgressBar, type PipelineStatus } from './pipeline-progress-bar';
 import {
   DocumentRenderer,
   type DocumentReportShape,
@@ -331,7 +331,14 @@ export function ReportDocumentModal({
             comments stay anchored to section cards as you scroll). */}
         <div className="flex flex-1 overflow-hidden">
           {isRunning ? (
-            <GeneratingScreen status={status} />
+            <GeneratingScreen
+              status={status}
+              revisionsApplied={job?.revisionsApplied ?? 0}
+              topFix={
+                ((job?.stageDetail as { topFix?: string | null } | null)?.topFix) ??
+                null
+              }
+            />
           ) : diffMode && firstDraftShape && versions.data?.v2 ? (
             <div className="flex-1 overflow-y-auto bg-muted/10 p-6">
               <DiffView
@@ -436,10 +443,18 @@ function EmptyState({
  * pill is responsible for ambient progress; this screen just sets
  * expectations and gets out of the way.
  */
-function GeneratingScreen({ status }: { status: PipelineStatus }) {
+function GeneratingScreen({
+  status,
+  revisionsApplied,
+  topFix,
+}: {
+  status: PipelineStatus;
+  revisionsApplied: number;
+  topFix: string | null;
+}) {
   return (
     <div className="flex flex-1 items-center justify-center bg-muted/10 p-10">
-      <div className="max-w-md text-center">
+      <div className="w-full max-w-2xl text-center">
         <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
         <h3 className="mt-4 text-base font-semibold">
           We're generating your report
@@ -449,38 +464,24 @@ function GeneratingScreen({ status }: { status: PipelineStatus }) {
           from your inputs, comparing to prior cycles, drafting, then
           checking and polishing against the rubric.
         </p>
-        <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground/80">
+
+        {/* Live stage strip — shows which step is active right now. */}
+        <div className="mx-auto mt-6 max-w-xl rounded-lg border border-border bg-background px-4 py-3 text-left">
+          <PipelineProgressBar
+            status={status}
+            revisionsApplied={revisionsApplied}
+            topFix={topFix}
+          />
+        </div>
+
+        <p className="mt-5 text-[12px] leading-relaxed text-muted-foreground/80">
           Feel free to close this and keep working. The corner pill in
           the bottom right will track progress, and the polished report
           will be here when you come back.
         </p>
-        <p className="mt-4 text-[11px] uppercase tracking-wider text-muted-foreground/60">
-          Currently: {prettyStatus(status)}
-        </p>
       </div>
     </div>
   );
-}
-
-function prettyStatus(s: PipelineStatus): string {
-  switch (s) {
-    case 'pending':
-      return 'queued';
-    case 'extracting_facts':
-      return 'reading your inputs';
-    case 'matching_patterns':
-      return 'comparing to prior cycles';
-    case 'drafting_first':
-      return 'drafting the first pass';
-    case 'critiquing':
-      return 'reviewing against the rubric';
-    case 'revising':
-      return 'polishing weak sections';
-    case 'finalising':
-      return 'finalising';
-    default:
-      return 'working';
-  }
 }
 
 function DownloadPdfButton({

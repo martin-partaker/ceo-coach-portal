@@ -298,6 +298,120 @@ export const cycleKpiValues = pgTable(
   }),
 );
 
+// =====================================================================
+// Report v2 pipeline (A → B → C → D → E)
+// =====================================================================
+
+/**
+ * Stage A + B output for a cycle: structured facts extracted from raw
+ * inputs (goal cascade, weekly effort, named stakeholders, emotional
+ * events, the named constraint, and every quantitative claim with a
+ * sourceRef back to its journal/transcript/KPI). Cross-cycle Patterns
+ * (carrying-forward, evolving, resolving, new) live alongside facts so
+ * one row per cycle is enough.
+ *
+ * One row per cycle. Recompute is fine — we just upsert. The model and
+ * timestamps let us know when to invalidate (e.g. journals changed).
+ */
+export const cycleFacts = pgTable(
+  'cycle_facts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    cycleId: uuid('cycle_id')
+      .notNull()
+      .references(() => cycles.id, { onDelete: 'cascade' }),
+    factsJson: jsonb('facts_json').notNull(),
+    patternsJson: jsonb('patterns_json'),
+    modelUsed: text('model_used').notNull(),
+    generatedAt: timestamp('generated_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqCycle: uniqueIndex('cycle_facts_cycle_unique').on(t.cycleId),
+  }),
+);
+
+/**
+ * Stage D output: rubric scores for a generated report. The 9-row
+ * rubric extracted from the Tipton Mills gold standard. Each report has
+ * 0..n critique rows (one per generation pass — first-pass critique +
+ * post-revision critique are both kept for evals).
+ */
+export const reportCritiques = pgTable(
+  'report_critiques',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    reportId: uuid('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    pass: boolean('pass').notNull(),
+    rubricJson: jsonb('rubric_json').notNull(),
+    weakSections: jsonb('weak_sections'),
+    modelUsed: text('model_used').notNull(),
+    generatedAt: timestamp('generated_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    byReport: index('report_critiques_report_idx').on(t.reportId),
+  }),
+);
+
+/**
+ * Stage E: pinned paragraphs the coach wants preserved across
+ * regenerations. Identified by `paragraphHash` (stable hash of the
+ * paragraph text) so a regeneration can detect "is this still here?"
+ * and skip overwriting it. The text is also stored so we can re-insert
+ * it if a model regenerates the section without including it.
+ */
+export const reportPins = pgTable(
+  'report_pins',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    reportId: uuid('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    section: text('section').notNull(),
+    paragraphHash: text('paragraph_hash').notNull(),
+    paragraphText: text('paragraph_text').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    uniq: uniqueIndex('report_pins_unique').on(
+      t.reportId,
+      t.section,
+      t.paragraphHash,
+    ),
+  }),
+);
+
+/**
+ * Stage E: per-section refinement chat. Each row is one turn (coach
+ * message OR model response). The chat is scoped to a (report, section)
+ * pair so the coach can iterate independently on each section without
+ * one conversation polluting another.
+ */
+export const reportRefinements = pgTable(
+  'report_refinements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    reportId: uuid('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    section: text('section').notNull(),
+    role: text('role').notNull(), // 'user' | 'assistant'
+    content: text('content').notNull(),
+    /** Snapshot of the section's value AFTER this turn (for assistant
+     *  turns) — lets the coach diff turns and revert. Null for user
+     *  turns. */
+    sectionSnapshot: text('section_snapshot'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    byReportSection: index('report_refinements_report_section_idx').on(
+      t.reportId,
+      t.section,
+    ),
+  }),
+);
+
 // Type exports
 export type Coach = typeof coaches.$inferSelect;
 export type NewCoach = typeof coaches.$inferInsert;
@@ -316,3 +430,7 @@ export type TallyForm = typeof tallyForms.$inferSelect;
 export type CeoKpiDefinition = typeof ceoKpiDefinitions.$inferSelect;
 export type CycleKpiValue = typeof cycleKpiValues.$inferSelect;
 export type KpiKind = 'number' | 'currency' | 'percent' | 'count' | 'text';
+export type CycleFacts = typeof cycleFacts.$inferSelect;
+export type ReportCritique = typeof reportCritiques.$inferSelect;
+export type ReportPin = typeof reportPins.$inferSelect;
+export type ReportRefinement = typeof reportRefinements.$inferSelect;

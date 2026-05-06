@@ -1,11 +1,39 @@
 import { z } from 'zod';
-import { eq, and, desc, inArray } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { eq, and, asc, desc, inArray } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { cycles, ceos, reports, coaches, curriculum } from '@/db/schema';
+import {
+  cycles,
+  ceos,
+  reports,
+  coaches,
+  curriculum,
+  cycleFacts as cycleFactsTable,
+  reportCritiques,
+  reportPins,
+  reportRefinements,
+} from '@/db/schema';
 import { buildPrompt } from '@/lib/prompts/builder';
 import { MODELS } from '@/lib/anthropic/models';
+import {
+  orchestrateGenerateV2,
+  loadCycleFactsRow,
+  composeEmailRawText,
+} from '@/lib/prompts/v2/orchestrate';
+import { fetchCycleContext } from '@/lib/prompts/v2/context';
+import {
+  refineSection as refineSectionAi,
+  applyRefinement,
+} from '@/lib/prompts/v2/refine-section';
+import {
+  REFINABLE_SECTIONS,
+  type CycleFacts as CycleFactsT,
+  type Patterns as PatternsT,
+  type DraftedReport,
+  type RefinableSection,
+} from '@/lib/prompts/v2/schemas';
 
 const anthropic = new Anthropic();
 
@@ -646,5 +674,312 @@ export const reportsRouter = createTRPCRouter({
         .where(eq(reports.id, report.id))
         .returning();
       return updated;
+    }),
+
+  // ════════════════════════════════════════════════════════════════════
+  // v2 pipeline (Stages A → B → C → D → E)
+  // ════════════════════════════════════════════════════════════════════
+
+  /** Run the full v2 pipeline: extract facts → match patterns →
+   *  draft → critique (+ up to 2 revision passes). Persists CycleFacts,
+   *  the report, and the final critique. */
+  generateV2: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { cycle, ceo } = await loadCycleAndCeo(ctx, input.cycleId);
+      const [assignedCoach] = ceo.coachId
+        ? await ctx.db
+            .select()
+            .from(coaches)
+            .where(eq(coaches.id, ceo.coachId))
+            .limit(1)
+        : [];
+      const result = await orchestrateGenerateV2({
+        cycle,
+        ceo,
+        coachName: assignedCoach?.name ?? ctx.coach.name,
+      });
+      return result;
+    }),
+
+  /** Read the latest critique for a report. The UI renders pass/fail per
+   *  rubric item + the topFix sentence. */
+  getCritique: protectedProcedure
+    .input(z.object({ reportId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      const [latest] = await ctx.db
+        .select()
+        .from(reportCritiques)
+        .where(eq(reportCritiques.reportId, input.reportId))
+        .orderBy(desc(reportCritiques.generatedAt))
+        .limit(1);
+      return latest ?? null;
+    }),
+
+  /** Read the persisted CycleFacts + Patterns for a cycle. Drives the
+   *  source-attribution UI (hover a claim, see which journal/transcript
+   *  excerpt it came from) and the coachReviewFlags callouts. */
+  getFacts: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [cycle] = await ctx.db
+        .select()
+        .from(cycles)
+        .where(eq(cycles.id, input.cycleId))
+        .limit(1);
+      if (!cycle) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, input.cycleId);
+
+      const row = await loadCycleFactsRow(input.cycleId);
+      return row;
+    }),
+
+  /** List the per-section refinement chat history for a report.
+   *  Returned grouped by section so the UI can render one panel per
+   *  section with its own conversation. */
+  listRefinements: protectedProcedure
+    .input(z.object({ reportId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      const rows = await ctx.db
+        .select()
+        .from(reportRefinements)
+        .where(eq(reportRefinements.reportId, input.reportId))
+        .orderBy(asc(reportRefinements.createdAt));
+
+      const grouped: Record<string, typeof rows> = {};
+      for (const r of rows) {
+        (grouped[r.section] ??= []).push(r);
+      }
+      return grouped;
+    }),
+
+  /** Stage E — per-section refinement chat turn.
+   *
+   *  The coach sends a message scoped to a single section. We:
+   *    1. Load CycleFacts + Patterns + current draft from DB.
+   *    2. Load prior chat history for this (report, section).
+   *    3. Load any pinned paragraphs in this section.
+   *    4. Call the model with all of that context.
+   *    5. Apply the new section value into contentJson, recompute rawText.
+   *    6. Append the user turn + assistant turn to reportRefinements.
+   */
+  refineSectionV2: protectedProcedure
+    .input(
+      z.object({
+        reportId: z.string().uuid(),
+        section: z.enum(REFINABLE_SECTIONS),
+        message: z.string().trim().min(1).max(2000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const { cycle, ceo } = await loadCycleAndCeo(ctx, report.cycleId);
+      const [assignedCoach] = ceo.coachId
+        ? await ctx.db
+            .select()
+            .from(coaches)
+            .where(eq(coaches.id, ceo.coachId))
+            .limit(1)
+        : [];
+
+      const factsRow = await loadCycleFactsRow(report.cycleId);
+      if (!factsRow) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message:
+            'No CycleFacts on file for this cycle yet. Generate the report via v2 first so refinement has typed facts to ground in.',
+        });
+      }
+      const facts = factsRow.factsJson as CycleFactsT;
+      const patterns = (factsRow.patternsJson ?? null) as PatternsT | null;
+
+      const cycleCtx = await fetchCycleContext({
+        cycle,
+        ceo,
+        coachName: assignedCoach?.name ?? ctx.coach.name,
+      });
+
+      const history = await ctx.db
+        .select()
+        .from(reportRefinements)
+        .where(
+          and(
+            eq(reportRefinements.reportId, input.reportId),
+            eq(reportRefinements.section, input.section),
+          ),
+        )
+        .orderBy(asc(reportRefinements.createdAt));
+
+      const pins = await ctx.db
+        .select()
+        .from(reportPins)
+        .where(
+          and(
+            eq(reportPins.reportId, input.reportId),
+            eq(reportPins.section, input.section),
+          ),
+        );
+
+      const currentDraft = report.contentJson as DraftedReport;
+
+      const refinement = await refineSectionAi({
+        ctx: cycleCtx,
+        facts,
+        patterns: patterns ?? {
+          carryingForward: [],
+          evolving: [],
+          resolving: [],
+          newThisCycle: [],
+          isFirstCycle: cycleCtx.isFirstCycle,
+        },
+        currentDraft,
+        section: input.section,
+        userMessage: input.message,
+        history: history.map((h) => ({
+          role: h.role as 'user' | 'assistant',
+          content: h.content,
+        })),
+        pinnedParagraphs: pins.map((p) => p.paragraphText),
+      });
+
+      const nextDraft = applyRefinement(
+        currentDraft,
+        input.section as RefinableSection,
+        refinement.newValue,
+      );
+      const rawText = composeEmailRawText(nextDraft);
+
+      // Append both turns and update the report in one transaction-ish
+      // shot. drizzle-orm doesn't expose a transaction shorthand here;
+      // sequential inserts + update is fine — the worst case on partial
+      // failure is a stranded user turn the UI shows but no assistant
+      // reply, which the coach can re-run.
+      await ctx.db.insert(reportRefinements).values([
+        {
+          reportId: input.reportId,
+          section: input.section,
+          role: 'user',
+          content: input.message,
+          sectionSnapshot: null,
+        },
+        {
+          reportId: input.reportId,
+          section: input.section,
+          role: 'assistant',
+          content: refinement.rawText,
+          sectionSnapshot: refinement.snapshot,
+        },
+      ]);
+
+      const [updated] = await ctx.db
+        .update(reports)
+        .set({
+          contentJson: nextDraft as unknown as Record<string, unknown>,
+          rawText,
+        })
+        .where(eq(reports.id, input.reportId))
+        .returning();
+
+      return { report: updated, snapshot: refinement.snapshot };
+    }),
+
+  /** Pin a paragraph in a section so it's preserved across regenerations
+   *  and refinements. Stores both a stable hash of the text (for "is it
+   *  still here?" checks) and the verbatim text (for re-insertion). */
+  pinParagraph: protectedProcedure
+    .input(
+      z.object({
+        reportId: z.string().uuid(),
+        section: z.enum(REFINABLE_SECTIONS),
+        paragraphText: z.string().trim().min(1).max(8000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      const paragraphHash = createHash('sha256')
+        .update(input.paragraphText.trim())
+        .digest('hex')
+        .slice(0, 32);
+
+      const [pin] = await ctx.db
+        .insert(reportPins)
+        .values({
+          reportId: input.reportId,
+          section: input.section,
+          paragraphHash,
+          paragraphText: input.paragraphText.trim(),
+        })
+        .onConflictDoNothing()
+        .returning();
+      return pin ?? null;
+    }),
+
+  unpinParagraph: protectedProcedure
+    .input(z.object({ pinId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [pin] = await ctx.db
+        .select()
+        .from(reportPins)
+        .where(eq(reportPins.id, input.pinId))
+        .limit(1);
+      if (!pin) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, pin.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      await ctx.db.delete(reportPins).where(eq(reportPins.id, input.pinId));
+      return { ok: true };
+    }),
+
+  listPins: protectedProcedure
+    .input(z.object({ reportId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      return ctx.db
+        .select()
+        .from(reportPins)
+        .where(eq(reportPins.reportId, input.reportId))
+        .orderBy(asc(reportPins.createdAt));
     }),
 });

@@ -34,6 +34,14 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { Markdown, MarkdownInline } from '@/components/markdown';
+import {
+  V2GenerateButton,
+  CritiqueStrip,
+  CoachReviewFlagsBanner,
+  GoalCascadeCard,
+  RefineChatButton,
+  CycleFactsInspector,
+} from './report-v2-extensions';
 
 interface Props {
   cycleId: string;
@@ -66,6 +74,18 @@ interface ReportJson {
     patternObservations?: string;
     suggestedNextSteps?: string[];
     suggestedResourceIds?: string[];
+    // v2 additions (only populated by generateV2)
+    goalSummary?: {
+      tenX?: string;
+      ninetyDay?: string | null;
+      thirtyDay?: string | null;
+      flag?: string | null;
+    } | null;
+    coachReviewFlags?: Array<{
+      title: string;
+      detail: string;
+      urgency?: 'info' | 'attention' | 'urgent';
+    }>;
   };
 }
 
@@ -201,15 +221,27 @@ export function ReportReviewer({
           )}
 
           {data && tab === 'report' && structured && (
-            <StructuredReportView
-              reportId={data.id}
-              structured={structured}
-              goingDeeper={json?.going_deeper ?? ''}
-            />
+            <div className="space-y-3">
+              {/* v2 surfaces — render only if present (older v1 reports
+                  don't have them, the components are no-ops in that case). */}
+              <CritiqueStrip reportId={data.id} />
+              {structured.coachReviewFlags && structured.coachReviewFlags.length > 0 && (
+                <CoachReviewFlagsBanner flags={structured.coachReviewFlags} />
+              )}
+              {structured.goalSummary && (structured.goalSummary.tenX || structured.goalSummary.ninetyDay) && (
+                <GoalCascadeCard goal={structured.goalSummary} />
+              )}
+              <StructuredReportView
+                reportId={data.id}
+                structured={structured}
+                goingDeeper={json?.going_deeper ?? ''}
+              />
+            </div>
           )}
         </div>
 
         <SheetFooter className="flex-row items-center gap-2">
+          <CycleFactsInspector cycleId={cycleId} />
           <span className="flex-1" />
           {data && (
             <>
@@ -219,6 +251,7 @@ export function ReportReviewer({
                 size="sm"
                 onClick={() => regenerate.mutate({ cycleId })}
                 disabled={regenerate.isPending}
+                title="v1 single-shot regeneration"
               >
                 {regenerate.isPending ? (
                   <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
@@ -229,6 +262,7 @@ export function ReportReviewer({
               </Button>
             </>
           )}
+          <V2GenerateButton cycleId={cycleId} />
         </SheetFooter>
       </SheetContent>
     </Sheet>
@@ -924,6 +958,7 @@ function EditableProseSection({
         icon={icon}
         extraAction={
           <>
+            <RefineChatButton reportId={reportId} section={field} />
             <RegenerateSectionButton
               reportId={reportId}
               field={field}
@@ -1073,6 +1108,7 @@ function EditableListSection({
         icon={icon}
         extraAction={
           <>
+            <RefineChatButton reportId={reportId} section={field} />
             <RegenerateSectionButton
               reportId={reportId}
               field={field}

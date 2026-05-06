@@ -1,9 +1,10 @@
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import { MODELS } from '@/lib/anthropic/models';
+import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
 import { CycleFactsSchema, type CycleFacts } from './schemas';
 import { renderContextForModel, listMissingInputs, type CycleContext } from './context';
+import { assertNotTruncated } from './post-process';
 
 const anthropic = new Anthropic();
 
@@ -82,36 +83,127 @@ ${missingWarning}
 
 Call the ${FACTS_TOOL_NAME} tool now.`;
 
-  const modelId = MODELS.draft; // Sonnet — extraction is structured, doesn't need Opus
+  // Opus — Stage A is load-bearing: every downstream stage consumes
+  // these Facts (drafter cites them, critic checks against them,
+  // pattern-matcher diffs them across cycles). An extraction miss
+  // compounds — the drafter can't cite a claim that wasn't extracted.
+  // Once-per-cycle volume keeps the absolute cost bounded.
+  const modelId = MODELS.reportPrimary;
+  const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
-  const message = await anthropic.messages.create({
-    model: modelId,
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    tools: [
-      {
-        name: FACTS_TOOL_NAME,
-        description: 'Submit the structured CycleFacts extracted from the cycle inputs.',
-        input_schema: FACTS_TOOL_INPUT_SCHEMA as Anthropic.Tool.InputSchema,
-      },
-    ],
-    tool_choice: { type: 'tool', name: FACTS_TOOL_NAME },
-    messages: [{ role: 'user', content: userPrompt }],
-  });
+  // First attempt — fresh prompt.
+  const messages: Anthropic.MessageParam[] = [
+    { role: 'user', content: userPrompt },
+  ];
+  const firstAttempt = await runFactsCall(modelId, maxTokens, messages);
+  const firstParsed = CycleFactsSchema.safeParse(firstAttempt.toolInput);
+  if (firstParsed.success) {
+    return { facts: firstParsed.data, modelUsed: modelId, missing };
+  }
 
+  // One-shot retry: feed the validation error back to the model so it can
+  // fix the malformed tool call. The schema is intentionally strict —
+  // if the model omits a field consistently, this retry will surface
+  // whether it's a transient glitch (retry succeeds) or a real
+  // prompt/input-data problem (retry also fails, full diagnostic logs
+  // tell us which).
+  const errorSummary = formatZodIssues(firstParsed.error);
+  // Log the actual tool input so when this fires again we can see what
+  // the model actually sent. Top-level keys + a 500-char preview is
+  // enough to diagnose without dumping the full payload to the logs.
+  const toolInputPreview = (() => {
+    try {
+      const json = JSON.stringify(firstAttempt.toolInput);
+      const keys =
+        firstAttempt.toolInput && typeof firstAttempt.toolInput === 'object'
+          ? Object.keys(firstAttempt.toolInput as Record<string, unknown>).join(', ')
+          : '(non-object)';
+      return `keys=[${keys}] preview=${json.slice(0, 500)}`;
+    } catch {
+      return '(unserializable)';
+    }
+  })();
+  console.warn(
+    `Stage A: first attempt failed Zod validation, retrying.\n  issues:\n${errorSummary}\n  toolInput: ${toolInputPreview}`,
+  );
+  messages.push(
+    {
+      role: 'assistant',
+      content: firstAttempt.message.content,
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: firstAttempt.toolUseId,
+          is_error: true,
+          content: `The tool input failed schema validation. Fix these issues and call ${FACTS_TOOL_NAME} again with the corrected payload:\n\n${errorSummary}`,
+        },
+      ],
+    },
+  );
+
+  const retry = await runFactsCall(modelId, maxTokens, messages);
+  const retryParsed = CycleFactsSchema.safeParse(retry.toolInput);
+  if (!retryParsed.success) {
+    throw new Error(
+      `Stage A: tool output failed CycleFactsSchema validation after retry — ${formatZodIssues(retryParsed.error)}`,
+    );
+  }
+  return { facts: retryParsed.data, modelUsed: modelId, missing };
+}
+
+/** Single tool-use round-trip — extracted so the retry path can re-use
+ *  it with an updated message history. Returns the raw assistant message
+ *  (needed for the retry conversation) plus the parsed tool call. */
+async function runFactsCall(
+  modelId: string,
+  maxTokens: number,
+  messages: Anthropic.MessageParam[],
+): Promise<{
+  message: Anthropic.Message;
+  toolInput: unknown;
+  toolUseId: string;
+}> {
+  const message = await anthropic.messages
+    .stream({
+      model: modelId,
+      max_tokens: maxTokens,
+      system: SYSTEM_PROMPT,
+      tools: [
+        {
+          name: FACTS_TOOL_NAME,
+          description: 'Submit the structured CycleFacts extracted from the cycle inputs.',
+          input_schema: FACTS_TOOL_INPUT_SCHEMA as Anthropic.Tool.InputSchema,
+        },
+      ],
+      tool_choice: { type: 'tool', name: FACTS_TOOL_NAME },
+      messages,
+    })
+    .finalMessage();
+  assertNotTruncated(message, 'Stage A', maxTokens);
   const toolUse = message.content.find(
-    (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === FACTS_TOOL_NAME,
+    (b): b is Anthropic.ToolUseBlock =>
+      b.type === 'tool_use' && b.name === FACTS_TOOL_NAME,
   );
   if (!toolUse) {
     throw new Error('Stage A: model did not call the submit_cycle_facts tool');
   }
+  return { message, toolInput: toolUse.input, toolUseId: toolUse.id };
+}
 
-  const parsed = CycleFactsSchema.safeParse(toolUse.input);
-  if (!parsed.success) {
-    throw new Error(
-      `Stage A: tool output failed CycleFactsSchema validation — ${parsed.error.message}`,
-    );
+/** Compact, human-readable summary of a ZodError — used both for the
+ *  retry prompt and for the user-facing error string. Bullet list of
+ *  `path: message` lines so a coach can see WHICH field broke without
+ *  reading the full structured error blob. */
+function formatZodIssues(err: z.ZodError): string {
+  const lines = err.issues.slice(0, 8).map((issue) => {
+    const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+    return `- ${path}: ${issue.message}`;
+  });
+  if (err.issues.length > 8) {
+    lines.push(`- … and ${err.issues.length - 8} more issue(s)`);
   }
-
-  return { facts: parsed.data, modelUsed: modelId, missing };
+  return lines.join('\n');
 }

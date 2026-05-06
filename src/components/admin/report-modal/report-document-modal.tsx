@@ -11,9 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import {
   Download,
-  GitCompare,
   Loader2,
-  RefreshCw,
   Sparkles,
   Wand2,
   X,
@@ -29,8 +27,6 @@ import {
   buildComments,
   type CritiqueLike,
 } from './comment-gutter';
-import { VersionToggle, type VersionKey } from './version-toggle';
-import { DiffView } from './diff-view';
 import { V2IterationInspector } from './v2-iteration-inspector';
 
 /**
@@ -108,59 +104,28 @@ export function ReportDocumentModal({
   // Generate mutation — kicks off and returns immediately.
   const generate = trpc.reports.generateV2.useMutation({
     onSuccess: async () => {
-      // Force a refetch of the active job so polling picks it up
-      // immediately rather than after the next 1.5s tick.
-      await utils.reports.getActiveJob.invalidate({ cycleId });
+      // Invalidate both the per-cycle job query (drives the in-modal
+      // progress screen) and the roster-wide listActiveJobs (drives
+      // each row's "Generating" pill). See roster-v2-workspace for
+      // why both are needed.
+      await Promise.all([
+        utils.reports.getActiveJob.invalidate({ cycleId }),
+        utils.reports.listActiveJobs.invalidate(),
+      ]);
     },
   });
 
-  const v1Regen = trpc.reports.generate.useMutation({
-    onSuccess: async () => {
-      await utils.reports.getReportVersions.invalidate({ cycleId });
-      await utils.reports.getForCycle.invalidate({ cycleId });
-    },
-  });
-
-  // ── version state ────────────────────────────────────────────────
-  // The "v2 first draft" (firstDraftJson) is a SECONDARY view used by
-  // the diff button only — it's not in the user-facing toggle. Primary
-  // toggle is just First draft (v1) vs Polished (v2 final).
-  const hasV2First = !!versions.data?.latestJob?.firstDraftJson;
-  const has = useMemo(
-    () => ({
-      v1: !!versions.data?.v1,
-      v2Final: !!versions.data?.v2,
-    }),
-    [versions.data],
-  );
-
-  const [version, setVersion] = useState<VersionKey>('v2-final');
-  const [diffMode, setDiffMode] = useState(false);
-
-  // Default version: prefer v2-final → v1.
-  useEffect(() => {
-    if (!versions.data) return;
-    if (has.v2Final) setVersion('v2-final');
-    else if (has.v1) setVersion('v1');
-    setDiffMode(false);
-  }, [versions.data, has.v2Final, has.v1, cycleId]);
-
-  // Reset to default tab on open / cycle change.
-  useEffect(() => {
-    if (open) setDiffMode(false);
-  }, [open, cycleId]);
+  // v2 is the only generator surfaced in the UI now. Legacy v1 reports
+  // (cycles that finished on the old single-shot generator before the
+  // v2 pipeline launched) are no longer viewable here — coaches who
+  // need that view should re-generate v2.
+  const hasV2 = !!versions.data?.v2;
 
   // ── shape the active version into a DocumentReportShape ──────────
   const activeShape: DocumentReportShape | null = useMemo(() => {
-    if (!versions.data) return null;
-    if (version === 'v1' && versions.data.v1) {
-      return versions.data.v1.contentJson as unknown as DocumentReportShape;
-    }
-    if (version === 'v2-final' && versions.data.v2) {
-      return versions.data.v2.contentJson as unknown as DocumentReportShape;
-    }
-    return null;
-  }, [version, versions.data]);
+    if (!versions.data?.v2) return null;
+    return versions.data.v2.contentJson as unknown as DocumentReportShape;
+  }, [versions.data]);
 
   // ── comments for the gutter ──────────────────────────────────────
   const flagsFromShape = activeShape?.report?.coachReviewFlags ?? [];
@@ -170,10 +135,10 @@ export function ReportDocumentModal({
   const flags = flagsFromShape.length > 0 ? flagsFromShape : flagsFromFacts;
 
   const critiqueLike: CritiqueLike | null = useMemo(() => {
-    if (!critique.data || version !== 'v2-final') return null;
+    if (!critique.data) return null;
     const rj = critique.data.rubricJson as CritiqueLike;
     return rj;
-  }, [critique.data, version]);
+  }, [critique.data]);
 
   const comments = useMemo(
     () => buildComments({ critique: critiqueLike, flags }),
@@ -220,11 +185,6 @@ export function ReportDocumentModal({
   const documentRef = useRef<HTMLDivElement | null>(null);
   const [emphasized, setEmphasized] = useState<DocumentSectionId | null>(null);
 
-  // First draft for diff
-  const firstDraftShape = (versions.data?.latestJob?.firstDraftJson ?? null) as
-    | DocumentReportShape
-    | null;
-
   // "Break out to LLM" inspector state — shown via a button in the
   // footer next to PDF download. Only meaningful when v2 has run.
   const [breakoutOpen, setBreakoutOpen] = useState(false);
@@ -253,62 +213,21 @@ export function ReportDocumentModal({
               {periodEnd ? ` · ends ${new Date(periodEnd).toLocaleDateString()}` : ''}
             </p>
           </div>
-          <VersionToggle
-            value={version}
-            onChange={setVersion}
-            has={has}
-          />
-          {version === 'v2-final' && hasV2First && (
-            <Button
-              type="button"
-              size="sm"
-              variant={diffMode ? 'default' : 'outline'}
-              className="h-7 text-[11px]"
-              onClick={() => setDiffMode((d) => !d)}
-              title="Show what the rubric critic improved between first draft and polished version"
-            >
-              <GitCompare className="mr-1 h-3 w-3" />
-              {diffMode ? 'Hide diff' : 'Show what improved'}
-            </Button>
-          )}
-          {/* Tab-aware (re)generate button — sits next to the version
-              toggle so the action is bound to whichever version the
-              coach is currently viewing. Hidden in diff mode. */}
-          {!diffMode && version === 'v1' && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              onClick={() => v1Regen.mutate({ cycleId })}
-              disabled={v1Regen.isPending}
-              title="Run the legacy single-shot generator (kept for comparison)."
-            >
-              {v1Regen.isPending ? (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1 h-3 w-3" />
-              )}
-              {has.v1 ? 'Re-generate first draft' : 'Generate first draft'}
-            </Button>
-          )}
-          {!diffMode && version === 'v2-final' && (
-            <Button
-              type="button"
-              size="sm"
-              className="h-7 text-[11px]"
-              onClick={() => generate.mutate({ cycleId })}
-              disabled={generate.isPending || isRunning}
-              title="Run the full A→B→C→D pipeline."
-            >
-              {generate.isPending || isRunning ? (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-              ) : (
-                <Sparkles className="mr-1 h-3 w-3" />
-              )}
-              {has.v2Final ? 'Re-generate polished' : 'Generate polished'}
-            </Button>
-          )}
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 text-[11px]"
+            onClick={() => generate.mutate({ cycleId })}
+            disabled={generate.isPending || isRunning}
+            title="Run the full extract → match → draft → critique → polish pipeline."
+          >
+            {generate.isPending || isRunning ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1 h-3 w-3" />
+            )}
+            {hasV2 ? 'Re-generate' : 'Generate'}
+          </Button>
           <Button
             type="button"
             size="icon"
@@ -325,11 +244,11 @@ export function ReportDocumentModal({
             don't render the live progress bar here anymore: while a
             generation is running, the entire body becomes a "we're
             working on it" screen below, and the corner pill shows
-            ambient progress. */}
+            ambient progress. The error message is collapsed by default
+            because Stage A/B/C errors include long Zod / JSON-parse
+            output that's unreadable as a banner. */}
         {!jobIsLive && job?.status === 'error' && (
-          <div className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-5 py-2 text-[12px] text-destructive">
-            Last v2 generation failed: {job.error ?? 'unknown error'}. Click Re-generate v2 to try again.
-          </div>
+          <FailureBanner error={job.error ?? null} />
         )}
 
         {/* Body — boring "generating" screen WHILE running, otherwise
@@ -346,13 +265,6 @@ export function ReportDocumentModal({
               }
               startedAt={job?.startedAt ?? null}
             />
-          ) : diffMode && firstDraftShape && versions.data?.v2 ? (
-            <div className="flex-1 overflow-y-auto bg-muted/10 p-6">
-              <DiffView
-                first={firstDraftShape}
-                final={versions.data.v2.contentJson as unknown as DocumentReportShape}
-              />
-            </div>
           ) : (
             <div className="flex flex-1 overflow-y-auto bg-muted/10">
               <div className="flex w-full max-w-[1280px] mx-auto gap-0 p-6">
@@ -374,15 +286,12 @@ export function ReportDocumentModal({
                       coachName={coachName}
                       periodStart={periodStart}
                       periodEnd={periodEnd}
-                      highlightSections={
-                        version === 'v2-final' ? highlightedSections : undefined
-                      }
+                      highlightSections={highlightedSections}
                       emphasizedSection={emphasized}
-                      watermark={version === 'v1' ? 'first draft' : undefined}
                     />
                   )}
                 </div>
-                {version === 'v2-final' && activeShape && (
+                {activeShape && (
                   <CommentGutter
                     comments={comments}
                     documentContainer={documentRef.current}
@@ -403,11 +312,9 @@ export function ReportDocumentModal({
               ? 'Generation runs in the background — you can close this and the corner pill will keep tracking it.'
               : justCompleted
                 ? `Generated ${formatTimestamp(job?.completedAt)}.`
-                : version === 'v1' && versions.data?.v1
-                  ? `First draft generated ${formatTimestamp(versions.data.v1.generatedAt)}.`
-                  : version === 'v2-final' && versions.data?.v2
-                    ? `Polished version generated ${formatTimestamp(versions.data.v2.generatedAt)}.`
-                    : 'No report generated yet.'}
+                : versions.data?.v2
+                  ? `Generated ${formatTimestamp(versions.data.v2.generatedAt)}.`
+                  : 'No report generated yet.'}
           </p>
           <Button
             type="button"
@@ -432,6 +339,56 @@ export function ReportDocumentModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Compact failure strip with an expandable detail. Stage A/B/C errors
+ * include long Zod / JSON-parse output that's unreadable inline, so we
+ * show a one-line summary by default and let the operator expand for
+ * the raw payload.
+ */
+function FailureBanner({ error }: { error: string | null }) {
+  const [open, setOpen] = useState(false);
+  const summary = summariseError(error);
+  return (
+    <div className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-5 py-2 text-[12px] text-destructive">
+      <div className="flex items-center gap-2">
+        <span>
+          <span className="font-medium">Last v2 generation failed.</span> {summary}{' '}
+          Click <span className="font-medium">Re-generate v2</span> to try again.
+        </span>
+        {error && (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="ml-auto shrink-0 underline-offset-2 hover:underline"
+          >
+            {open ? 'hide details' : 'show details'}
+          </button>
+        )}
+      </div>
+      {open && error && (
+        <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded border border-destructive/30 bg-background/60 px-2 py-1.5 font-mono text-[10.5px] text-foreground/90">
+          {error}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Reduce a long error blob to a single readable sentence. Pipeline
+ * errors are prefixed with the stage name (e.g. "Stage A: tool output
+ * failed CycleFactsSchema validation"); we keep the prefix and trim
+ * the trailing payload.
+ */
+function summariseError(error: string | null): string {
+  if (!error) return 'Unknown error.';
+  const stageMatch = error.match(/^(Stage [A-E][^:]*: [^—\n]+)/);
+  if (stageMatch) return stageMatch[1].trim() + '.';
+  // Strip newlines + truncate as a fallback.
+  const flat = error.replace(/\s+/g, ' ').trim();
+  return flat.length > 160 ? flat.slice(0, 160).trimEnd() + '…' : flat;
 }
 
 function EmptyState({

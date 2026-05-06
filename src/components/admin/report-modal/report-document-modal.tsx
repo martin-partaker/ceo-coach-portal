@@ -13,12 +13,10 @@ import {
   Download,
   GitCompare,
   Loader2,
-  Mail,
   RefreshCw,
   Sparkles,
   X,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { type PipelineStatus } from './pipeline-progress-bar';
 import {
   DocumentRenderer,
@@ -267,6 +265,44 @@ export function ReportDocumentModal({
               {diffMode ? 'Hide diff' : 'Show what improved'}
             </Button>
           )}
+          {/* Tab-aware (re)generate button — sits next to the version
+              toggle so the action is bound to whichever version the
+              coach is currently viewing. Hidden in diff mode. */}
+          {!diffMode && version === 'v1' && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() => v1Regen.mutate({ cycleId })}
+              disabled={v1Regen.isPending}
+              title="Run the legacy single-shot generator (kept for comparison)."
+            >
+              {v1Regen.isPending ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3 w-3" />
+              )}
+              {has.v1 ? 'Re-generate first draft' : 'Generate first draft'}
+            </Button>
+          )}
+          {!diffMode && version === 'v2-final' && (
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 text-[11px]"
+              onClick={() => generate.mutate({ cycleId })}
+              disabled={generate.isPending || isRunning}
+              title="Run the full A→B→C→D pipeline."
+            >
+              {generate.isPending || isRunning ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1 h-3 w-3" />
+              )}
+              {has.v2Final ? 'Re-generate polished' : 'Generate polished'}
+            </Button>
+          )}
           <Button
             type="button"
             size="icon"
@@ -344,47 +380,22 @@ export function ReportDocumentModal({
           )}
         </div>
 
-        {/* Footer */}
+        {/* Footer — minimal: timestamp + PDF download. (Re-generate
+            buttons live next to the version toggle in the header so
+            they're bound to whichever version is on screen.) */}
         <footer className="flex shrink-0 items-center gap-2 border-t border-border bg-muted/20 px-5 py-3">
           <p className="flex-1 truncate text-[11px] text-muted-foreground">
             {isRunning
               ? 'Generation runs in the background — you can close this and the corner pill will keep tracking it.'
               : justCompleted
                 ? `Generated ${formatTimestamp(job?.completedAt)}.`
-                : versions.data?.v2
-                  ? `Last generated ${formatTimestamp(versions.data.v2.generatedAt)}.`
-                  : 'No v2 report generated yet.'}
+                : version === 'v1' && versions.data?.v1
+                  ? `First draft generated ${formatTimestamp(versions.data.v1.generatedAt)}.`
+                  : version === 'v2-final' && versions.data?.v2
+                    ? `Polished version generated ${formatTimestamp(versions.data.v2.generatedAt)}.`
+                    : 'No report generated yet.'}
           </p>
           <DownloadPdfButton cycleId={cycleId} disabled={!versions.data?.v2} />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => v1Regen.mutate({ cycleId })}
-            disabled={v1Regen.isPending}
-            title="Run the legacy single-shot generator (kept for comparison)."
-          >
-            {v1Regen.isPending ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <Mail className="mr-1 h-3 w-3" />
-            )}
-            v1 single-shot
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => generate.mutate({ cycleId })}
-            disabled={generate.isPending || isRunning}
-            title="Run the full A→B→C→D pipeline."
-          >
-            {generate.isPending || isRunning ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <Sparkles className="mr-1 h-3 w-3" />
-            )}
-            {versions.data?.v2 ? 'Re-generate v2' : 'Generate v2'}
-          </Button>
         </footer>
       </DialogContent>
     </Dialog>

@@ -16,6 +16,7 @@ import {
   Sparkles,
   Wand2,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -221,13 +222,11 @@ export function ReportDocumentModal({
               {periodEnd ? ` · ends ${new Date(periodEnd).toLocaleDateString()}` : ''}
             </p>
           </div>
-          {/* Re-generate dropdown. Default click reuses cached facts +
-              patterns (fast retry — ~50–80s saved when Stage C/D/E
-              failed). The "Re-extract from scratch" entry forces a fresh
-              Stage A + B run, for cases where the operator has actually
-              changed the cycle inputs and the model needs to re-read
-              them. New cycles (no cache yet) take the same code path
-              either way. */}
+          {/* (Re-)generate dropdown. Coach picks Quick (skip critique +
+              revisions, ~1–2 min) or Full (with rubric self-check + up
+              to 2 polish passes, ~3–5 min). When a v2 already exists,
+              a "Re-extract from scratch" entry forces a fresh Stage A
+              + B run for cases where the inputs actually changed. */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -235,7 +234,7 @@ export function ReportDocumentModal({
                 size="sm"
                 className="h-7 text-[11px]"
                 disabled={generate.isPending || isRunning}
-                title="Run the full extract → match → draft → critique → polish pipeline."
+                title="Choose Quick (~2 min) or Full polish (~5 min)."
               >
                 {generate.isPending || isRunning ? (
                   <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -245,20 +244,32 @@ export function ReportDocumentModal({
                 {hasV2 ? 'Re-generate' : 'Generate'}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-[260px]">
+            <DropdownMenuContent align="end" className="w-[280px]">
               <DropdownMenuItem
-                onClick={() => generate.mutate({ cycleId, forceRefreshFacts: false })}
+                onClick={() =>
+                  generate.mutate({ cycleId, forceRefreshFacts: false, mode: 'quick' })
+                }
+                disabled={generate.isPending || isRunning}
+              >
+                <Zap className="mr-2 h-3.5 w-3.5" />
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium">Quick (~2 min)</span>
+                  <span className="text-[10.5px] text-muted-foreground">
+                    First draft only, no rubric self-check.
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  generate.mutate({ cycleId, forceRefreshFacts: false, mode: 'full' })
+                }
                 disabled={generate.isPending || isRunning}
               >
                 <Sparkles className="mr-2 h-3.5 w-3.5" />
                 <div className="flex flex-col">
-                  <span className="text-xs font-medium">
-                    {hasV2 ? 'Re-generate (fast)' : 'Generate'}
-                  </span>
+                  <span className="text-xs font-medium">Full polish (~5 min)</span>
                   <span className="text-[10.5px] text-muted-foreground">
-                    {hasV2
-                      ? 'Reuse extracted facts; redo draft + critique.'
-                      : 'Full pipeline.'}
+                    Rubric self-check + up to 2 revision passes.
                   </span>
                 </div>
               </DropdownMenuItem>
@@ -266,7 +277,9 @@ export function ReportDocumentModal({
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    onClick={() => generate.mutate({ cycleId, forceRefreshFacts: true })}
+                    onClick={() =>
+                      generate.mutate({ cycleId, forceRefreshFacts: true, mode: 'full' })
+                    }
                     disabled={generate.isPending || isRunning}
                   >
                     <RotateCcw className="mr-2 h-3.5 w-3.5" />

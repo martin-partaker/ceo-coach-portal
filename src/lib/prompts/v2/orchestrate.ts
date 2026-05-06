@@ -49,6 +49,8 @@ import { sanitiseSuggestedResources } from './resources';
 
 const MAX_REVISIONS = 2;
 
+export type GenerationMode = 'quick' | 'full';
+
 export type OrchestrateArgs = {
   jobId: string;
   cycle: Cycle;
@@ -62,6 +64,11 @@ export type OrchestrateArgs = {
    *  the operator has actually changed the cycle inputs and needs a
    *  fresh extraction. */
   forceRefreshFacts?: boolean;
+  /** 'quick' skips Stage D (critique) and Stage E (revisions): the
+   *  first draft is persisted as the final report. ~80–200s faster on
+   *  the upper bound vs 'full', at the cost of no rubric self-check.
+   *  Default: 'full'. */
+  mode?: GenerationMode;
 };
 
 export type OrchestrateResult = {
@@ -71,7 +78,8 @@ export type OrchestrateResult = {
   rawText: string;
   modelUsed: string;
   factsId: string;
-  critiqueId: string;
+  /** Null in quick mode (no critique row was inserted). */
+  critiqueId: string | null;
   passed: boolean;
   topFix: string | null;
   weakSections: string[];
@@ -210,49 +218,56 @@ export async function runGenerationJob(args: OrchestrateArgs): Promise<Orchestra
       firstDraftJson: currentDraft as unknown,
     });
 
-    // Stage D — critique loop
-    await updateJob(jobId, {
-      status: 'critiquing',
-      stageDetail: { stage: 'critiquing', revision: 0 },
-    });
-    let critique = (
-      await critiqueReport({ facts, patterns, draft: currentDraft })
-    ).critique;
+    // Stage D + E — critique + revision loop. SKIPPED in quick mode:
+    // the first draft becomes the final report and we jump straight
+    // to finalising. Trades self-correction for ~80–200s of wall time.
+    const mode: GenerationMode = args.mode ?? 'full';
+    let critique: Awaited<ReturnType<typeof critiqueReport>>['critique'] | null = null;
     let revisionsApplied = 0;
 
-    while (!critique.pass && revisionsApplied < MAX_REVISIONS) {
-      const weak = critique.weakSections as RefinableSection[];
-      if (weak.length === 0) break;
-
-      await updateJob(jobId, {
-        status: 'revising',
-        stageDetail: {
-          stage: 'revising',
-          revision: revisionsApplied + 1,
-          weakSections: weak,
-          topFix: critique.topFix,
-        },
-        revisionsApplied: revisionsApplied + 1,
-      });
-
-      const revised = await draftReport({
-        ctx,
-        facts,
-        patterns,
-        weakSections: weak,
-        priorDraft: currentDraft,
-        topFix: critique.topFix,
-      });
-      currentDraft = revised.drafted;
-      revisionsApplied += 1;
-
+    if (mode === 'full') {
       await updateJob(jobId, {
         status: 'critiquing',
-        stageDetail: { stage: 'critiquing', revision: revisionsApplied },
+        stageDetail: { stage: 'critiquing', revision: 0 },
       });
       critique = (
         await critiqueReport({ facts, patterns, draft: currentDraft })
       ).critique;
+
+      while (!critique.pass && revisionsApplied < MAX_REVISIONS) {
+        const weak = critique.weakSections as RefinableSection[];
+        if (weak.length === 0) break;
+
+        await updateJob(jobId, {
+          status: 'revising',
+          stageDetail: {
+            stage: 'revising',
+            revision: revisionsApplied + 1,
+            weakSections: weak,
+            topFix: critique.topFix,
+          },
+          revisionsApplied: revisionsApplied + 1,
+        });
+
+        const revised = await draftReport({
+          ctx,
+          facts,
+          patterns,
+          weakSections: weak,
+          priorDraft: currentDraft,
+          topFix: critique.topFix,
+        });
+        currentDraft = revised.drafted;
+        revisionsApplied += 1;
+
+        await updateJob(jobId, {
+          status: 'critiquing',
+          stageDetail: { stage: 'critiquing', revision: revisionsApplied },
+        });
+        critique = (
+          await critiqueReport({ facts, patterns, draft: currentDraft })
+        ).critique;
+      }
     }
 
     await updateJob(jobId, {
@@ -280,26 +295,34 @@ export async function runGenerationJob(args: OrchestrateArgs): Promise<Orchestra
       })
       .returning();
 
-    const [critiqueRow] = await db
-      .insert(reportCritiques)
-      .values({
-        reportId: reportRow.id,
-        pass: critique.pass,
-        rubricJson: critique as unknown as Record<string, unknown>,
-        weakSections: critique.weakSections as unknown as Record<string, unknown>,
-        modelUsed: 'critic',
-      })
-      .returning();
+    // Quick mode skips the critique entirely → no row to insert. The
+    // modal's getCritique query just resolves to null and the rubric
+    // gutter is hidden.
+    let critiqueRowId: string | null = null;
+    if (critique) {
+      const [critiqueRow] = await db
+        .insert(reportCritiques)
+        .values({
+          reportId: reportRow.id,
+          pass: critique.pass,
+          rubricJson: critique as unknown as Record<string, unknown>,
+          weakSections: critique.weakSections as unknown as Record<string, unknown>,
+          modelUsed: 'critic',
+        })
+        .returning();
+      critiqueRowId = critiqueRow.id;
+    }
 
     await updateJob(jobId, {
       status: 'complete',
       stageDetail: {
         stage: 'complete',
-        passed: critique.pass,
+        mode,
+        passed: critique?.pass ?? null,
         revisions: revisionsApplied,
       },
       finalReportId: reportRow.id,
-      critiqueId: critiqueRow.id,
+      critiqueId: critiqueRowId,
       revisionsApplied,
       completedAt: new Date(),
     });
@@ -311,10 +334,10 @@ export async function runGenerationJob(args: OrchestrateArgs): Promise<Orchestra
       rawText,
       modelUsed: firstDraft.modelUsed,
       factsId: factsRow.id,
-      critiqueId: critiqueRow.id,
-      passed: critique.pass,
-      topFix: critique.topFix,
-      weakSections: critique.weakSections,
+      critiqueId: critiqueRowId,
+      passed: critique?.pass ?? true, // quick mode: no rubric → treat as pass
+      topFix: critique?.topFix ?? null,
+      weakSections: (critique?.weakSections ?? []) as string[],
       revisionsApplied,
       missing: firstDraft.missing,
     };

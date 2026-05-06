@@ -699,6 +699,11 @@ export const reportsRouter = createTRPCRouter({
         // when the operator has actually changed the cycle inputs and
         // wants the model to re-read them from scratch.
         forceRefreshFacts: z.boolean().default(false),
+        // 'quick' skips Stage D (critique) + Stage E (revisions): the
+        // first draft is persisted as the final report. ~80–200s faster
+        // upper bound. 'full' runs the rubric self-check + up to 2
+        // revision passes for the highest-quality output.
+        mode: z.enum(['quick', 'full']).default('full'),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -728,6 +733,7 @@ export const reportsRouter = createTRPCRouter({
             ceo,
             coachName,
             forceRefreshFacts: input.forceRefreshFacts,
+            mode: input.mode,
           });
         } catch (e) {
           // The job row already records the error in its `error` field

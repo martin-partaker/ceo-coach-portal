@@ -27,6 +27,7 @@ import {
   ChevronRight,
   Target,
   CalendarRange,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -971,6 +972,9 @@ function ReadinessCard({
   const utils = trpc.useUtils();
   const [confirmGapsOpen, setConfirmGapsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  // Captured when the coach clicks Quick / Full while inputs have gaps,
+  // so the ConfirmGapsDialog's confirm button knows which mode to fire.
+  const [pendingMode, setPendingMode] = useState<'quick' | 'full'>('quick');
 
   // Auto-open the report reviewer when the parent row's "Review →" button
   // is clicked. The row bumps `reviewKey` each time so consecutive clicks
@@ -1109,6 +1113,11 @@ function ReadinessCard({
         )}
         {(cycle.phase === 'ready' || cycle.phase === 'gathering') && (
           <>
+            {/* Two-mode generate. Quick = first draft only (~1–2 min);
+                Full = first draft + rubric self-check + up to 2 polish
+                passes (~3–5 min). The coach picks based on how much
+                time they have / how much editing they're willing to do
+                themselves. */}
             <Button
               size="sm"
               className="h-7 text-xs"
@@ -1123,22 +1132,40 @@ function ReadinessCard({
                     }
               }
               onClick={() => {
-                if (isReady) generate.mutate({ cycleId: cycle.id });
-                else setConfirmGapsOpen(true);
+                if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'quick' });
+                else {
+                  setPendingMode('quick');
+                  setConfirmGapsOpen(true);
+                }
               }}
             >
               {generate.isPending ? (
                 <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-              ) : isReady ? (
-                <Mail className="mr-1.5 h-3 w-3" />
               ) : (
-                <AlertTriangle className="mr-1.5 h-3 w-3" />
+                <Zap className="mr-1.5 h-3 w-3" />
               )}
               {generate.isPending
                 ? 'Generating…'
                 : isReady
-                  ? 'Generate monthly report'
-                  : 'Generate with gaps'}
+                  ? 'Quick generate (~2 min)'
+                  : 'Quick generate with gaps'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={generate.isPending}
+              onClick={() => {
+                if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'full' });
+                else {
+                  setPendingMode('full');
+                  setConfirmGapsOpen(true);
+                }
+              }}
+              title="Runs the rubric self-check + up to 2 polish passes for the highest-quality output."
+            >
+              <Sparkles className="mr-1.5 h-3 w-3" />
+              Full polish (~5 min)
             </Button>
             {generate.error && (
               <p className="mt-1 text-[11px] text-destructive">
@@ -1152,7 +1179,9 @@ function ReadinessCard({
               cycleLabel={cycle.label}
               missing={missingLabels}
               isPending={generate.isPending}
-              onConfirm={() => generate.mutate({ cycleId: cycle.id })}
+              onConfirm={() =>
+                generate.mutate({ cycleId: cycle.id, mode: pendingMode })
+              }
             />
           </>
         )}

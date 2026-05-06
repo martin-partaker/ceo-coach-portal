@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { eq, and, asc, desc, inArray } from 'drizzle-orm';
+import { after } from 'next/server';
+import { eq, and, asc, desc, inArray, ne } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
@@ -14,11 +15,13 @@ import {
   reportCritiques,
   reportPins,
   reportRefinements,
+  reportGenerationJobs,
 } from '@/db/schema';
 import { buildPrompt } from '@/lib/prompts/builder';
 import { MODELS } from '@/lib/anthropic/models';
 import {
-  orchestrateGenerateV2,
+  createGenerationJob,
+  runGenerationJob,
   loadCycleFactsRow,
   composeEmailRawText,
 } from '@/lib/prompts/v2/orchestrate';
@@ -680,9 +683,14 @@ export const reportsRouter = createTRPCRouter({
   // v2 pipeline (Stages A → B → C → D → E)
   // ════════════════════════════════════════════════════════════════════
 
-  /** Run the full v2 pipeline: extract facts → match patterns →
-   *  draft → critique (+ up to 2 revision passes). Persists CycleFacts,
-   *  the report, and the final critique. */
+  /** Kick off the v2 pipeline asynchronously. Creates a job row,
+   *  schedules `runGenerationJob` to run AFTER the response is sent
+   *  (Next.js `after()`), and returns the jobId immediately. The
+   *  client polls `getActiveJob` for stage progress.
+   *
+   *  Pipeline: extractFacts → matchPatterns → draft → critique (+ up
+   *  to 2 revision passes). Persists CycleFacts, the report, the
+   *  critique, and updates the job row at every stage transition. */
   generateV2: protectedProcedure
     .input(z.object({ cycleId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -694,13 +702,150 @@ export const reportsRouter = createTRPCRouter({
             .where(eq(coaches.id, ceo.coachId))
             .limit(1)
         : [];
-      const result = await orchestrateGenerateV2({
-        cycle,
-        ceo,
-        coachName: assignedCoach?.name ?? ctx.coach.name,
+
+      const jobId = await createGenerationJob(input.cycleId);
+      const coachName = assignedCoach?.name ?? ctx.coach.name;
+
+      // Schedule the heavy work to run AFTER the HTTP response is
+      // sent. `after()` keeps the function instance alive until the
+      // callback completes (up to the platform timeout), so the
+      // pipeline runs to completion even though the mutation returns
+      // immediately. On Vercel this means the client gets a jobId in
+      // milliseconds and polls getActiveJob for progress.
+      after(async () => {
+        try {
+          await runGenerationJob({ jobId, cycle, ceo, coachName });
+        } catch (e) {
+          // The job row already records the error in its `error` field
+          // via runGenerationJob's catch — log and move on.
+          console.error('[generateV2 job failed]', jobId, e);
+        }
       });
-      return result;
+
+      return { jobId, cycleId: input.cycleId };
     }),
+
+  /** Returns the latest v1 (promptVersion < 3) and latest v2
+   *  (promptVersion = 3) reports for a cycle plus the latest job row.
+   *  Drives the modal's version toggle and the firstDraft → polished
+   *  diff view. */
+  getReportVersions: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      await loadCycleAndCeo(ctx, input.cycleId);
+
+      const allReports = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.cycleId, input.cycleId))
+        .orderBy(desc(reports.generatedAt));
+
+      const v1 = allReports.find((r) => r.promptVersion < 3) ?? null;
+      const v2 = allReports.find((r) => r.promptVersion >= 3) ?? null;
+
+      const [latestJob] = await ctx.db
+        .select()
+        .from(reportGenerationJobs)
+        .where(eq(reportGenerationJobs.cycleId, input.cycleId))
+        .orderBy(desc(reportGenerationJobs.startedAt))
+        .limit(1);
+
+      return {
+        v1,
+        v2,
+        latestJob: latestJob ?? null,
+      };
+    }),
+
+  /** Latest generation job for a cycle, in any state. The UI uses
+   *  this for progress polling (1.5s interval while non-terminal) and
+   *  to render the live pipeline progress bar. */
+  getActiveJob: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      await loadCycleAndCeo(ctx, input.cycleId);
+      const [latest] = await ctx.db
+        .select()
+        .from(reportGenerationJobs)
+        .where(eq(reportGenerationJobs.cycleId, input.cycleId))
+        .orderBy(desc(reportGenerationJobs.startedAt))
+        .limit(1);
+      return latest ?? null;
+    }),
+
+  /** Job row for a specific report — used to surface the firstDraftJson
+   *  for the first→revised diff view. */
+  getJobForReport: protectedProcedure
+    .input(z.object({ reportId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      const [job] = await ctx.db
+        .select()
+        .from(reportGenerationJobs)
+        .where(eq(reportGenerationJobs.finalReportId, input.reportId))
+        .orderBy(desc(reportGenerationJobs.startedAt))
+        .limit(1);
+      return job ?? null;
+    }),
+
+  /** All currently-running jobs for the requesting coach's CEOs.
+   *  Drives the global "background pill" toast — if the coach
+   *  navigates away mid-generation, the pill stays visible until
+   *  every active job hits a terminal status. */
+  listActiveJobs: protectedProcedure.query(async ({ ctx }) => {
+    const myCeos = ctx.realCoach?.isSuperAdmin
+      ? await ctx.db.select({ id: ceos.id, name: ceos.name }).from(ceos)
+      : await ctx.db
+          .select({ id: ceos.id, name: ceos.name })
+          .from(ceos)
+          .where(eq(ceos.coachId, ctx.coach.id));
+    if (myCeos.length === 0) return [];
+
+    const myCycles = await ctx.db
+      .select({ id: cycles.id, label: cycles.label, ceoId: cycles.ceoId })
+      .from(cycles)
+      .where(
+        inArray(
+          cycles.ceoId,
+          myCeos.map((c) => c.id),
+        ),
+      );
+    if (myCycles.length === 0) return [];
+
+    const ceoById = new Map(myCeos.map((c) => [c.id, c.name]));
+    const cycleById = new Map(myCycles.map((c) => [c.id, c]));
+
+    const active = await ctx.db
+      .select()
+      .from(reportGenerationJobs)
+      .where(
+        and(
+          inArray(
+            reportGenerationJobs.cycleId,
+            myCycles.map((c) => c.id),
+          ),
+          ne(reportGenerationJobs.status, 'complete'),
+          ne(reportGenerationJobs.status, 'error'),
+        ),
+      )
+      .orderBy(desc(reportGenerationJobs.startedAt));
+
+    return active.map((j) => {
+      const c = cycleById.get(j.cycleId);
+      return {
+        ...j,
+        cycleLabel: c?.label ?? '(cycle)',
+        ceoName: c ? (ceoById.get(c.ceoId) ?? '(CEO)') : '(CEO)',
+      };
+    });
+  }),
 
   /** Read the latest critique for a report. The UI renders pass/fail per
    *  rubric item + the topFix sentence. */

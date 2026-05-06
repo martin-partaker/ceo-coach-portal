@@ -1,0 +1,343 @@
+'use client';
+
+import { forwardRef } from 'react';
+import { Markdown, MarkdownInline } from '@/components/markdown';
+import { cn } from '@/lib/utils';
+
+/**
+ * Renders a v2 DraftedReport as a styled document that mimics the PDF
+ * "Monthly Progress Summary". Each section card has a `data-section`
+ * attribute so the right-gutter CommentGutter can anchor comments via
+ * a `useEffect` lookup of section bounding rects.
+ *
+ * Layout:
+ *   ┌─────────────────────────────────────┐
+ *   │  Monthly Progress Summary           │  ← title
+ *   │  Coach · Reporting period · Cycle   │  ← subhead
+ *   │                                     │
+ *   │  1. Goal Summary                    │  ← data-section="goalSummary"
+ *   │     10x: …                          │
+ *   │     90-day: …                       │
+ *   │     30-day: …                       │
+ *   │     Flag: …                         │
+ *   │                                     │
+ *   │  2. Progress Summary                │  ← data-section="progressSummary"
+ *   │     prose…                          │
+ *   │                                     │
+ *   │  3. Key Wins                        │  ← data-section="keyWins"
+ *   │     • …                             │
+ *   │  4. Challenges & Patterns           │  ← data-section="challenges"
+ *   │  5. Pattern Observations            │  ← data-section="patternObservations"
+ *   │  6. Recommended Next Steps          │  ← data-section="suggestedNextSteps"
+ *   └─────────────────────────────────────┘
+ */
+
+export type DocumentSectionId =
+  | 'goalSummary'
+  | 'progressSummary'
+  | 'keyWins'
+  | 'challenges'
+  | 'patternObservations'
+  | 'suggestedNextSteps';
+
+export type DocumentReportShape = {
+  // Email view (used by the Email variant only)
+  subject_line?: string;
+  opening?: string;
+  wins_and_progress?: string;
+  honest_feedback?: string;
+  key_insight?: string;
+  commitments?: string;
+  closing?: string;
+  going_deeper?: string;
+  // Structured report view
+  report?: {
+    progressSummary?: string;
+    keyWins?: string[];
+    challenges?: string[];
+    patternObservations?: string;
+    suggestedNextSteps?: string[];
+    suggestedResourceIds?: string[];
+    goalSummary?: {
+      tenX?: string;
+      ninetyDay?: string | null;
+      thirtyDay?: string | null;
+      flag?: string | null;
+    } | null;
+    coachReviewFlags?: Array<{
+      title: string;
+      detail: string;
+      urgency?: 'info' | 'attention' | 'urgent';
+    }>;
+  };
+};
+
+type Props = {
+  report: DocumentReportShape;
+  ceoName: string;
+  cycleLabel: string;
+  coachName: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  /** Highlight set — the IDs in here get a subtle yellow ring so the
+   *  coach can see which sections have open comments. */
+  highlightSections?: Set<DocumentSectionId>;
+  /** Hover handler — when a comment in the gutter is hovered, the
+   *  caller passes the sectionId so the document can scroll to and
+   *  emphasize that section. */
+  emphasizedSection?: DocumentSectionId | null;
+  /** Click handler — used to focus a section's chat. */
+  onSectionClick?: (id: DocumentSectionId) => void;
+  /** When true, render a "draft" watermark — used to distinguish first
+   *  draft vs revised in the version toggle. */
+  watermark?: string;
+};
+
+export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function DocumentRenderer(
+  {
+    report,
+    ceoName,
+    cycleLabel,
+    coachName,
+    periodStart,
+    periodEnd,
+    highlightSections,
+    emphasizedSection,
+    onSectionClick,
+    watermark,
+  },
+  ref,
+) {
+  const r = report.report ?? {};
+  const period = formatPeriod(periodStart, periodEnd);
+
+  return (
+    <div
+      ref={ref}
+      className="relative mx-auto w-full max-w-3xl bg-background px-10 py-12 text-foreground shadow-sm ring-1 ring-border"
+      style={{ minHeight: '60vh' }}
+    >
+      {watermark && (
+        <div className="pointer-events-none absolute right-6 top-6 select-none rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+          {watermark}
+        </div>
+      )}
+
+      {/* Title block */}
+      <header className="mb-8 border-b border-border pb-5">
+        <h1 className="text-2xl font-semibold leading-tight tracking-tight">
+          Monthly Progress Summary
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {ceoName} · {cycleLabel}
+          {period && (
+            <>
+              {' · '}
+              <span>Reporting Period: {period}</span>
+            </>
+          )}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground/80">
+          Prepared by {coachName}
+        </p>
+      </header>
+
+      <div className="space-y-7">
+        {/* 1. Goal Summary */}
+        {r.goalSummary && (r.goalSummary.tenX || r.goalSummary.ninetyDay || r.goalSummary.thirtyDay) && (
+          <DocSection
+            id="goalSummary"
+            number={1}
+            title="Goal Summary"
+            highlighted={highlightSections?.has('goalSummary')}
+            emphasized={emphasizedSection === 'goalSummary'}
+            onClick={() => onSectionClick?.('goalSummary')}
+          >
+            <dl className="space-y-2 text-[14px] leading-relaxed">
+              {r.goalSummary.tenX && (
+                <div>
+                  <dt className="inline font-semibold">10x Goal: </dt>
+                  <dd className="inline">
+                    <MarkdownInline text={r.goalSummary.tenX} />
+                  </dd>
+                </div>
+              )}
+              {r.goalSummary.ninetyDay && (
+                <div>
+                  <dt className="inline font-semibold">90-Day Goal: </dt>
+                  <dd className="inline">
+                    <MarkdownInline text={r.goalSummary.ninetyDay} />
+                  </dd>
+                </div>
+              )}
+              {r.goalSummary.thirtyDay && (
+                <div>
+                  <dt className="inline font-semibold">30-Day Goal: </dt>
+                  <dd className="inline">
+                    <MarkdownInline text={r.goalSummary.thirtyDay} />
+                  </dd>
+                </div>
+              )}
+            </dl>
+            {r.goalSummary.flag && (
+              <div className="mt-3 rounded border-l-4 border-amber-500 bg-amber-500/5 px-3 py-2 text-[13px] text-amber-700 dark:text-amber-400">
+                <span className="font-semibold">⚑ Flag for Coach Review:</span>{' '}
+                <MarkdownInline text={r.goalSummary.flag} />
+              </div>
+            )}
+          </DocSection>
+        )}
+
+        {/* 2. Progress Summary */}
+        {r.progressSummary && (
+          <DocSection
+            id="progressSummary"
+            number={r.goalSummary ? 2 : 1}
+            title="Progress Summary"
+            highlighted={highlightSections?.has('progressSummary')}
+            emphasized={emphasizedSection === 'progressSummary'}
+            onClick={() => onSectionClick?.('progressSummary')}
+          >
+            <Markdown text={r.progressSummary} size="sm" />
+          </DocSection>
+        )}
+
+        {/* 3. Key Wins */}
+        {r.keyWins && r.keyWins.length > 0 && (
+          <DocSection
+            id="keyWins"
+            number={(r.goalSummary ? 1 : 0) + (r.progressSummary ? 1 : 0) + 1}
+            title="Key Wins"
+            highlighted={highlightSections?.has('keyWins')}
+            emphasized={emphasizedSection === 'keyWins'}
+            onClick={() => onSectionClick?.('keyWins')}
+          >
+            <ul className="ml-5 list-disc space-y-1.5 text-[14px] leading-relaxed marker:text-emerald-500">
+              {r.keyWins.map((w, i) => (
+                <li key={i}>
+                  <MarkdownInline text={w} />
+                </li>
+              ))}
+            </ul>
+          </DocSection>
+        )}
+
+        {/* 4. Challenges */}
+        {r.challenges && r.challenges.length > 0 && (
+          <DocSection
+            id="challenges"
+            number={
+              (r.goalSummary ? 1 : 0) +
+              (r.progressSummary ? 1 : 0) +
+              (r.keyWins?.length ? 1 : 0) +
+              1
+            }
+            title="Challenges & Patterns"
+            highlighted={highlightSections?.has('challenges')}
+            emphasized={emphasizedSection === 'challenges'}
+            onClick={() => onSectionClick?.('challenges')}
+          >
+            <ul className="ml-5 list-disc space-y-1.5 text-[14px] leading-relaxed marker:text-amber-500">
+              {r.challenges.map((c, i) => (
+                <li key={i}>
+                  <MarkdownInline text={c} />
+                </li>
+              ))}
+            </ul>
+          </DocSection>
+        )}
+
+        {/* 5. Pattern Observations */}
+        {r.patternObservations && (
+          <DocSection
+            id="patternObservations"
+            number={
+              (r.goalSummary ? 1 : 0) +
+              (r.progressSummary ? 1 : 0) +
+              (r.keyWins?.length ? 1 : 0) +
+              (r.challenges?.length ? 1 : 0) +
+              1
+            }
+            title="Pattern Observations"
+            highlighted={highlightSections?.has('patternObservations')}
+            emphasized={emphasizedSection === 'patternObservations'}
+            onClick={() => onSectionClick?.('patternObservations')}
+          >
+            <Markdown text={r.patternObservations} size="sm" />
+          </DocSection>
+        )}
+
+        {/* 6. Recommended Next Steps */}
+        {r.suggestedNextSteps && r.suggestedNextSteps.length > 0 && (
+          <DocSection
+            id="suggestedNextSteps"
+            number={
+              (r.goalSummary ? 1 : 0) +
+              (r.progressSummary ? 1 : 0) +
+              (r.keyWins?.length ? 1 : 0) +
+              (r.challenges?.length ? 1 : 0) +
+              (r.patternObservations ? 1 : 0) +
+              1
+            }
+            title="Recommended Next Steps"
+            highlighted={highlightSections?.has('suggestedNextSteps')}
+            emphasized={emphasizedSection === 'suggestedNextSteps'}
+            onClick={() => onSectionClick?.('suggestedNextSteps')}
+          >
+            <ol className="ml-5 list-decimal space-y-1.5 text-[14px] leading-relaxed marker:font-semibold marker:text-blue-500">
+              {r.suggestedNextSteps.map((s, i) => (
+                <li key={i}>
+                  <MarkdownInline text={s} />
+                </li>
+              ))}
+            </ol>
+          </DocSection>
+        )}
+      </div>
+    </div>
+  );
+});
+
+function DocSection({
+  id,
+  number,
+  title,
+  children,
+  highlighted,
+  emphasized,
+  onClick,
+}: {
+  id: DocumentSectionId;
+  number: number;
+  title: string;
+  children: React.ReactNode;
+  highlighted?: boolean;
+  emphasized?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <section
+      data-section={id}
+      onClick={onClick}
+      className={cn(
+        'scroll-mt-20 rounded-md px-3 py-2 transition-colors',
+        '-mx-3 cursor-pointer',
+        highlighted && 'ring-1 ring-amber-500/30',
+        emphasized && 'bg-amber-500/5 ring-2 ring-amber-500/40',
+        onClick && 'hover:bg-muted/30',
+      )}
+    >
+      <h2 className="mb-2 text-base font-semibold">
+        <span className="text-muted-foreground">{number}.</span> {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function formatPeriod(start?: string | null, end?: string | null): string {
+  if (!start && !end) return '';
+  const s = start ? new Date(start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+  const e = end ? new Date(end).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  return s && e ? `${s} – ${e}` : s || e;
+}

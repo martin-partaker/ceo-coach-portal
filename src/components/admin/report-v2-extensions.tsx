@@ -43,18 +43,17 @@ export function V2GenerateButton({
   onComplete,
 }: {
   cycleId: string;
-  onComplete?: (reportId: string) => void;
+  onComplete?: (jobId: string) => void;
 }) {
   const utils = trpc.useUtils();
   const generate = trpc.reports.generateV2.useMutation({
     onSuccess: async (res) => {
       await Promise.all([
+        utils.reports.getActiveJob.invalidate({ cycleId }),
         utils.reports.getForCycle.invalidate({ cycleId }),
-        utils.reports.getCritique.invalidate({ reportId: res.reportId }),
         utils.reports.getFacts.invalidate({ cycleId }),
-        utils.roster.cycleSummary.invalidate(),
       ]);
-      onComplete?.(res.reportId);
+      onComplete?.(res.jobId);
     },
   });
 

@@ -3,9 +3,11 @@ import { db } from '@/db';
 import {
   cycleFacts as cycleFactsTable,
   reportCritiques,
+  reportGenerationJobs,
   reports as reportsTable,
   type Cycle,
   type Ceo,
+  type ReportGenerationJobStatus,
 } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { fetchCycleContext } from './context';
@@ -19,28 +21,36 @@ import { sanitiseSuggestedResources } from './resources';
 /**
  * v2 generation orchestrator.
  *
- * Pipeline:
- *   1. Stage A — extractFacts → CycleFacts
- *   2. Stage B — matchPatterns → Patterns
- *   3. Persist {facts, patterns} to cycle_facts (upsert by cycleId)
- *   4. Stage C — draftReport → DraftedReport
- *   5. Stage D — critiqueReport → Critique
- *   6. If !pass and revisions remaining: rewrite weakSections, recheck
- *   7. Persist final draft to reports + critique to report_critiques
+ * Async, job-tracked. The pipeline writes status updates to
+ * `report_generation_jobs` at each stage transition so the UI can
+ * render a live progress bar (and a global toast pill when the modal
+ * is closed). The first-draft JSON is persisted BEFORE any revisions
+ * so the UI can show a section-level diff between first→revised.
  *
- * Returns the persisted report row + critique + facts so the caller
- * (router/UI) can show the rubric scores and the coach review flags.
+ * Pipeline:
+ *   1. Stage A — extractFacts → CycleFacts            (status: extracting_facts)
+ *   2. Stage B — matchPatterns → Patterns              (status: matching_patterns)
+ *   3. Persist {facts, patterns} to cycle_facts
+ *   4. Stage C — draftReport → first DraftedReport     (status: drafting_first)
+ *      → persist firstDraftJson on the job row
+ *   5. Stage D — critiqueReport → Critique             (status: critiquing)
+ *   6. While !pass and revisions remaining:            (status: revising)
+ *      - rewrite weakSections, recheck
+ *   7. Persist final draft + critique                  (status: finalising)
+ *   8. Mark job complete, attach finalReportId         (status: complete)
  */
 
 const MAX_REVISIONS = 2;
 
 export type OrchestrateArgs = {
+  jobId: string;
   cycle: Cycle;
   ceo: Ceo;
   coachName: string;
 };
 
 export type OrchestrateResult = {
+  jobId: string;
   reportId: string;
   contentJson: DraftedReport;
   rawText: string;
@@ -54,119 +64,231 @@ export type OrchestrateResult = {
   missing: string[];
 };
 
-export async function orchestrateGenerateV2(
-  args: OrchestrateArgs,
-): Promise<OrchestrateResult> {
-  const ctx = await fetchCycleContext(args);
-
-  // Stage A
-  const { facts, modelUsed: factsModel } = await extractFacts(ctx);
-
-  // Stage B
-  const { patterns, modelUsed: patternsModel } = await matchPatterns({
-    ctx,
-    currentFacts: facts,
-  });
-
-  // Persist Facts + Patterns. Upsert by cycleId so re-running this for
-  // the same cycle replaces, not duplicates.
-  const factsModelLabel = `${factsModel}+${patternsModel}`;
-  const [factsRow] = await db
-    .insert(cycleFactsTable)
-    .values({
-      cycleId: args.cycle.id,
-      factsJson: facts as unknown as Record<string, unknown>,
-      patternsJson: patterns as unknown as Record<string, unknown>,
-      modelUsed: factsModelLabel,
+async function updateJob(
+  jobId: string,
+  patch: Partial<{
+    status: ReportGenerationJobStatus;
+    stageDetail: unknown;
+    firstDraftJson: unknown;
+    finalReportId: string | null;
+    critiqueId: string | null;
+    revisionsApplied: number;
+    error: string | null;
+    completedAt: Date | null;
+  }>,
+) {
+  await db
+    .update(reportGenerationJobs)
+    .set({
+      ...patch,
+      stageDetail:
+        patch.stageDetail !== undefined
+          ? (patch.stageDetail as Record<string, unknown>)
+          : undefined,
+      firstDraftJson:
+        patch.firstDraftJson !== undefined
+          ? (patch.firstDraftJson as Record<string, unknown>)
+          : undefined,
+      updatedAt: new Date(),
     })
-    .onConflictDoUpdate({
-      target: cycleFactsTable.cycleId,
-      set: {
+    .where(eq(reportGenerationJobs.id, jobId));
+}
+
+/** Create a new job row in the `pending` state and return its id. The
+ *  caller is expected to await `runGenerationJob({ jobId, ... })` in a
+ *  detached promise (or via Vercel `after()`) so the mutation can
+ *  return the jobId immediately for client polling. */
+export async function createGenerationJob(cycleId: string): Promise<string> {
+  const [row] = await db
+    .insert(reportGenerationJobs)
+    .values({ cycleId, status: 'pending' })
+    .returning({ id: reportGenerationJobs.id });
+  return row.id;
+}
+
+/** Run the full pipeline against an already-created job row. Updates
+ *  status as it goes; on error, status='error' and `error` populated. */
+export async function runGenerationJob(args: OrchestrateArgs): Promise<OrchestrateResult> {
+  const { jobId } = args;
+
+  try {
+    const ctx = await fetchCycleContext(args);
+
+    // Stage A
+    await updateJob(jobId, {
+      status: 'extracting_facts',
+      stageDetail: { stage: 'extracting_facts' },
+    });
+    const { facts, modelUsed: factsModel } = await extractFacts(ctx);
+
+    // Stage B
+    await updateJob(jobId, {
+      status: 'matching_patterns',
+      stageDetail: { stage: 'matching_patterns', isFirstCycle: ctx.isFirstCycle },
+    });
+    const { patterns, modelUsed: patternsModel } = await matchPatterns({
+      ctx,
+      currentFacts: facts,
+    });
+
+    // Persist Facts + Patterns (upsert by cycleId).
+    const factsModelLabel = `${factsModel}+${patternsModel}`;
+    const [factsRow] = await db
+      .insert(cycleFactsTable)
+      .values({
+        cycleId: args.cycle.id,
         factsJson: facts as unknown as Record<string, unknown>,
         patternsJson: patterns as unknown as Record<string, unknown>,
         modelUsed: factsModelLabel,
-        generatedAt: new Date(),
-      },
-    })
-    .returning();
+      })
+      .onConflictDoUpdate({
+        target: cycleFactsTable.cycleId,
+        set: {
+          factsJson: facts as unknown as Record<string, unknown>,
+          patternsJson: patterns as unknown as Record<string, unknown>,
+          modelUsed: factsModelLabel,
+          generatedAt: new Date(),
+        },
+      })
+      .returning();
 
-  // Stage C — first draft
-  const firstDraft = await draftReport({ ctx, facts, patterns });
-  let currentDraft: DraftedReport = firstDraft.drafted;
-
-  // Stage D — critique loop
-  let critique = (await critiqueReport({ facts, patterns, draft: currentDraft })).critique;
-  let revisionsApplied = 0;
-
-  while (!critique.pass && revisionsApplied < MAX_REVISIONS) {
-    const weak = critique.weakSections as RefinableSection[];
-    if (weak.length === 0) break; // critic said fail but listed no sections — bail
-
-    const revised = await draftReport({
-      ctx,
-      facts,
-      patterns,
-      weakSections: weak,
-      priorDraft: currentDraft,
-      topFix: critique.topFix,
+    // Stage C — first draft
+    await updateJob(jobId, {
+      status: 'drafting_first',
+      stageDetail: { stage: 'drafting_first' },
     });
-    currentDraft = revised.drafted;
-    revisionsApplied += 1;
-    critique = (await critiqueReport({ facts, patterns, draft: currentDraft })).critique;
-  }
+    const firstDraft = await draftReport({ ctx, facts, patterns });
+    let currentDraft: DraftedReport = firstDraft.drafted;
 
-  // Validate suggestedResourceIds against the curriculum table — drop
-  // unknown UUIDs the model may have invented.
-  currentDraft.report.suggestedResourceIds = await sanitiseSuggestedResources(
-    db,
-    currentDraft.report.suggestedResourceIds,
-  );
+    // Persist the FIRST draft on the job before any revisions so the UI
+    // can later diff first → revised. We snapshot before sanitising
+    // resourceIds so the diff is purely about textual revisions.
+    await updateJob(jobId, {
+      firstDraftJson: currentDraft as unknown,
+    });
 
-  // Compose rawText (email body) for storage + copy/paste.
-  const rawText = composeEmailRawText(currentDraft);
+    // Stage D — critique loop
+    await updateJob(jobId, {
+      status: 'critiquing',
+      stageDetail: { stage: 'critiquing', revision: 0 },
+    });
+    let critique = (
+      await critiqueReport({ facts, patterns, draft: currentDraft })
+    ).critique;
+    let revisionsApplied = 0;
 
-  // Persist final report.
-  const [reportRow] = await db
-    .insert(reportsTable)
-    .values({
-      cycleId: args.cycle.id,
-      contentJson: currentDraft as unknown as Record<string, unknown>,
+    while (!critique.pass && revisionsApplied < MAX_REVISIONS) {
+      const weak = critique.weakSections as RefinableSection[];
+      if (weak.length === 0) break;
+
+      await updateJob(jobId, {
+        status: 'revising',
+        stageDetail: {
+          stage: 'revising',
+          revision: revisionsApplied + 1,
+          weakSections: weak,
+          topFix: critique.topFix,
+        },
+        revisionsApplied: revisionsApplied + 1,
+      });
+
+      const revised = await draftReport({
+        ctx,
+        facts,
+        patterns,
+        weakSections: weak,
+        priorDraft: currentDraft,
+        topFix: critique.topFix,
+      });
+      currentDraft = revised.drafted;
+      revisionsApplied += 1;
+
+      await updateJob(jobId, {
+        status: 'critiquing',
+        stageDetail: { stage: 'critiquing', revision: revisionsApplied },
+      });
+      critique = (
+        await critiqueReport({ facts, patterns, draft: currentDraft })
+      ).critique;
+    }
+
+    await updateJob(jobId, {
+      status: 'finalising',
+      stageDetail: { stage: 'finalising' },
+    });
+
+    // Validate suggestedResourceIds.
+    currentDraft.report.suggestedResourceIds = await sanitiseSuggestedResources(
+      db,
+      currentDraft.report.suggestedResourceIds,
+    );
+
+    const rawText = composeEmailRawText(currentDraft);
+
+    // Persist final report.
+    const [reportRow] = await db
+      .insert(reportsTable)
+      .values({
+        cycleId: args.cycle.id,
+        contentJson: currentDraft as unknown as Record<string, unknown>,
+        rawText,
+        modelUsed: firstDraft.modelUsed,
+        promptVersion: 3, // v2 pipeline
+      })
+      .returning();
+
+    const [critiqueRow] = await db
+      .insert(reportCritiques)
+      .values({
+        reportId: reportRow.id,
+        pass: critique.pass,
+        rubricJson: critique as unknown as Record<string, unknown>,
+        weakSections: critique.weakSections as unknown as Record<string, unknown>,
+        modelUsed: 'critic',
+      })
+      .returning();
+
+    await updateJob(jobId, {
+      status: 'complete',
+      stageDetail: {
+        stage: 'complete',
+        passed: critique.pass,
+        revisions: revisionsApplied,
+      },
+      finalReportId: reportRow.id,
+      critiqueId: critiqueRow.id,
+      revisionsApplied,
+      completedAt: new Date(),
+    });
+
+    return {
+      jobId,
+      reportId: reportRow.id,
+      contentJson: currentDraft,
       rawText,
       modelUsed: firstDraft.modelUsed,
-      promptVersion: 3, // v2 pipeline
-    })
-    .returning();
-
-  // Persist critique alongside the report for evals.
-  const [critiqueRow] = await db
-    .insert(reportCritiques)
-    .values({
-      reportId: reportRow.id,
-      pass: critique.pass,
-      rubricJson: critique as unknown as Record<string, unknown>,
-      weakSections: critique.weakSections as unknown as Record<string, unknown>,
-      modelUsed: 'critic',
-    })
-    .returning();
-
-  return {
-    reportId: reportRow.id,
-    contentJson: currentDraft,
-    rawText,
-    modelUsed: firstDraft.modelUsed,
-    factsId: factsRow.id,
-    critiqueId: critiqueRow.id,
-    passed: critique.pass,
-    topFix: critique.topFix,
-    weakSections: critique.weakSections,
-    revisionsApplied,
-    missing: firstDraft.missing,
-  };
+      factsId: factsRow.id,
+      critiqueId: critiqueRow.id,
+      passed: critique.pass,
+      topFix: critique.topFix,
+      weakSections: critique.weakSections,
+      revisionsApplied,
+      missing: firstDraft.missing,
+    };
+  } catch (e) {
+    const errMsg = (e as Error).message ?? String(e);
+    await updateJob(jobId, {
+      status: 'error',
+      stageDetail: { error: errMsg },
+      error: errMsg,
+      completedAt: new Date(),
+    });
+    throw e;
+  }
 }
 
 /** Build a copy-pasteable email body from the drafted report's email
- *  view. Mirrors v1's contentJsonToRawText so the existing UI keeps
- *  working without modification. */
+ *  view. */
 export function composeEmailRawText(d: DraftedReport): string {
   const parts: string[] = [];
   if (d.opening) parts.push(d.opening);
@@ -181,9 +303,6 @@ export function composeEmailRawText(d: DraftedReport): string {
   return parts.join('\n\n');
 }
 
-/** Re-fetch a stored CycleFacts + Patterns row for downstream stages
- *  (refine-section, manual critique re-run). Returns null if not yet
- *  generated. */
 export async function loadCycleFactsRow(cycleId: string) {
   const [row] = await db
     .select()

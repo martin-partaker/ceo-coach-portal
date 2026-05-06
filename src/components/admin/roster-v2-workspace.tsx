@@ -45,7 +45,7 @@ import { ActionItemsEditableList } from './roster-v2-action-items';
 import { PromptInspector } from './prompt-inspector';
 import { ManualTranscriptDialog } from './manual-transcript-dialog';
 import { AddWeekDialog } from './add-week-dialog';
-import { ReportReviewer } from './report-reviewer';
+import { ReportDocumentModal } from './report-modal/report-document-modal';
 import { ZoomImportDialog } from '@/components/cycles/zoom-import-dialog';
 
 interface Props {
@@ -1136,10 +1136,12 @@ function ReadinessCard({
             />
           </>
         )}
-        <ReportReviewer
+        <ReportDocumentModal
           cycleId={cycle.id}
           ceoName={ceoName}
           cycleLabel={cycle.label}
+          periodStart={cycle.periodStart}
+          periodEnd={cycle.periodEnd}
           open={reviewOpen}
           onOpenChange={setReviewOpen}
         />

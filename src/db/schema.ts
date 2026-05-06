@@ -383,6 +383,57 @@ export const reportPins = pgTable(
 );
 
 /**
+ * Generation job tracking — one row per `generateV2` invocation. The
+ * orchestrator updates `status` + `stageDetail` as it transitions
+ * through A→B→C→D so the UI can render a live pipeline progress bar
+ * and a global "background pill" toast when the modal is closed.
+ *
+ * The mutation that creates this row also kicks off the pipeline; it
+ * does NOT await completion. The client polls `getActiveJob({ cycleId })`
+ * every ~1.5s while status != 'complete' / 'error'.
+ *
+ * `firstDraftJson` is the stage-C output BEFORE any rubric-driven
+ * revisions — kept so the UI can render a first→revised section diff.
+ */
+export const reportGenerationJobs = pgTable(
+  'report_generation_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    cycleId: uuid('cycle_id')
+      .notNull()
+      .references(() => cycles.id, { onDelete: 'cascade' }),
+    /** 'pending' | 'extracting_facts' | 'matching_patterns'
+     *  | 'drafting_first' | 'critiquing' | 'revising' | 'finalising'
+     *  | 'complete' | 'error' */
+    status: text('status').notNull().default('pending'),
+    /** Free-form per-stage detail — e.g. { revision: 1, weakSections: [...] }
+     *  or { error: '...' }. Drives the labels under the progress bar. */
+    stageDetail: jsonb('stage_detail'),
+    /** Stage C output BEFORE the first revision. Null until Stage C completes. */
+    firstDraftJson: jsonb('first_draft_json'),
+    /** Set once status hits 'complete' — points at the persisted reports row. */
+    finalReportId: uuid('final_report_id').references(() => reports.id, {
+      onDelete: 'set null',
+    }),
+    critiqueId: uuid('critique_id').references(() => reportCritiques.id, {
+      onDelete: 'set null',
+    }),
+    revisionsApplied: integer('revisions_applied').notNull().default(0),
+    error: text('error'),
+    startedAt: timestamp('started_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    completedAt: timestamp('completed_at'),
+  },
+  (t) => ({
+    byCycleStarted: index('report_generation_jobs_cycle_started_idx').on(
+      t.cycleId,
+      t.startedAt,
+    ),
+    byStatus: index('report_generation_jobs_status_idx').on(t.status),
+  }),
+);
+
+/**
  * Stage E: per-section refinement chat. Each row is one turn (coach
  * message OR model response). The chat is scoped to a (report, section)
  * pair so the coach can iterate independently on each section without
@@ -434,3 +485,14 @@ export type CycleFacts = typeof cycleFacts.$inferSelect;
 export type ReportCritique = typeof reportCritiques.$inferSelect;
 export type ReportPin = typeof reportPins.$inferSelect;
 export type ReportRefinement = typeof reportRefinements.$inferSelect;
+export type ReportGenerationJob = typeof reportGenerationJobs.$inferSelect;
+export type ReportGenerationJobStatus =
+  | 'pending'
+  | 'extracting_facts'
+  | 'matching_patterns'
+  | 'drafting_first'
+  | 'critiquing'
+  | 'revising'
+  | 'finalising'
+  | 'complete'
+  | 'error';

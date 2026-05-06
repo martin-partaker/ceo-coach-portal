@@ -4,6 +4,7 @@ import { Sidebar } from '@/components/nav/sidebar';
 import { Topbar } from '@/components/nav/topbar';
 import { TRPCProvider } from '@/lib/trpc/provider';
 import { ImpersonationBanner } from '@/components/admin/impersonation-banner';
+import { GenerationBackgroundPill } from '@/components/admin/report-modal/background-pill';
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { db } from '@/db';
@@ -66,6 +67,7 @@ export default async function AppLayout({
             <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
           </main>
         </div>
+        <GenerationBackgroundPill />
       </div>
     </TRPCProvider>
   );

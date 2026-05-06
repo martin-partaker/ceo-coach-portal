@@ -104,14 +104,38 @@ export function RosterV2Row({
   const ceoCycleCount = cycles.length;
   const ceoInputCount = cycles.reduce((n, c) => n + c.submissions.length, 0);
 
+  // Detect ANY active generation for this CEO (across any of their
+  // cycles, not just the currently-displayed one). Without this the
+  // row's StatusLine only fires the "Generating" pill when the user
+  // happens to be looking at the cycle being generated — leaving the
+  // CEO row otherwise indistinguishable from idle while a job runs.
+  const activeJobs = trpc.reports.listActiveJobs.useQuery(undefined, {
+    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? 2000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const ceoCycleIds = new Set(cycles.map((c) => c.id));
+  const liveJobForCeo = (activeJobs.data ?? []).find((j) =>
+    ceoCycleIds.has(j.cycleId),
+  );
+
   return (
-    <div className="border-t border-border first:border-t-0">
+    <div
+      className={cn(
+        'border-t border-border first:border-t-0',
+        // Tint the entire row while a generation is running for this
+        // CEO so the row is impossible to miss even if the user is
+        // looking at a sibling cycle.
+        liveJobForCeo &&
+          'bg-[oklch(58%_0.14_258)/8] hover:bg-[oklch(58%_0.14_258)/12]',
+      )}
+    >
       {/* Always-visible row */}
       <div
         onClick={onToggle}
         className={cn(
           'grid cursor-pointer items-center gap-4 px-4 py-3 transition-colors',
-          expanded ? 'bg-muted/30' : 'hover:bg-muted/20'
+          expanded && !liveJobForCeo && 'bg-muted/30',
+          !expanded && !liveJobForCeo && 'hover:bg-muted/20',
         )}
         style={{ gridTemplateColumns: '20px 260px 1fr 140px 36px' }}
       >
@@ -126,7 +150,23 @@ export function RosterV2Row({
         <div className="flex min-w-0 items-center gap-3">
           <CeoAvatar name={summary.ceo.name} avatarUrl={summary.ceo.avatarUrl} size="sm" />
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{summary.ceo.name}</div>
+            <div className="flex items-center gap-2 truncate text-sm font-medium">
+              <span className="truncate">{summary.ceo.name}</span>
+              {liveJobForCeo && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                  style={{
+                    background:
+                      'color-mix(in oklab, oklch(58% 0.14 258), transparent 80%)',
+                    color: 'oklch(58% 0.14 258)',
+                  }}
+                  title={`A v2 report is being generated for ${liveJobForCeo.cycleLabel}.`}
+                >
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  Generating · {liveJobForCeo.cycleLabel}
+                </span>
+              )}
+            </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">
               {summary.ceo.email ?? '(no email)'}
             </div>

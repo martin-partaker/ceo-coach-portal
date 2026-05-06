@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { after } from 'next/server';
 import { eq, and, asc, desc, inArray, ne } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { anthropic } from '@/lib/anthropic/client';
@@ -21,10 +20,11 @@ import { buildPrompt } from '@/lib/prompts/builder';
 import { MODELS } from '@/lib/anthropic/models';
 import {
   createGenerationJob,
-  runGenerationJob,
   loadCycleFactsRow,
   composeEmailRawText,
 } from '@/lib/prompts/v2/orchestrate';
+import { start, getRun } from 'workflow/api';
+import { generateReportWorkflow } from '@/workflows/generate-report';
 import { buildV2IterationBundle } from '@/lib/prompts/v2/iteration-bundle';
 import { fetchCycleContext } from '@/lib/prompts/v2/context';
 import {
@@ -727,9 +727,10 @@ export const reportsRouter = createTRPCRouter({
   // ════════════════════════════════════════════════════════════════════
 
   /** Kick off the v2 pipeline asynchronously. Creates a job row,
-   *  schedules `runGenerationJob` to run AFTER the response is sent
-   *  (Next.js `after()`), and returns the jobId immediately. The
-   *  client polls `getActiveJob` for stage progress.
+   *  starts the `generateReportWorkflow` Vercel Workflow, and returns
+   *  the jobId immediately. The client polls `getActiveJob` for stage
+   *  progress; each Stage runs in its own function invocation so the
+   *  pipeline isn't bounded by the route handler's maxDuration.
    *
    *  Pipeline: extractFacts → matchPatterns → draft → critique (+ up
    *  to 2 revision passes). Persists CycleFacts, the report, the
@@ -763,28 +764,50 @@ export const reportsRouter = createTRPCRouter({
       const jobId = await createGenerationJob(input.cycleId);
       const coachName = assignedCoach?.name ?? ctx.coach.name;
 
-      // Schedule the heavy work to run AFTER the HTTP response is
-      // sent. `after()` keeps the function instance alive until the
-      // callback completes (up to the platform timeout), so the
-      // pipeline runs to completion even though the mutation returns
-      // immediately. On Vercel this means the client gets a jobId in
-      // milliseconds and polls getActiveJob for progress.
-      after(async () => {
-        try {
-          await runGenerationJob({
+      // Hand the pipeline off to Vercel Workflow. start() returns
+      // immediately with a runId; each step inside the workflow runs in
+      // its own function invocation, so the pipeline isn't bounded by
+      // the route handler's maxDuration. The runId is persisted on the
+      // job row so cancelGeneration can call run.cancel() on the
+      // workflow runtime, not just flip the DB row.
+      try {
+        const run = await start(generateReportWorkflow, [
+          {
             jobId,
-            cycle,
-            ceo,
+            cycleId: input.cycleId,
             coachName,
             forceRefreshFacts: input.forceRefreshFacts,
             mode: input.mode,
-          });
-        } catch (e) {
-          // The job row already records the error in its `error` field
-          // via runGenerationJob's catch — log and move on.
-          console.error('[generateV2 job failed]', jobId, e);
-        }
-      });
+          },
+        ]);
+        await ctx.db
+          .update(reportGenerationJobs)
+          .set({ workflowRunId: run.runId, updatedAt: new Date() })
+          .where(eq(reportGenerationJobs.id, jobId));
+      } catch (e) {
+        // start() failed — the workflow runtime didn't accept the run.
+        // Mark the job as error so the UI exits the running state and
+        // surfaces a clear message instead of polling forever.
+        const msg = e instanceof Error ? e.message : 'unknown error';
+        console.error('[generateV2 start failed]', jobId, e);
+        await ctx.db
+          .update(reportGenerationJobs)
+          .set({
+            status: 'error',
+            error: `Workflow start failed: ${msg}`,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(reportGenerationJobs.id, jobId));
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Workflow start failed: ${msg}`,
+        });
+      }
+      // Suppress unused — `cycle` and `ceo` were loaded purely to
+      // ownership-check before kicking off the workflow.
+      void cycle;
+      void ceo;
 
       return { jobId, cycleId: input.cycleId };
     }),
@@ -873,6 +896,20 @@ export const reportsRouter = createTRPCRouter({
       await loadCycleAndCeo(ctx, job.cycleId);
       if (job.status === 'complete' || job.status === 'error') {
         return { ok: true, alreadyTerminal: true };
+      }
+      // Tell the workflow runtime to stop scheduling further steps.
+      // Best-effort: a step already in flight will run to completion,
+      // but no new ones will fire and the workflow's own catch/finally
+      // won't overwrite the cancellation message because we mark the
+      // job row terminal right after. If runId is missing (job created
+      // before this column existed), skip and just flip the row.
+      if (job.workflowRunId) {
+        try {
+          await getRun(job.workflowRunId).cancel();
+        } catch (e) {
+          // Cancel is best-effort — log and proceed to mark the row.
+          console.warn('[cancelGeneration] workflow cancel failed', e);
+        }
       }
       await ctx.db
         .update(reportGenerationJobs)

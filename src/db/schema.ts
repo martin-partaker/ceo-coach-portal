@@ -420,6 +420,11 @@ export const reportGenerationJobs = pgTable(
     }),
     revisionsApplied: integer('revisions_applied').notNull().default(0),
     error: text('error'),
+    /** Vercel Workflow run id. Set when the pipeline is launched via
+     *  `start(generateReportWorkflow, ...)`. Lets cancelGeneration call
+     *  `getRun(runId).cancel()` so the workflow runtime stops scheduling
+     *  further steps, not just flipping the DB row. */
+    workflowRunId: text('workflow_run_id'),
     startedAt: timestamp('started_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
     completedAt: timestamp('completed_at'),

@@ -2,14 +2,14 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { appRouter } from '@/server/api/root';
 import { createTRPCContext } from '@/server/api/trpc';
 
-// Vercel function maxDuration. Hobby plan caps at 300s (5min). The v2
-// generation pipeline runs after the response is sent via `after()`,
-// but still bounded by this value. If the pipeline needs longer than
-// 300s in practice (Stage C + 2 revision loops at the upper bound),
-// the options are:
-//   - upgrade to Pro (raises the cap to 800s)
-//   - migrate runGenerationJob to Vercel Workflow (durable, no per-task cap)
-//   - drop MAX_REVISIONS in orchestrate.ts from 2 → 1 to fit the budget
+// Vercel function maxDuration. The v2 generation pipeline used to run
+// after the response was sent via `after()` and was bounded by this
+// value, which made worst-case runs (Stage C + revision loops) hit the
+// wall and freeze the job row. The pipeline is now a Vercel Workflow
+// — each stage runs in its own function invocation with its own
+// budget, so this cap only governs the synchronous tRPC handler itself
+// (cheap work). 300s is a comfortable headroom for everything that's
+// left.
 export const maxDuration = 300;
 
 const handler = (req: Request) =>

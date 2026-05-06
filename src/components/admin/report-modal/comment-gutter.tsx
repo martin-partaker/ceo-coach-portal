@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import { useEffect, useMemo, useState, useLayoutEffect } from 'react';
 import { cn } from '@/lib/utils';
 import {
@@ -55,6 +56,13 @@ export function CommentGutter({
 }: Props) {
   // Map: commentId -> top offset (px) within the gutter
   const [tops, setTops] = useState<Record<string, number>>({});
+  // Map: commentId -> measured height in px. Populated by each card
+  // via ResizeObserver — used in the next measure pass so subsequent
+  // cards get pushed down by exactly the card's actual rendered
+  // height. Without this, an expanded card's body overlaps the
+  // next-sibling card. Default falls back to a 64px estimate when a
+  // card hasn't reported its height yet (first paint).
+  const [heights, setHeights] = useState<Record<string, number>>({});
   // Total document height — used so the gutter's relative container
   // extends far enough that absolutely-positioned comments at the
   // bottom remain inside their parent (and thus inside the scroll).
@@ -62,6 +70,9 @@ export function CommentGutter({
   // Per-section expanded flag — when a section anchor has 3+ comments
   // we collapse to the first 2 and a "+N more" chip; click to expand.
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  // Per-CARD expanded state, lifted from the card so the gutter knows
+  // which cards are tall and re-measures positions when one opens.
+  const [expandedCardIds, setExpandedCardIds] = useState<Set<string>>(new Set());
 
   // Group comments by their target section so we can collapse dense
   // anchors into a "show more" chip. `__global__` is the bucket for
@@ -115,9 +126,13 @@ export function CommentGutter({
         return 0;
       });
       const placed: Array<{ top: number; height: number }> = [];
-      const COMMENT_HEIGHT_EST = 60; // tighter card design
+      const COLLAPSED_EST = 64;
       const MIN_GAP = 6;
       for (const c of ordered) {
+        // Use the card's MEASURED height if known — that's the only
+        // reliable way to push the next card past an expanded one.
+        // Falls back to the collapsed estimate on first paint.
+        const cardHeight = heights[c.id] ?? COLLAPSED_EST;
         let raw = 0;
         if (!c.targetSection) {
           raw = 0;
@@ -137,7 +152,7 @@ export function CommentGutter({
             candidate = p.top + p.height + MIN_GAP;
           }
         }
-        placed.push({ top: candidate, height: COMMENT_HEIGHT_EST });
+        placed.push({ top: candidate, height: cardHeight });
         out[c.id] = candidate;
       }
       setTops(out);
@@ -155,7 +170,7 @@ export function CommentGutter({
       mo.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [documentContainer, visibleComments]);
+  }, [documentContainer, visibleComments, heights]);
 
   if (comments.length === 0) {
     return (
@@ -193,6 +208,20 @@ export function CommentGutter({
             key={c.id}
             comment={c}
             top={tops[c.id] ?? 0}
+            expanded={expandedCardIds.has(c.id)}
+            onToggleExpand={() =>
+              setExpandedCardIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(c.id)) next.delete(c.id);
+                else next.add(c.id);
+                return next;
+              })
+            }
+            onMeasureHeight={(h) => {
+              setHeights((prev) =>
+                Math.abs((prev[c.id] ?? 0) - h) < 1 ? prev : { ...prev, [c.id]: h },
+              );
+            }}
             onHover={() => onHoverSection?.(c.targetSection)}
             onLeave={() => onHoverSection?.(null)}
             onClick={() => onCommentClick?.(c)}
@@ -250,25 +279,48 @@ export function CommentGutter({
 function CommentCard({
   comment: c,
   top,
+  expanded,
+  onToggleExpand,
+  onMeasureHeight,
   onHover,
   onLeave,
   onClick,
 }: {
   comment: GutterComment;
   top: number;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onMeasureHeight: (h: number) => void;
   onHover: () => void;
   onLeave: () => void;
   onClick: () => void;
 }) {
   const { Icon, accentBorder, accentBg, accentText } = kindStyle(c.kind, c.urgency);
-  const [expanded, setExpanded] = useState(false);
+  const ref = React.useRef<HTMLDivElement | null>(null);
+
+  // Report height back up so the gutter can re-measure sibling tops.
+  // Without this, expanding a card grows it in place but the next
+  // card stays at its previously-computed position and overlaps the
+  // expanded body. ResizeObserver fires whenever the card's content
+  // box changes (i.e. on expand/collapse, on text reflow).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      onMeasureHeight(el.offsetHeight);
+    });
+    ro.observe(el);
+    onMeasureHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  }, [onMeasureHeight]);
 
   return (
     <div
+      ref={ref}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
       onClick={() => {
-        setExpanded((e) => !e);
+        onToggleExpand();
         onClick();
       }}
       className={cn(
@@ -276,6 +328,9 @@ function CommentCard({
         'border-l-[3px]',
         accentBorder,
         'hover:shadow-md hover:translate-x-[-1px]',
+        // When expanded, lift above siblings so the rendering stack
+        // matches the layout: the expanded card is the foreground item.
+        expanded && 'z-20 shadow-lg',
       )}
       style={{ top: `${top}px` }}
     >
@@ -294,10 +349,11 @@ function CommentCard({
           <p className={cn('font-medium text-foreground', expanded ? '' : 'line-clamp-2')}>
             {c.title}
           </p>
-          {expanded && (
-            <p className="mt-1 text-foreground/75">{c.body}</p>
-          )}
-          {!expanded && (
+          {expanded ? (
+            <p className="mt-1.5 whitespace-pre-wrap text-foreground/80">
+              {c.body}
+            </p>
+          ) : (
             <p className="mt-0.5 line-clamp-1 text-[10.5px] text-muted-foreground/80">
               {c.body}
             </p>

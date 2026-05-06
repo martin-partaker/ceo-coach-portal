@@ -83,12 +83,15 @@ ${missingWarning}
 
 Call the ${FACTS_TOOL_NAME} tool now.`;
 
-  // Opus — Stage A is load-bearing: every downstream stage consumes
-  // these Facts (drafter cites them, critic checks against them,
-  // pattern-matcher diffs them across cycles). An extraction miss
-  // compounds — the drafter can't cite a claim that wasn't extracted.
-  // Once-per-cycle volume keeps the absolute cost bounded.
-  const modelId = MODELS.reportPrimary;
+  // Sonnet — Stage A is load-bearing for the *pipeline* (every downstream
+  // stage cites these facts), but the task itself is structured
+  // extraction with explicit source citations, not creative prose. Sonnet
+  // 4.6 handles tool-call extraction with citations as well as Opus and
+  // returns ~3× faster; on a typical cycle this saves ~90s of wall time
+  // off the perceived "first stage" wait. Stages C (draft) and E (refine)
+  // remain on Opus because the output literally lands in the CEO's email
+  // and the prose-quality gap shows there.
+  const modelId = MODELS.draft;
   const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
   // First attempt — fresh prompt.

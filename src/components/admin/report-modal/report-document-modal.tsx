@@ -19,10 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import {
-  PipelineProgressBar,
-  type PipelineStatus,
-} from './pipeline-progress-bar';
+import { type PipelineStatus } from './pipeline-progress-bar';
 import {
   DocumentRenderer,
   type DocumentReportShape,
@@ -125,10 +122,13 @@ export function ReportDocumentModal({
   });
 
   // ── version state ────────────────────────────────────────────────
+  // The "v2 first draft" (firstDraftJson) is a SECONDARY view used by
+  // the diff button only — it's not in the user-facing toggle. Primary
+  // toggle is just First draft (v1) vs Polished (v2 final).
+  const hasV2First = !!versions.data?.latestJob?.firstDraftJson;
   const has = useMemo(
     () => ({
       v1: !!versions.data?.v1,
-      v2First: !!versions.data?.latestJob?.firstDraftJson,
       v2Final: !!versions.data?.v2,
     }),
     [versions.data],
@@ -137,14 +137,13 @@ export function ReportDocumentModal({
   const [version, setVersion] = useState<VersionKey>('v2-final');
   const [diffMode, setDiffMode] = useState(false);
 
-  // Default version: prefer v2-final → v2-first → v1.
+  // Default version: prefer v2-final → v1.
   useEffect(() => {
     if (!versions.data) return;
     if (has.v2Final) setVersion('v2-final');
-    else if (has.v2First) setVersion('v2-first');
     else if (has.v1) setVersion('v1');
     setDiffMode(false);
-  }, [versions.data, has.v2Final, has.v2First, has.v1, cycleId]);
+  }, [versions.data, has.v2Final, has.v1, cycleId]);
 
   // Reset to default tab on open / cycle change.
   useEffect(() => {
@@ -156,9 +155,6 @@ export function ReportDocumentModal({
     if (!versions.data) return null;
     if (version === 'v1' && versions.data.v1) {
       return versions.data.v1.contentJson as unknown as DocumentReportShape;
-    }
-    if (version === 'v2-first' && versions.data.latestJob?.firstDraftJson) {
-      return versions.data.latestJob.firstDraftJson as unknown as DocumentReportShape;
     }
     if (version === 'v2-final' && versions.data.v2) {
       return versions.data.v2.contentJson as unknown as DocumentReportShape;
@@ -192,17 +188,28 @@ export function ReportDocumentModal({
 
   // ── job + progress state ─────────────────────────────────────────
   const job = activeJob.data;
-  const status: PipelineStatus = (job?.status as PipelineStatus) ?? 'pending';
-  const isRunning = !!job && status !== 'complete' && status !== 'error';
+  // The job is only meaningful for the "live progress" bar if it is in
+  // a non-terminal state. A stale `pending`/`error` row from an earlier
+  // attempt should not surface as "Queued — starting any moment" on a
+  // cycle whose report was finished hours ago.
+  const jobIsLive = !!job && job.status !== 'complete' && job.status !== 'error';
+  const status: PipelineStatus = jobIsLive
+    ? (job.status as PipelineStatus)
+    : 'complete';
+  const isRunning = jobIsLive;
   const justCompleted = job?.status === 'complete';
 
-  // When job hits complete, refetch versions + critique + facts.
+  // When job hits complete, refetch versions + critique + facts AND the
+  // roster summary so phase pills + RecentReports refresh across the
+  // workspace, not just inside this modal.
   useEffect(() => {
     if (justCompleted) {
       utils.reports.getReportVersions.invalidate({ cycleId });
       utils.reports.getForCycle.invalidate({ cycleId });
       utils.reports.getFacts.invalidate({ cycleId });
       utils.reports.getActiveJob.invalidate({ cycleId });
+      utils.roster.cycleSummary.invalidate();
+      utils.roster.cycleDetail.invalidate({ cycleId });
       if (job?.finalReportId) {
         utils.reports.getCritique.invalidate({ reportId: job.finalReportId });
       }
@@ -247,7 +254,7 @@ export function ReportDocumentModal({
             onChange={setVersion}
             has={has}
           />
-          {version === 'v2-final' && has.v2First && (
+          {version === 'v2-final' && hasV2First && (
             <Button
               type="button"
               size="sm"
@@ -272,21 +279,24 @@ export function ReportDocumentModal({
           </Button>
         </header>
 
-        {/* Pipeline progress bar */}
-        <div className="shrink-0 border-b border-border bg-background px-5 py-3">
-          <PipelineProgressBar
-            status={status}
-            revisionsApplied={job?.revisionsApplied ?? 0}
-            topFix={
-              ((job?.stageDetail as { topFix?: string | null } | null)?.topFix) ?? null
-            }
-            errorText={job?.error ?? null}
-          />
-        </div>
+        {/* Error strip — only when the latest job actually failed. We
+            don't render the live progress bar here anymore: while a
+            generation is running, the entire body becomes a "we're
+            working on it" screen below, and the corner pill shows
+            ambient progress. */}
+        {!jobIsLive && job?.status === 'error' && (
+          <div className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-5 py-2 text-[12px] text-destructive">
+            Last v2 generation failed: {job.error ?? 'unknown error'}. Click Re-generate v2 to try again.
+          </div>
+        )}
 
-        {/* Body — diff view OR document + gutter */}
+        {/* Body — boring "generating" screen WHILE running, otherwise
+            diff view OR document + gutter (single scroll container so
+            comments stay anchored to section cards as you scroll). */}
         <div className="flex flex-1 overflow-hidden">
-          {diffMode && firstDraftShape && versions.data?.v2 ? (
+          {isRunning ? (
+            <GeneratingScreen status={status} />
+          ) : diffMode && firstDraftShape && versions.data?.v2 ? (
             <div className="flex-1 overflow-y-auto bg-muted/10 p-6">
               <DiffView
                 first={firstDraftShape}
@@ -294,50 +304,43 @@ export function ReportDocumentModal({
               />
             </div>
           ) : (
-            <>
-              <div className="flex-1 overflow-y-auto bg-muted/10 p-6">
-                {versions.isLoading && !activeShape && (
-                  <div className="flex h-40 items-center justify-center text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  </div>
-                )}
-                {!versions.isLoading && !activeShape && !isRunning && (
-                  <EmptyState onGenerate={() => generate.mutate({ cycleId })} pending={generate.isPending} />
-                )}
-                {!versions.isLoading && !activeShape && isRunning && (
-                  <RunningSkeleton />
-                )}
-                {activeShape && (
-                  <DocumentRenderer
-                    ref={documentRef}
-                    report={activeShape}
-                    ceoName={ceoName}
-                    cycleLabel={cycleLabel}
-                    coachName={coachName}
-                    periodStart={periodStart}
-                    periodEnd={periodEnd}
-                    highlightSections={
-                      version === 'v2-final' ? highlightedSections : undefined
-                    }
-                    emphasizedSection={emphasized}
-                    watermark={
-                      version === 'v2-first'
-                        ? 'first draft'
-                        : version === 'v1'
-                          ? 'v1 (legacy)'
-                          : undefined
-                    }
+            <div className="flex flex-1 overflow-y-auto bg-muted/10">
+              <div className="flex w-full max-w-[1280px] mx-auto gap-0 p-6">
+                <div className="flex-1">
+                  {versions.isLoading && !activeShape && (
+                    <div className="flex h-40 items-center justify-center text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </div>
+                  )}
+                  {!versions.isLoading && !activeShape && (
+                    <EmptyState onGenerate={() => generate.mutate({ cycleId })} pending={generate.isPending} />
+                  )}
+                  {activeShape && (
+                    <DocumentRenderer
+                      ref={documentRef}
+                      report={activeShape}
+                      ceoName={ceoName}
+                      cycleLabel={cycleLabel}
+                      coachName={coachName}
+                      periodStart={periodStart}
+                      periodEnd={periodEnd}
+                      highlightSections={
+                        version === 'v2-final' ? highlightedSections : undefined
+                      }
+                      emphasizedSection={emphasized}
+                      watermark={version === 'v1' ? 'first draft' : undefined}
+                    />
+                  )}
+                </div>
+                {version === 'v2-final' && activeShape && (
+                  <CommentGutter
+                    comments={comments}
+                    documentContainer={documentRef.current}
+                    onHoverSection={(id) => setEmphasized(id)}
                   />
                 )}
               </div>
-              {version === 'v2-final' && activeShape && (
-                <CommentGutter
-                  comments={comments}
-                  documentContainer={documentRef.current}
-                  onHoverSection={(id) => setEmphasized(id)}
-                />
-              )}
-            </>
+            </div>
           )}
         </div>
 
@@ -415,25 +418,58 @@ function EmptyState({
   );
 }
 
-function RunningSkeleton() {
+/**
+ * Boring "we're working on it" screen shown WHILE a generation is
+ * running. Replaces the document body entirely so the coach isn't
+ * looking at a stale or half-rendered report. The corner background
+ * pill is responsible for ambient progress; this screen just sets
+ * expectations and gets out of the way.
+ */
+function GeneratingScreen({ status }: { status: PipelineStatus }) {
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4 rounded-md border border-dashed border-blue-500/30 bg-background p-10">
-      <div className="flex items-center gap-2 text-sm font-medium text-blue-700 dark:text-blue-300">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Generating — pipeline running…
-      </div>
-      <p className="text-[12px] text-muted-foreground">
-        The progress bar above shows which stage is active. The document
-        will materialize here once the drafter (Stage C) finishes its
-        first pass.
-      </p>
-      <div className="space-y-2">
-        <div className="h-3 w-1/3 rounded bg-muted/60" />
-        <div className="h-3 w-2/3 rounded bg-muted/60" />
-        <div className="h-3 w-1/2 rounded bg-muted/60" />
+    <div className="flex flex-1 items-center justify-center bg-muted/10 p-10">
+      <div className="max-w-md text-center">
+        <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+        <h3 className="mt-4 text-base font-semibold">
+          We're generating your report
+        </h3>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          The full pipeline takes about 1–2 minutes — extracting facts
+          from your inputs, comparing to prior cycles, drafting, then
+          checking and polishing against the rubric.
+        </p>
+        <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground/80">
+          Feel free to close this and keep working. The corner pill in
+          the bottom right will track progress, and the polished report
+          will be here when you come back.
+        </p>
+        <p className="mt-4 text-[11px] uppercase tracking-wider text-muted-foreground/60">
+          Currently: {prettyStatus(status)}
+        </p>
       </div>
     </div>
   );
+}
+
+function prettyStatus(s: PipelineStatus): string {
+  switch (s) {
+    case 'pending':
+      return 'queued';
+    case 'extracting_facts':
+      return 'reading your inputs';
+    case 'matching_patterns':
+      return 'comparing to prior cycles';
+    case 'drafting_first':
+      return 'drafting the first pass';
+    case 'critiquing':
+      return 'reviewing against the rubric';
+    case 'revising':
+      return 'polishing weak sections';
+    case 'finalising':
+      return 'finalising';
+    default:
+      return 'working';
+  }
 }
 
 function DownloadPdfButton({

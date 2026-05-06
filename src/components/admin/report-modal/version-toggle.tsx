@@ -1,16 +1,20 @@
 'use client';
 
-import { Sparkles, Wand2, FileText } from 'lucide-react';
+import { Sparkles, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
- * Three-way toggle: v1 (legacy single-shot) · v2 first draft · v2 final.
+ * Two-way toggle: First draft (v1 single-shot) vs Polished (v2 agentic).
  *
- * Each option is enabled only if that version exists; the rest grey
- * out with a helpful tooltip. Used in the modal header.
+ * The "v2 first draft" stage (Stage C output before the rubric critic
+ * ran) is intentionally hidden from this primary toggle — it lives
+ * inside the "Show what improved" diff view, not as a top-level tab.
+ *
+ * Each option is enabled only if that version exists; the disabled
+ * one greys out with a helpful tooltip.
  */
 
-export type VersionKey = 'v1' | 'v2-first' | 'v2-final';
+export type VersionKey = 'v1' | 'v2-final';
 
 export function VersionToggle({
   value,
@@ -19,7 +23,7 @@ export function VersionToggle({
 }: {
   value: VersionKey;
   onChange: (v: VersionKey) => void;
-  has: { v1: boolean; v2First: boolean; v2Final: boolean };
+  has: { v1: boolean; v2Final: boolean };
 }) {
   const options: Array<{
     key: VersionKey;
@@ -31,32 +35,22 @@ export function VersionToggle({
   }> = [
     {
       key: 'v1',
-      label: 'v1',
-      sublabel: 'legacy',
+      label: 'First draft',
+      sublabel: 'single-shot',
       icon: <FileText className="h-3 w-3" />,
       enabled: has.v1,
       tooltip: has.v1
-        ? 'The previous single-shot generator. Kept for comparison.'
-        : 'No v1 report has been generated for this cycle.',
-    },
-    {
-      key: 'v2-first',
-      label: 'v2',
-      sublabel: 'first draft',
-      icon: <Wand2 className="h-3 w-3" />,
-      enabled: has.v2First,
-      tooltip: has.v2First
-        ? 'The first v2 draft, before the rubric critic ran any revisions.'
-        : 'No first draft saved yet — generate v2 to see it.',
+        ? 'The original single-shot generator output. Kept for comparison.'
+        : 'No first-draft (v1) report has been generated for this cycle.',
     },
     {
       key: 'v2-final',
-      label: 'v2',
-      sublabel: 'polished',
+      label: 'Polished',
+      sublabel: 'agentic',
       icon: <Sparkles className="h-3 w-3" />,
       enabled: has.v2Final,
       tooltip: has.v2Final
-        ? 'The final v2 report, after rubric-driven revisions.'
+        ? 'The polished v2 report — extracted facts, rubric-checked, refined.'
         : 'Generate v2 to see this.',
     },
   ];

@@ -53,12 +53,17 @@ export function CommentGutter({
 }: Props) {
   // Map: commentId -> top offset (px) within the gutter
   const [tops, setTops] = useState<Record<string, number>>({});
+  // Total document height — used so the gutter's relative container
+  // extends far enough that absolutely-positioned comments at the
+  // bottom remain inside their parent (and thus inside the scroll).
+  const [containerHeight, setContainerHeight] = useState<number>(600);
 
   // Re-measure on layout, on resize, and whenever comments change.
   useLayoutEffect(() => {
     if (!documentContainer) return;
     const measure = () => {
       const containerRect = documentContainer.getBoundingClientRect();
+      setContainerHeight(documentContainer.offsetHeight);
       const out: Record<string, number> = {};
       // Sort comments so deterministic stacking order — global first,
       // then by document order of their target sections.
@@ -68,7 +73,7 @@ export function CommentGutter({
         return 0;
       });
       const placed: Array<{ top: number; height: number }> = [];
-      const COMMENT_HEIGHT_EST = 92; // includes margin
+      const COMMENT_HEIGHT_EST = 96; // includes margin
       const MIN_GAP = 8;
       for (const c of ordered) {
         let raw = 0;
@@ -99,9 +104,13 @@ export function CommentGutter({
 
     const ro = new ResizeObserver(measure);
     ro.observe(documentContainer);
+    // Also observe descendants — section heights change as text wraps.
+    const mo = new MutationObserver(measure);
+    mo.observe(documentContainer, { subtree: true, childList: true, characterData: true });
     window.addEventListener('resize', measure);
     return () => {
       ro.disconnect();
+      mo.disconnect();
       window.removeEventListener('resize', measure);
     };
   }, [documentContainer, comments]);
@@ -118,11 +127,11 @@ export function CommentGutter({
 
   return (
     <aside className="relative hidden w-72 shrink-0 px-3 lg:block">
-      <div className="sticky top-2 mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="sticky top-2 z-10 mb-2 flex items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
         <MessageSquare className="h-3 w-3" />
         Comments ({comments.length})
       </div>
-      <div className="relative" style={{ minHeight: '60vh' }}>
+      <div className="relative" style={{ minHeight: `${containerHeight}px` }}>
         {comments.map((c) => (
           <CommentCard
             key={c.id}

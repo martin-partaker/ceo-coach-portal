@@ -551,7 +551,7 @@ function CycleBody({
           prevCycle={prevCycle}
           submissionsCount={data?.rawInputs.length ?? cycle.submissions.length}
         />
-        <RecentReports ceoId={ceo.id} />
+        <RecentReports ceoId={ceo.id} ceoName={ceo.name} />
       </div>
     </div>
   );
@@ -1283,44 +1283,93 @@ function ContextInspector({
   );
 }
 
-function RecentReports({ ceoId }: { ceoId: string }) {
+function RecentReports({ ceoId, ceoName }: { ceoId: string; ceoName: string }) {
   // Use cycleSummary cache to find recent reports for this CEO without
   // an extra query — we already have the per-cycle phase + generatedAt.
+  // Anchored to `hasReport`/`generatedAt` (authoritative server fields)
+  // rather than `phase` so that even unusual phase states still surface
+  // a generated report — phase is derived state and prone to skew when
+  // the cache is mid-invalidation.
   const { data } = trpc.roster.cycleSummary.useQuery();
+  const [openCycle, setOpenCycle] = useState<{
+    id: string;
+    label: string;
+    periodStart: string | null;
+    periodEnd: string | null;
+  } | null>(null);
+
   const recent = useMemo(() => {
     const summary = data?.find((s) => s.ceo.id === ceoId);
     if (!summary) return [];
     return [...summary.cycles]
-      .filter((c) => c.phase === 'sent' || c.phase === 'generated')
-      .slice(-3)
-      .reverse();
+      .filter((c) => c.hasReport || !!c.generatedAt)
+      .sort((a, b) => {
+        const ak = a.generatedAt ?? '';
+        const bk = b.generatedAt ?? '';
+        return ak < bk ? 1 : ak > bk ? -1 : 0;
+      })
+      .slice(0, 5);
   }, [data, ceoId]);
 
   return (
-    <div className="rounded-lg border border-border bg-background p-3">
-      <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-        <FilePlus className="h-3 w-3" />
-        Recent reports
-      </div>
-      {recent.length === 0 ? (
-        <div className="text-[12px] italic text-muted-foreground">No reports yet</div>
-      ) : (
-        <div className="grid gap-1">
-          {recent.map((c) => (
-            <div key={c.id} className="flex items-center gap-2 py-0.5 text-[12px]">
-              <span
-                className="inline-block h-1.5 w-1.5 rounded-full"
-                style={{
-                  background:
-                    c.phase === 'sent' ? 'oklch(55% 0.12 152)' : 'oklch(58% 0.14 258)',
-                }}
-              />
-              <span className="flex-1">{c.label}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">{c.phase}</span>
-            </div>
-          ))}
+    <>
+      <div className="rounded-lg border border-border bg-background p-3">
+        <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          <FilePlus className="h-3 w-3" />
+          Recent reports
         </div>
+        {recent.length === 0 ? (
+          <div className="text-[12px] italic text-muted-foreground">No reports yet</div>
+        ) : (
+          <div className="grid gap-0.5">
+            {recent.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() =>
+                  setOpenCycle({
+                    id: c.id,
+                    label: c.label,
+                    periodStart: c.periodStart,
+                    periodEnd: c.periodEnd,
+                  })
+                }
+                className="-mx-1 flex items-center gap-2 rounded-md px-1 py-1 text-left text-[12px] transition-colors hover:bg-muted/40"
+              >
+                <span
+                  className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{
+                    background:
+                      c.phase === 'sent' ? 'oklch(55% 0.12 152)' : 'oklch(58% 0.14 258)',
+                  }}
+                />
+                <span className="flex-1 truncate">{c.label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {c.generatedAt
+                    ? new Date(c.generatedAt).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                      })
+                    : c.phase}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {openCycle && (
+        <ReportDocumentModal
+          cycleId={openCycle.id}
+          ceoName={ceoName}
+          cycleLabel={openCycle.label}
+          periodStart={openCycle.periodStart}
+          periodEnd={openCycle.periodEnd}
+          open={!!openCycle}
+          onOpenChange={(o) => {
+            if (!o) setOpenCycle(null);
+          }}
+        />
       )}
-    </div>
+    </>
   );
 }

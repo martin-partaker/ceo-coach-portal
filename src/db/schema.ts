@@ -124,6 +124,11 @@ export const reports = pgTable('reports', {
   rawText: text('raw_text').notNull(),
   modelUsed: text('model_used').notNull(),
   promptVersion: integer('prompt_version').notNull().default(1),
+  /** How this report was produced: 'instant' | 'quick' | 'full'. Null
+   *  for legacy rows generated before this column existed; new rows
+   *  always set it. Useful for QA filtering / cost analytics without
+   *  needing to join through report_generation_jobs. */
+  generationMode: text('generation_mode'),
 });
 
 export const curriculum = pgTable('curriculum', {
@@ -401,9 +406,6 @@ export const reportPins = pgTable(
  * The mutation that creates this row also kicks off the pipeline; it
  * does NOT await completion. The client polls `getActiveJob({ cycleId })`
  * every ~1.5s while status != 'complete' / 'error'.
- *
- * `firstDraftJson` is the stage-C output BEFORE any rubric-driven
- * revisions — kept so the UI can render a first→revised section diff.
  */
 export const reportGenerationJobs = pgTable(
   'report_generation_jobs',
@@ -416,11 +418,16 @@ export const reportGenerationJobs = pgTable(
      *  | 'drafting_first' | 'critiquing' | 'revising' | 'finalising'
      *  | 'complete' | 'error' */
     status: text('status').notNull().default('pending'),
+    /** How this run was kicked off: 'instant' | 'quick' | 'full'.
+     *  Promoted from stageDetail to a real column so the UI doesn't
+     *  have to cast through unstructured JSON. */
+    mode: text('mode').notNull().default('full'),
     /** Free-form per-stage detail — e.g. { revision: 1, weakSections: [...] }
      *  or { error: '...' }. Drives the labels under the progress bar. */
     stageDetail: jsonb('stage_detail'),
-    /** Stage C output BEFORE the first revision. Null until Stage C completes. */
-    firstDraftJson: jsonb('first_draft_json'),
+    // (formerly `firstDraftJson: jsonb('first_draft_json')` — removed
+    // after the v1/v2 diff view was dropped. The workflow no longer
+    // writes it.)
     /** Set once status hits 'complete' — points at the persisted reports row. */
     finalReportId: uuid('final_report_id').references(() => reports.id, {
       onDelete: 'set null',

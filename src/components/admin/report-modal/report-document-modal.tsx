@@ -338,10 +338,7 @@ export function ReportDocumentModal({
                 null
               }
               startedAt={job?.startedAt ?? null}
-              mode={
-                ((job?.stageDetail as { mode?: 'instant' | 'quick' | 'full' } | null)
-                  ?.mode) ?? 'full'
-              }
+              mode={(job?.mode as 'instant' | 'quick' | 'full' | undefined) ?? 'full'}
               onCancel={
                 job?.id ? () => cancel.mutate({ jobId: job.id }) : undefined
               }

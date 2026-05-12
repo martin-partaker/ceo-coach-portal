@@ -25,13 +25,20 @@ import {
  * tRPC router.
  */
 
+export type GenerationMode = 'instant' | 'quick' | 'full';
+
 /** Create a new job row in the `pending` state and return its id. The
  *  caller hands the id to `start(generateReportWorkflow, ...)` so the
- *  workflow can mutate the same row at every stage transition. */
-export async function createGenerationJob(cycleId: string): Promise<string> {
+ *  workflow can mutate the same row at every stage transition. `mode`
+ *  is persisted as a typed column on the row so the UI can read it
+ *  directly without casting through `stageDetail`. */
+export async function createGenerationJob(
+  cycleId: string,
+  mode: GenerationMode,
+): Promise<string> {
   const [row] = await db
     .insert(reportGenerationJobs)
-    .values({ cycleId, status: 'pending' })
+    .values({ cycleId, status: 'pending', mode })
     .returning({ id: reportGenerationJobs.id });
   return row.id;
 }

@@ -1262,6 +1262,7 @@ function ReadinessCard({
               ceoName={ceoName}
               cycleLabel={cycle.label}
               missing={missingLabels}
+              mode={pendingMode}
               isPending={generate.isPending}
               onConfirm={() =>
                 generate.mutate({ cycleId: cycle.id, mode: pendingMode })
@@ -1294,6 +1295,7 @@ function ConfirmGapsDialog({
   ceoName,
   cycleLabel,
   missing,
+  mode,
   isPending,
   onConfirm,
 }: {
@@ -1302,9 +1304,17 @@ function ConfirmGapsDialog({
   ceoName: string;
   cycleLabel: string;
   missing: string[];
+  mode: 'instant' | 'quick' | 'full';
   isPending: boolean;
   onConfirm: () => void;
 }) {
+  // Quick/Full extract typed facts (Stage A) before drafting, so the
+  // model knows which fields were empty and can flag them in the email
+  // body. Instant skips that step — it just calls the legacy prompt
+  // with raw inputs, and the missing pieces become "subtly thin prose
+  // with no signal". Worth an extra warning so the coach knows the
+  // consequence of picking Instant + gaps is materially different.
+  const isInstant = mode === 'instant';
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -1319,8 +1329,24 @@ function ConfirmGapsDialog({
               {missing.length}
             </span>{' '}
             input{missing.length === 1 ? '' : 's'} aren&apos;t filled in yet.
-            The AI will use what&apos;s there and flag the missing pieces in
-            the email.
+            {isInstant ? (
+              <>
+                {' '}
+                <span className="font-medium text-foreground">
+                  Instant mode skips fact extraction
+                </span>
+                , so the model has no way to flag what was missing — gaps
+                will surface as thinner prose rather than an explicit
+                callout. Use Quick or Full if you want the missing pieces
+                named in the email.
+              </>
+            ) : (
+              <>
+                {' '}
+                The AI will use what&apos;s there and flag the missing
+                pieces in the email.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <ul className="mt-2 space-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">

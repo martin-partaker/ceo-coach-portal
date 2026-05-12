@@ -78,7 +78,6 @@ async function setJobStatusStep(
   patch: {
     status?: string;
     stageDetail?: Record<string, unknown> | null;
-    firstDraftJson?: Record<string, unknown> | null;
     finalReportId?: string | null;
     critiqueId?: string | null;
     revisionsApplied?: number;
@@ -250,6 +249,9 @@ interface PersistFinalArgs {
   draft: DraftedReport;
   modelUsed: string;
   promptVersion: number;
+  /** Which mode produced this report — persisted on the row for QA /
+   *  cost analytics without having to join through generation_jobs. */
+  generationMode: 'instant' | 'quick' | 'full';
   // Critique row to persist alongside the report. Null in quick/instant.
   critique: Awaited<ReturnType<typeof critiqueReport>>['critique'] | null;
 }
@@ -275,6 +277,7 @@ async function persistFinalReportStep(args: PersistFinalArgs): Promise<{
       rawText,
       modelUsed: args.modelUsed,
       promptVersion: args.promptVersion,
+      generationMode: args.generationMode,
     })
     .returning();
 
@@ -312,30 +315,32 @@ export async function generateReportWorkflow(
 
   try {
     // ── INSTANT MODE ─────────────────────────────────────────────────
+    // Mode lives on the `report_generation_jobs.mode` column now, so
+    // stageDetail just carries the live stage label.
     if (args.mode === 'instant') {
       await setJobStatusStep(args.jobId, {
         status: 'drafting_first',
-        stageDetail: { stage: 'drafting_first', mode: 'instant' },
+        stageDetail: { stage: 'drafting_first' },
       });
       const instant = await runInstantStep({
         cycleId: args.cycleId,
         coachName: args.coachName,
       });
       await setJobStatusStep(args.jobId, {
-        firstDraftJson: instant.drafted as unknown as Record<string, unknown>,
         status: 'finalising',
-        stageDetail: { stage: 'finalising', mode: 'instant' },
+        stageDetail: { stage: 'finalising' },
       });
       const persisted = await persistFinalReportStep({
         cycleId: args.cycleId,
         draft: instant.drafted,
         modelUsed: instant.modelUsed,
         promptVersion: 3,
+        generationMode: 'instant',
         critique: null,
       });
       await setJobStatusStep(args.jobId, {
         status: 'complete',
-        stageDetail: { stage: 'complete', mode: 'instant', passed: null, revisions: 0 },
+        stageDetail: { stage: 'complete', passed: null, revisions: 0 },
         finalReportId: persisted.reportId,
         critiqueId: null,
         revisionsApplied: 0,
@@ -409,26 +414,24 @@ export async function generateReportWorkflow(
       patterns,
     });
     let currentDraft: DraftedReport = firstDraft.drafted;
-    await setJobStatusStep(args.jobId, {
-      firstDraftJson: currentDraft as unknown as Record<string, unknown>,
-    });
 
     // ── QUICK MODE — skip critique + revisions ───────────────────────
     if (args.mode === 'quick') {
       await setJobStatusStep(args.jobId, {
         status: 'finalising',
-        stageDetail: { stage: 'finalising', mode: 'quick' },
+        stageDetail: { stage: 'finalising' },
       });
       const persisted = await persistFinalReportStep({
         cycleId: args.cycleId,
         draft: currentDraft,
         modelUsed: firstDraft.modelUsed,
         promptVersion: 3,
+        generationMode: 'quick',
         critique: null,
       });
       await setJobStatusStep(args.jobId, {
         status: 'complete',
-        stageDetail: { stage: 'complete', mode: 'quick', passed: null, revisions: 0 },
+        stageDetail: { stage: 'complete', passed: null, revisions: 0 },
         finalReportId: persisted.reportId,
         critiqueId: null,
         revisionsApplied: 0,
@@ -495,6 +498,7 @@ export async function generateReportWorkflow(
       draft: currentDraft,
       modelUsed: firstDraft.modelUsed,
       promptVersion: 3,
+      generationMode: 'full',
       critique,
     });
     await setJobStatusStep(args.jobId, {

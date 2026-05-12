@@ -761,7 +761,7 @@ export const reportsRouter = createTRPCRouter({
             .limit(1)
         : [];
 
-      const jobId = await createGenerationJob(input.cycleId);
+      const jobId = await createGenerationJob(input.cycleId, input.mode);
       const coachName = assignedCoach?.name ?? ctx.coach.name;
 
       // Hand the pipeline off to Vercel Workflow. start() returns
@@ -923,8 +923,8 @@ export const reportsRouter = createTRPCRouter({
       return { ok: true, alreadyTerminal: false };
     }),
 
-  /** Job row for a specific report — used to surface the firstDraftJson
-   *  for the first→revised diff view. */
+  /** Job row that produced a specific report — exposes the run's mode,
+   *  revisions applied, and stage history for the report's debug view. */
   getJobForReport: protectedProcedure
     .input(z.object({ reportId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {

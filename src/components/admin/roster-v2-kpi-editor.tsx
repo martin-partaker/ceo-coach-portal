@@ -259,9 +259,25 @@ export function CycleKpiEditor({
           </Button>
         </div>
       ) : rows.length === 0 ? (
-        <p className="px-1 text-[11px] italic text-muted-foreground">
-          No KPIs logged for this cycle yet — add a metric to start tracking.
-        </p>
+        // Dead-end empty state fix: when there are no rows AND no prior
+        // cycles to copy from, we still need an obvious way to add the
+        // first KPI. The pure-text variant was unreachable — the only
+        // other "Add KPI" button lives below the row list, which renders
+        // only when rows.length > 0.
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-2.5 py-2">
+          <span className="flex-1 text-[11px] italic text-muted-foreground">
+            No KPIs logged for this cycle yet.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[11px]"
+            onClick={addRow}
+          >
+            <Plus className="mr-1 h-3 w-3" /> Add KPI
+          </Button>
+        </div>
       ) : (
         <div className="grid gap-1.5">
           {rows.map((row, idx) => {

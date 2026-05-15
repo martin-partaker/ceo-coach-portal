@@ -79,50 +79,11 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-background">
-      {/* Header */}
-      <div
-        className="grid items-center border-b border-border bg-muted/30 py-2"
-        style={{ gridTemplateColumns: `${NAME_COL_WIDTH}px 1fr` }}
-      >
-        <div className="px-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          CEO · Coach
-        </div>
-        <ManagerHeader days={days} />
-      </div>
-
-      {/* Coach sections */}
-      {grouped.map(({ coachKey, coachName, rows }, gi) => (
-        <div key={coachKey ?? '__unassigned__'}>
-          {gi > 0 && <div className="h-px bg-border" />}
-          <div
-            className="grid items-center border-b border-border bg-muted/20 py-1.5"
-            style={{ gridTemplateColumns: `${NAME_COL_WIDTH}px 1fr` }}
-          >
-            <div className="px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              {coachName}
-              <span className="ml-2 font-mono normal-case text-muted-foreground/70">
-                · {rows.length} CEO{rows.length === 1 ? '' : 's'}
-              </span>
-            </div>
-            <div />
-          </div>
-          {rows.map((s) => (
-            <CeoRow
-              key={s.ceo.id}
-              summary={s}
-              days={days}
-              onCycleClick={(cycleId) => openCycle(s, cycleId)}
-            />
-          ))}
-        </div>
-      ))}
-
-      {/* Legend — two rows.
-          Phase = colour of the cycle bar itself. Inputs = colour of the
-          dots stacked inside each bar (one dot per submitted input).
-          Lauren asked for this so the Gantt is interpretable at a glance
-          without having to hover every dot. */}
-      <div className="space-y-1.5 border-t border-border bg-muted/30 px-4 py-2.5 text-[11px]">
+      {/* Legend — pinned to the top of the Gantt so coaches see the key
+          before they start interpreting the rows below. Two rows: cycle
+          phase = colour of the bar itself, input type = colour of the
+          dots stacked inside each bar. */}
+      <div className="space-y-1.5 border-b border-border bg-muted/30 px-4 py-2.5 text-[11px]">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
             cycle phase
@@ -177,6 +138,44 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
           </span>
         </div>
       </div>
+
+      {/* Header */}
+      <div
+        className="grid items-center border-b border-border bg-muted/30 py-2"
+        style={{ gridTemplateColumns: `${NAME_COL_WIDTH}px 1fr` }}
+      >
+        <div className="px-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          CEO · Coach
+        </div>
+        <ManagerHeader days={days} />
+      </div>
+
+      {/* Coach sections */}
+      {grouped.map(({ coachKey, coachName, rows }, gi) => (
+        <div key={coachKey ?? '__unassigned__'}>
+          {gi > 0 && <div className="h-px bg-border" />}
+          <div
+            className="grid items-center border-b border-border bg-muted/20 py-1.5"
+            style={{ gridTemplateColumns: `${NAME_COL_WIDTH}px 1fr` }}
+          >
+            <div className="px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              {coachName}
+              <span className="ml-2 font-mono normal-case text-muted-foreground/70">
+                · {rows.length} CEO{rows.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div />
+          </div>
+          {rows.map((s) => (
+            <CeoRow
+              key={s.ceo.id}
+              summary={s}
+              days={days}
+              onCycleClick={(cycleId) => openCycle(s, cycleId)}
+            />
+          ))}
+        </div>
+      ))}
 
       {drawerTarget && (
         <WorkspaceDrawer

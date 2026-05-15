@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import type { RosterCeoSummary } from '@/server/api/routers/roster';
 import { CreateCoachDialog } from './create-coach-dialog';
 import { RosterAddCeoDialog } from './roster-add-ceo-dialog';
+import { FormTeamDialog } from './form-team-dialog';
 import { RosterV2Row } from './roster-v2-row';
 import { RosterEditCoachDialog } from './roster-edit-coach-dialog';
 import { RosterDeleteCoachDialog } from './roster-delete-coach-dialog';
@@ -274,6 +275,7 @@ export function RosterV2Page({
           ) : (
             <AddCeoDialog />
           )}
+          <FormTeamDialog />
         </div>
       </div>
 

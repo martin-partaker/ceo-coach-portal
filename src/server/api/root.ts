@@ -8,6 +8,7 @@ import { reportsRouter } from './routers/reports';
 import { adminRouter } from './routers/admin';
 import { inboxRouter } from './routers/inbox';
 import { rosterRouter } from './routers/roster';
+import { teamsRouter } from './routers/teams';
 
 export const appRouter = createTRPCRouter({
   coaches: coachesRouter,
@@ -19,6 +20,7 @@ export const appRouter = createTRPCRouter({
   admin: adminRouter,
   inbox: inboxRouter,
   roster: rosterRouter,
+  teams: teamsRouter,
 });
 
 export type AppRouter = typeof appRouter;

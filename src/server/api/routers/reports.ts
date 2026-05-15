@@ -15,6 +15,7 @@ import {
   reportPins,
   reportRefinements,
   reportGenerationJobs,
+  coachingTeams,
 } from '@/db/schema';
 import { buildPrompt } from '@/lib/prompts/builder';
 import { MODELS } from '@/lib/anthropic/models';
@@ -832,7 +833,7 @@ export const reportsRouter = createTRPCRouter({
   getReportVersions: protectedProcedure
     .input(z.object({ cycleId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      await loadCycleAndCeo(ctx, input.cycleId);
+      const { cycle } = await loadCycleAndCeo(ctx, input.cycleId);
 
       const allReports = await ctx.db
         .select()
@@ -850,10 +851,49 @@ export const reportsRouter = createTRPCRouter({
         .orderBy(desc(reportGenerationJobs.startedAt))
         .limit(1);
 
+      // Subject info for the modal header / document renderer. Solo
+      // cycles return null here; team cycles return the team display
+      // name + every member's name in display order so the header can
+      // render "David Harding & Dave Snyder · Tipton Mills Foods"
+      // without an extra round-trip.
+      let teamSubject: {
+        teamId: string;
+        teamName: string;
+        companyName: string | null;
+        memberNames: string[];
+      } | null = null;
+      if (cycle.teamId) {
+        const [team] = await ctx.db
+          .select()
+          .from(coachingTeams)
+          .where(eq(coachingTeams.id, cycle.teamId))
+          .limit(1);
+        if (team) {
+          const memberRows = await ctx.db
+            .select({ id: ceos.id, name: ceos.name, createdAt: ceos.createdAt })
+            .from(ceos)
+            .where(eq(ceos.teamId, team.id))
+            .orderBy(asc(ceos.createdAt));
+          // Lead member (cycle.ceoId) first so display order is stable.
+          const leadIdx = memberRows.findIndex((m) => m.id === cycle.ceoId);
+          const ordered =
+            leadIdx >= 0
+              ? [memberRows[leadIdx], ...memberRows.filter((_, i) => i !== leadIdx)]
+              : memberRows;
+          teamSubject = {
+            teamId: team.id,
+            teamName: team.name,
+            companyName: team.companyName,
+            memberNames: ordered.map((m) => m.name),
+          };
+        }
+      }
+
       return {
         v1,
         v2,
         latestJob: latestJob ?? null,
+        teamSubject,
       };
     }),
 

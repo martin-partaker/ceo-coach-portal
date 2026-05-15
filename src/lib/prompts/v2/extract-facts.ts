@@ -4,7 +4,12 @@ import { z } from 'zod';
 import { MODELS, MAX_OUTPUT_TOKENS } from '@/lib/anthropic/models';
 import { streamWithOverloadRetry } from '@/lib/anthropic/client';
 import { CycleFactsSchema, type CycleFacts } from './schemas';
-import { renderContextForModel, listMissingInputs, type CycleContext } from './context';
+import {
+  renderContextForModel,
+  listMissingInputs,
+  subjectNaming,
+  type CycleContext,
+} from './context';
 import { assertNotTruncated } from './post-process';
 
 /**
@@ -75,10 +80,28 @@ export async function extractFacts(ctx: CycleContext): Promise<ExtractFactsResul
     ? `\n\n⚠️ MISSING INPUTS: ${missing.join(', ')}. Extract only what is present. Don't invent.`
     : '';
 
+  // When this is a team cycle, hint the extractor that journals carry
+  // author bylines and claims should be attributable to the member
+  // whose input they came from. We carry attribution via the locator
+  // field on sourceRef ("David's Week 2 journal") rather than adding a
+  // new schema field — keeps the existing CycleFacts shape stable.
+  const naming = subjectNaming(ctx);
+  const teamHint = naming.isTeam
+    ? `
+
+## TEAM CYCLE — attribution matters
+This cycle belongs to a coaching team (${naming.subjectFullLabel}). Journals and transcripts above are tagged with the authoring team member's name in their titles ("David's Weekly Journal — Week 2 …"). When you build evidenceClaims, stakeholders, emotionalEvents, and commitments:
+- The team has ${naming.firstNames.length} members: ${naming.firstNames.join(', ')}. DON'T list the team's own members in \`stakeholders\` — they are the subjects of the report, not external stakeholders.
+- For every claim, set sourceRef.locator to include the authoring member when relevant: "David's Week 2 journal", "Dave's Monthly Reflection", "Joint coaching transcript ~14:00". This lets the drafter attribute the claim to the right person.
+- emotionalEvents and commitments tied to one specific member must say so in the locator + description.
+- The 10x goal is TEAM-LEVEL — extract it from any member's input (they should agree) and capture any drift as you would for a solo CEO.
+`
+    : '';
+
   const userPrompt = `Extract CycleFacts from the following cycle inputs.
 
 ${renderContextForModel(ctx)}
-${missingWarning}
+${teamHint}${missingWarning}
 
 Call the ${FACTS_TOOL_NAME} tool now.`;
 

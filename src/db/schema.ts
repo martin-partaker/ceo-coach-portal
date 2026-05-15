@@ -22,6 +22,44 @@ export const coaches = pgTable('coaches', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
+/**
+ * Coaching team: 1..N CEOs working through the program together (e.g.
+ * co-founders of the same company). Each team has exactly one coach
+ * shared by all members. The team holds the SHARED data — company 10x
+ * goal, company KPIs — and is the subject of one joint monthly report
+ * per cycle.
+ *
+ * Per-member data (weekly journals, transcripts, personal reflections)
+ * stays attached to its authoring CEO. The prompt builder fans out at
+ * read time to merge all members' inputs into one team context.
+ */
+export const coachingTeams = pgTable(
+  'coaching_teams',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** One coach per team. Every member must already share this coach
+     *  when a team is formed. */
+    coachId: uuid('coach_id').references(() => coaches.id, {
+      onDelete: 'set null',
+    }),
+    /** Human-friendly team / company name, e.g. "Tipton Mills Foods". */
+    name: text('name').notNull(),
+    /** Optional separate company name when display vs legal diverge. */
+    companyName: text('company_name'),
+    /** Shared 3-year 10x destination for the team. Replaces the
+     *  per-CEO `tenXGoal` once a team is formed — every member sees
+     *  this. */
+    tenXGoal: text('ten_x_goal'),
+    tenXGoalUpdatedAt: timestamp('ten_x_goal_updated_at'),
+    profileJson: jsonb('profile_json'),
+    archivedAt: timestamp('archived_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    byCoach: index('coaching_teams_coach_idx').on(t.coachId),
+  }),
+);
+
 export const ceos = pgTable('ceos', {
   id: uuid('id').primaryKey().defaultRandom(),
   // Nullable so a CEO can exist on the roster before being assigned to a
@@ -30,6 +68,16 @@ export const ceos = pgTable('ceos', {
   coachId: uuid('coach_id').references(() => coaches.id, {
     onDelete: 'set null',
   }),
+  /** When set, this CEO is a member of a coaching team. The team owns
+   *  the shared 10x goal + company KPIs and is the subject of one joint
+   *  monthly report. */
+  teamId: uuid('team_id').references(() => coachingTeams.id, {
+    onDelete: 'set null',
+  }),
+  /** Optional role within the team — "CEO", "Co-CEO", "COO",
+   *  "Co-founder" etc. Surfaces in the prompt so the model can give
+   *  role-specific feedback. Informational; null for solo CEOs. */
+  memberRole: text('member_role'),
   name: text('name').notNull(),
   email: text('email'),
   avatarUrl: text('avatar_url'),
@@ -41,9 +89,20 @@ export const ceos = pgTable('ceos', {
 
 export const cycles = pgTable('cycles', {
   id: uuid('id').primaryKey().defaultRandom(),
+  /** Even for team-owned cycles, ceoId is non-null pointing at the
+   *  team's lead member so every existing query that joins cycles →
+   *  ceos still works. When `teamId` is set, the cycle is
+   *  authoritatively team-owned and ceoId is informational (the lead).
+   *  When `teamId` is null, ceoId is the cycle's sole subject (solo). */
   ceoId: uuid('ceo_id')
     .notNull()
     .references(() => ceos.id, { onDelete: 'cascade' }),
+  /** When set, the cycle is owned by a team. The context fetcher fans
+   *  out to pull every team member's inputs and the report is rendered
+   *  jointly addressed to all members. */
+  teamId: uuid('team_id').references(() => coachingTeams.id, {
+    onDelete: 'set null',
+  }),
   label: text('label').notNull(),
   periodStart: date('period_start'),
   periodEnd: date('period_end'),
@@ -72,6 +131,13 @@ export const journalEntries = pgTable('journal_entries', {
   cycleId: uuid('cycle_id')
     .notNull()
     .references(() => cycles.id, { onDelete: 'cascade' }),
+  /** For team cycles, identifies WHICH team member authored this entry
+   *  so the prompt can attribute it correctly ("David's Week 2…" vs
+   *  "Dave's Week 2…"). Null on solo cycles — attribution is implicit
+   *  (the one cycle owner). */
+  authoredByCeoId: uuid('authored_by_ceo_id').references(() => ceos.id, {
+    onDelete: 'set null',
+  }),
   weekNumber: integer('week_number').notNull(),
   // Exact day the journal entry refers to. Optional for legacy rows that
   // were created with only a weekNumber; new entries should populate it.
@@ -89,6 +155,12 @@ export const transcripts = pgTable('transcripts', {
   cycleId: uuid('cycle_id')
     .notNull()
     .references(() => cycles.id, { onDelete: 'cascade' }),
+  /** For team cycles, identifies the primary speaker / owner of the
+   *  transcript. Null when the transcript belongs to all members
+   *  equally (joint coaching session). */
+  authoredByCeoId: uuid('authored_by_ceo_id').references(() => ceos.id, {
+    onDelete: 'set null',
+  }),
   title: text('title').notNull(),
   content: text('content').notNull(),
   zoomMeetingId: text('zoom_meeting_id'),
@@ -263,6 +335,14 @@ export const ceoKpiDefinitions = pgTable(
     ceoId: uuid('ceo_id')
       .notNull()
       .references(() => ceos.id, { onDelete: 'cascade' }),
+    /** When set, this KPI is owned by a team rather than the individual
+     *  CEO — company-level metrics like EBITDA or revenue that every
+     *  team member shares. The team-aware context fetcher reads this
+     *  flag to dedupe; `ceoId` stays populated (pointing at the lead
+     *  member) so legacy queries keep working. */
+    teamId: uuid('team_id').references(() => coachingTeams.id, {
+      onDelete: 'set null',
+    }),
     label: text('label').notNull(),
     /** Optional unit hint, e.g. "$", "%". Currently informational; the
      *  PDF renders it adjacent to the value when set. */
@@ -500,6 +580,8 @@ export type NewRawInput = typeof rawInputs.$inferInsert;
 export type CeoEmailAlias = typeof ceoEmailAliases.$inferSelect;
 export type IngestionCursor = typeof ingestionCursors.$inferSelect;
 export type TallyForm = typeof tallyForms.$inferSelect;
+export type CoachingTeam = typeof coachingTeams.$inferSelect;
+export type NewCoachingTeam = typeof coachingTeams.$inferInsert;
 export type CeoKpiDefinition = typeof ceoKpiDefinitions.$inferSelect;
 export type CycleKpiValue = typeof cycleKpiValues.$inferSelect;
 export type KpiKind = 'number' | 'currency' | 'percent' | 'count' | 'text';

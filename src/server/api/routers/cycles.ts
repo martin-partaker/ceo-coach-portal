@@ -58,10 +58,16 @@ export const cyclesRouter = createTRPCRouter({
         .limit(1);
       if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
 
+      // If this CEO is in a coaching team, the new cycle is owned by
+      // the team (cycle.teamId carries the team marker; ceoId stays
+      // pointing at the requesting member for backwards-compat with
+      // queries that join cycles → ceos). The v2 prompt builder reads
+      // teamId and fans out to pull every team member's inputs.
       const [created] = await ctx.db
         .insert(cycles)
         .values({
           ceoId: input.ceoId,
+          teamId: ceo.teamId ?? null,
           label: input.label,
           periodStart: input.periodStart ?? null,
           periodEnd: input.periodEnd ?? null,

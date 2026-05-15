@@ -16,6 +16,7 @@ import {
 import {
   renderContextForModel,
   listMissingInputs,
+  subjectNaming,
   type CycleContext,
 } from './context';
 import { FEWSHOT_BLOCK } from './fewshot';
@@ -66,7 +67,16 @@ export type DraftResult = {
 
 export async function draftReport(args: DraftArgs): Promise<DraftResult> {
   const { ctx, facts, patterns, weakSections, priorDraft, pinnedParagraphs, topFix } = args;
-  const ceoFirstName = ctx.ceo.name.split(' ')[0];
+  const naming = subjectNaming(ctx);
+  // Backwards-compat alias — many places in the prompt still want the
+  // "primary" first name as a single token. For team cycles this is
+  // the lead member's first name; the joint handle is `subjectHandle`.
+  const ceoFirstName = naming.firstNames[0] ?? ctx.ceo.name.split(' ')[0];
+  const subjectHandle = naming.subjectHandle;
+  const subjectFullLabel = naming.subjectFullLabel;
+  const teamSuffix = naming.isTeam
+    ? ` (team: ${naming.teamLabel ?? '—'} · members: ${naming.firstNames.join(', ')})`
+    : '';
 
   // Curriculum: framework rows go into the system prompt (coach voice),
   // class rows into a catalog the model picks 1–3 from.
@@ -94,12 +104,22 @@ export async function draftReport(args: DraftArgs): Promise<DraftResult> {
     .map((r, i) => `${i + 1}. **${r.label}** — ${r.requirement}`)
     .join('\n');
 
-  const systemPrompt = `You are ghostwriting the monthly coaching summary that ${ctx.coachName} sends to their CEO client ${ctx.ceo.name}. Both outputs go to the CEO themselves — the email lands in their inbox, the structured report is rendered as a PDF "Monthly Progress Summary" they download. Write everything as if ${ceoFirstName} is reading it.
+  const systemPrompt = `You are ghostwriting the monthly coaching summary that ${ctx.coachName} sends to their ${naming.isTeam ? `coaching team ${subjectFullLabel}` : `CEO client ${ctx.ceo.name}`}. Both outputs go to ${naming.isTeam ? 'the team' : 'the CEO'} — the email lands in their inbox, the structured report is rendered as a PDF "Monthly Progress Summary" they download. Write everything as if ${subjectHandle} ${naming.isTeam ? 'are' : 'is'} reading it.
 
 ## Voice
-- First-person from the coach ("I noticed", "what stood out to me"), second-person to the CEO ("you closed the COO hire", "your 10x goal"). Never third-person.
-- Warm but direct. Trusted advisor, not consultant. ${ceoFirstName} should think "my coach really gets me" reading this.
-- Address ${ceoFirstName} by first name where it lands naturally.
+- First-person from the coach ("I noticed", "what stood out to me"), second-person to the ${naming.isTeam ? 'team' : 'CEO'} ("you closed the COO hire", "your 10x goal"). Never third-person.
+- Warm but direct. Trusted advisor, not consultant. ${subjectHandle} should think "my coach really gets ${naming.isTeam ? 'us' : 'me'}" reading this.
+- Address ${subjectHandle} by first name where it lands naturally.${naming.isTeam ? `
+
+## Team addressing
+This is a coaching TEAM, not a single CEO${teamSuffix}. Adjust voice accordingly:
+- Greeting and high-level reflection use the joint handle "${subjectHandle}" and second-person plural ("the two of you", "you both" for pairs / "you three" for trios / "you all"). The report is one shared document.
+- Where feedback is role-specific or the inputs clearly attribute something to ONE member, address that member by first name and switch to singular for that beat: "${naming.firstNames[0]}, your Week 3 dip is the focus we talked about" — then return to plural.
+- Use the team name (${naming.teamLabel ?? 'the team'}) where it lands naturally (subject line, headers, framing the company-level moves).
+- Every Key Win / Challenge / Next Step that's clearly one member's domain should name that member; team-level items use the joint handle.
+- The CycleFacts.evidenceClaims include attribution back to whichever member's input the claim came from. Honor that attribution.
+
+` : ''}
 
 ## Framework Reference
 ${frameworkText}
@@ -122,7 +142,7 @@ Every keyWin and challenge must be grounded in at least one entry from facts.evi
 If facts.goalCascade.driftDetected.changed is true, OR facts.emotionalEvents has entries, OR facts.constraint.movedThisCycle is false, you MUST emit at least one entry in report.coachReviewFlags with title + detail + urgency. These are visible to the coach in the UI before sending; they are NEVER shown to the CEO.
 
 ## Going Deeper
-Pick 1–3 entries from the Suggested Resources catalog (sent in the user message) that genuinely fit ${ceoFirstName}'s situation this cycle. Return their ids in report.suggestedResourceIds. The going_deeper email section must have one bullet per pick, in the same order, each starting with the bolded class title and 2–3 sentences in the coach's voice tying it to what ${ceoFirstName} did or struggled with this cycle. Zero picks = empty arrays in both.
+Pick 1–3 entries from the Suggested Resources catalog (sent in the user message) that genuinely fit ${subjectHandle}'s situation this cycle. Return their ids in report.suggestedResourceIds. The going_deeper email section must have one bullet per pick, in the same order, each starting with the bolded class title and 2–3 sentences in the coach's voice tying it to what ${subjectHandle} did or struggled with this cycle. Zero picks = empty arrays in both.
 
 ## Output
 Return a JSON object matching this shape:
@@ -140,7 +160,7 @@ Return a JSON object matching this shape:
 
   // STRUCTURED REPORT VIEW (PDF)
   "report": {
-    "progressSummary": "1–2 paragraph snapshot, addressed to ${ceoFirstName} directly. Reference the 10x goal and where ${ceoFirstName} sits relative to it.",
+    "progressSummary": "1–2 paragraph snapshot, addressed to ${subjectHandle} directly. Reference the 10x goal and where ${subjectHandle} ${naming.isTeam ? 'sit' : 'sits'} relative to it.",
     "goalSummary": {
       "tenX": "stated 10x goal this cycle",
       "ninetyDay": "stated 90-day goal or null",
@@ -156,7 +176,7 @@ Return a JSON object matching this shape:
   }
 }
 
-The email keys and the report sections must be coherent — same wins, same challenges, same insight, two shapes. Both are addressed to ${ceoFirstName} in second-person. The going_deeper bullet count must equal report.suggestedResourceIds length and use the same picks in the same order.
+The email keys and the report sections must be coherent — same wins, same challenges, same insight, two shapes. Both are addressed to ${subjectHandle} in second-person. The going_deeper bullet count must equal report.suggestedResourceIds length and use the same picks in the same order.
 
 Return ONLY the JSON. No markdown fences, no extra text.
 

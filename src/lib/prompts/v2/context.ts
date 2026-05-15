@@ -2,6 +2,8 @@ import 'server-only';
 import { db } from '@/db';
 import {
   ceoKpiDefinitions,
+  ceos as ceosTable,
+  coachingTeams,
   cycleFacts,
   cycleKpiValues,
   cycles,
@@ -9,6 +11,7 @@ import {
   reports,
   transcripts,
   type Ceo,
+  type CoachingTeam,
   type Cycle,
   type CycleFacts as CycleFactsRow,
 } from '@/db/schema';
@@ -30,8 +33,21 @@ import type { CycleFacts as CycleFactsT, Patterns as PatternsT } from './schemas
 
 export type CycleContext = {
   cycle: Cycle;
+  /** The cycle's lead CEO. For solo cycles, the only subject. For
+   *  team cycles, the lead member — used as a fallback when downstream
+   *  code needs a single name (e.g. legacy callers) but the prompt
+   *  itself addresses the full team via `members`. */
   ceo: Ceo;
+  /** The team this cycle belongs to, or null for solo cycles. */
+  team: CoachingTeam | null;
+  /** Every CEO whose inputs feed this cycle's report. For solo, a
+   *  single-element list with `ceo`. For team cycles, every member of
+   *  the team in stable display order (lead first). */
+  members: Ceo[];
   coachName: string;
+  /** The shared 10x goal as written. Pulled from the team for team
+   *  cycles, from the lead CEO for solo cycles. */
+  tenXGoal: string | null;
   monthlyGoals: string;
   monthlyReflection: string;
   additionalContext: string;
@@ -40,11 +56,17 @@ export type CycleContext = {
     weekNumber: number;
     entryDate: string | null;
     content: string;
+    /** Which team member wrote this. Null for solo cycles or when the
+     *  ingestion pipeline couldn't attribute it. */
+    authoredBy: { ceoId: string; ceoName: string } | null;
   }>;
   transcripts: Array<{
     title: string;
     recordedAt: Date | null;
     content: string;
+    /** Primary speaker / owner. Null when joint (e.g. both members on
+     *  the same coaching call). */
+    authoredBy: { ceoId: string; ceoName: string } | null;
   }>;
   kpiSeries: Array<{
     label: string;
@@ -81,14 +103,42 @@ export async function fetchCycleContext(args: {
 }): Promise<CycleContext> {
   const { cycle, ceo, coachName } = args;
 
+  // ── Resolve the subject: solo CEO OR team ──────────────────────────
+  // For team cycles (cycle.teamId set), we fan out and pull inputs from
+  // every team member. For solo cycles the "team" is just [ceo].
+  let team: CoachingTeam | null = null;
+  let members: Ceo[] = [ceo];
+  if (cycle.teamId) {
+    const [t] = await db
+      .select()
+      .from(coachingTeams)
+      .where(eq(coachingTeams.id, cycle.teamId))
+      .limit(1);
+    if (t) {
+      team = t;
+      const allMembers = await db
+        .select()
+        .from(ceosTable)
+        .where(eq(ceosTable.teamId, cycle.teamId))
+        .orderBy(asc(ceosTable.createdAt));
+      // Put the lead CEO (cycle.ceoId) first for stable display order.
+      const lead = allMembers.find((m) => m.id === cycle.ceoId);
+      const rest = allMembers.filter((m) => m.id !== cycle.ceoId);
+      members = lead ? [lead, ...rest] : allMembers;
+    }
+  }
+  const memberIds = members.map((m) => m.id);
+  const ceoNameById = new Map(members.map((m) => [m.id, m.name]));
+
   // Journals — derived membership: include any journal whose effective
   // date sits inside this cycle's window, even if its primary cycleId
-  // is a sibling monthly.
+  // is a sibling monthly. For team cycles we query across EVERY
+  // member's cycles, not just the lead's.
   const journalJoined = await db
     .select({ row: journalEntries, parentPeriodStart: cycles.periodStart })
     .from(journalEntries)
     .innerJoin(cycles, eq(journalEntries.cycleId, cycles.id))
-    .where(eq(cycles.ceoId, ceo.id))
+    .where(inArray(cycles.ceoId, memberIds))
     .orderBy(asc(journalEntries.weekNumber));
 
   const journals = journalJoined
@@ -106,18 +156,24 @@ export async function fetchCycleContext(args: {
         cycle,
       ),
     )
-    .map(({ row }) => ({
-      title: row.title,
-      weekNumber: row.weekNumber,
-      entryDate: row.entryDate,
-      content: row.content,
-    }));
+    .map(({ row }) => {
+      const authorId = row.authoredByCeoId;
+      const authorName = authorId ? ceoNameById.get(authorId) ?? null : null;
+      return {
+        title: row.title,
+        weekNumber: row.weekNumber,
+        entryDate: row.entryDate,
+        content: row.content,
+        authoredBy:
+          authorId && authorName ? { ceoId: authorId, ceoName: authorName } : null,
+      };
+    });
 
   const transcriptJoined = await db
     .select({ row: transcripts })
     .from(transcripts)
     .innerJoin(cycles, eq(transcripts.cycleId, cycles.id))
-    .where(eq(cycles.ceoId, ceo.id))
+    .where(inArray(cycles.ceoId, memberIds))
     .orderBy(desc(transcripts.recordedAt));
 
   const cycleTranscripts = transcriptJoined
@@ -133,23 +189,44 @@ export async function fetchCycleContext(args: {
         cycle,
       ),
     )
-    .map(({ row }) => ({
-      title: row.title,
-      recordedAt: row.recordedAt,
-      content: row.content,
-    }));
+    .map(({ row }) => {
+      const authorId = row.authoredByCeoId;
+      const authorName = authorId ? ceoNameById.get(authorId) ?? null : null;
+      return {
+        title: row.title,
+        recordedAt: row.recordedAt,
+        content: row.content,
+        authoredBy:
+          authorId && authorName ? { ceoId: authorId, ceoName: authorName } : null,
+      };
+    });
 
-  // KPI multi-cycle series.
-  const activeDefs = await db
-    .select()
-    .from(ceoKpiDefinitions)
-    .where(
-      and(
+  // KPI multi-cycle series. For team cycles, prefer team-level
+  // definitions (teamId set) and fall back to per-member definitions
+  // deduplicated by label so the prompt doesn't see "EBITDA" twice if
+  // both David and Dave logged it on their own pre-team rows.
+  const kpiDefWhere = team
+    ? sql`(${ceoKpiDefinitions.teamId} = ${team.id} OR ${ceoKpiDefinitions.ceoId} IN ${memberIds}) AND ${ceoKpiDefinitions.archivedAt} IS NULL`
+    : and(
         eq(ceoKpiDefinitions.ceoId, ceo.id),
         sql`${ceoKpiDefinitions.archivedAt} is null`,
-      ),
-    )
+      );
+  const allDefsRaw = await db
+    .select()
+    .from(ceoKpiDefinitions)
+    .where(kpiDefWhere)
     .orderBy(asc(ceoKpiDefinitions.sortOrder), asc(ceoKpiDefinitions.createdAt));
+
+  // Dedupe by lower-cased label, preferring team-level defs over
+  // per-member duplicates.
+  const seenLabels = new Set<string>();
+  const activeDefs: typeof allDefsRaw = [];
+  for (const def of allDefsRaw) {
+    const key = def.label.trim().toLowerCase();
+    if (seenLabels.has(key)) continue;
+    seenLabels.add(key);
+    activeDefs.push(def);
+  }
 
   const allKpiValues = activeDefs.length === 0
     ? []
@@ -168,7 +245,7 @@ export async function fetchCycleContext(args: {
         .innerJoin(cycles, eq(cycleKpiValues.cycleId, cycles.id))
         .where(
           and(
-            eq(cycles.ceoId, ceo.id),
+            inArray(cycles.ceoId, memberIds),
             inArray(
               cycleKpiValues.definitionId,
               activeDefs.map((d) => d.id),
@@ -210,11 +287,13 @@ export async function fetchCycleContext(args: {
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
-  // Prior cycles — strictly before this one.
+  // Prior cycles — strictly before this one. For team cycles we look
+  // across every member's cycle history (covers the pre-team era when
+  // each CEO was still solo, plus team cycles since formation).
   const allCycles = await db
     .select()
     .from(cycles)
-    .where(eq(cycles.ceoId, ceo.id));
+    .where(inArray(cycles.ceoId, memberIds));
 
   const isPrior = (c: (typeof allCycles)[number]) => {
     if (c.id === cycle.id) return false;
@@ -275,10 +354,17 @@ export async function fetchCycleContext(args: {
     };
   });
 
+  // Resolve the 10x goal: team-level wins when set, falls back to the
+  // lead CEO's per-person field for solo cycles or pre-team setups.
+  const tenXGoal = (team?.tenXGoal?.trim() || ceo.tenXGoal?.trim() || null) ?? null;
+
   return {
     cycle,
     ceo,
+    team,
+    members,
     coachName,
+    tenXGoal,
     monthlyGoals: cycle.monthlyGoals?.trim() ?? '',
     monthlyReflection: cycle.monthlyReflection?.trim() ?? '',
     additionalContext: cycle.additionalContext?.trim() ?? '',
@@ -292,13 +378,21 @@ export async function fetchCycleContext(args: {
 }
 
 /** Render the raw context as a plain-text bundle for the model.
- *  Used by Stage A and Stage C user prompts. */
+ *  Used by Stage A and Stage C user prompts. For team cycles every
+ *  journal and transcript carries an author byline so the model can
+ *  attribute statements correctly. */
 export function renderContextForModel(ctx: CycleContext): string {
+  const isTeam = ctx.team !== null;
+  const byline = (a: { ceoName: string } | null) =>
+    isTeam && a ? `${a.ceoName}'s ` : '';
+  const transcriptByline = (a: { ceoName: string } | null) =>
+    isTeam ? (a ? ` (primary: ${a.ceoName})` : ' (joint — both members)') : '';
+
   const journalText = ctx.journals.length > 0
     ? ctx.journals
         .map(
           (j) =>
-            `### ${j.title} (Week ${j.weekNumber}${j.entryDate ? `, ${j.entryDate}` : ''})\n${j.content}`,
+            `### ${byline(j.authoredBy)}${j.title} (Week ${j.weekNumber}${j.entryDate ? `, ${j.entryDate}` : ''})\n${j.content}`,
         )
         .join('\n\n')
     : '(no journals provided)';
@@ -307,7 +401,7 @@ export function renderContextForModel(ctx: CycleContext): string {
     ? ctx.transcripts
         .map(
           (t) =>
-            `### ${t.title}${t.recordedAt ? ` (${t.recordedAt.toISOString()})` : ''}\n${t.content}`,
+            `### ${t.title}${t.recordedAt ? ` (${t.recordedAt.toISOString()})` : ''}${transcriptByline(t.authoredBy)}\n${t.content}`,
         )
         .join('\n\n---\n\n')
     : ctx.cycle.transcriptSkipped
@@ -341,10 +435,28 @@ export function renderContextForModel(ctx: CycleContext): string {
     .map((p) => `#### ${p.label}\n${p.text}`)
     .join('\n\n---\n\n') || '(no prior pattern observations recorded yet.)';
 
+  // Header block differs for solo vs team cycles. Team cycles get a
+  // dedicated team profile + a list of members so the prompt can
+  // address everyone by name and assign role-specific feedback.
+  const profileBlock = ctx.team
+    ? [
+        `## Team Profile`,
+        `- Team: ${ctx.team.name}${ctx.team.companyName ? ` (${ctx.team.companyName})` : ''}`,
+        `- Members (${ctx.members.length}):`,
+        ...ctx.members.map(
+          (m) =>
+            `  - ${m.name}${m.memberRole ? ` — ${m.memberRole}` : ''}`,
+        ),
+        `- Shared 10x Goal: ${ctx.tenXGoal || '(not set)'}`,
+      ].join('\n')
+    : [
+        `## CEO Profile`,
+        `- Name: ${ctx.ceo.name}`,
+        `- 10x Goal (stored): ${ctx.tenXGoal || '(not set)'}`,
+      ].join('\n');
+
   return [
-    `## CEO Profile`,
-    `- Name: ${ctx.ceo.name}`,
-    `- 10x Goal (stored): ${ctx.ceo.tenXGoal?.trim() || '(not set)'}`,
+    profileBlock,
     ``,
     `## Cycle: ${ctx.cycle.label}`,
     ctx.cycle.periodStart ? `Period start: ${ctx.cycle.periodStart}` : null,
@@ -378,11 +490,50 @@ export function renderContextForModel(ctx: CycleContext): string {
     .join('\n');
 }
 
+/**
+ * Naming helper used by every prompt that addresses the cycle subject.
+ * For solo cycles: subjectHandle = "David" (first name). For team
+ * cycles: subjectHandle = "David & Dave" (members joined with &) or
+ * "David, Dave & Megan" for 3+. The system prompt uses this to address
+ * everyone simultaneously without baking pair-only assumptions in.
+ *
+ *   subjectHandle    — "David" / "David & Dave" — for direct address
+ *   subjectFullLabel — "David Harding" / "David Harding & Dave Snyder · Tipton Mills Foods" — for headers
+ *   firstNames       — array of first names, useful for role-specific feedback
+ *   isTeam           — convenience flag
+ */
+export function subjectNaming(ctx: CycleContext): {
+  isTeam: boolean;
+  firstNames: string[];
+  subjectHandle: string;
+  subjectFullLabel: string;
+  teamLabel: string | null;
+} {
+  const firstNames = ctx.members.map((m) => m.name.split(' ')[0]);
+  const isTeam = ctx.team !== null && ctx.members.length > 1;
+  const subjectHandle = isTeam ? joinWithAmpersand(firstNames) : firstNames[0] ?? ctx.ceo.name;
+  const fullNames = ctx.members.map((m) => m.name);
+  const teamLabel = ctx.team ? ctx.team.name : null;
+  const subjectFullLabel = isTeam
+    ? `${joinWithAmpersand(fullNames)}${teamLabel ? ` · ${teamLabel}` : ''}`
+    : ctx.ceo.name;
+  return { isTeam, firstNames, subjectHandle, subjectFullLabel, teamLabel };
+}
+
+function joinWithAmpersand(names: string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  // Three+: "David, Dave & Megan" (Oxford-ampersand style).
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
+
 /** Compute which inputs are missing — drives the "be transparent about
- *  what you don't have" warning in stage prompts. */
+ *  what you don't have" warning in stage prompts. Uses the team 10x
+ *  goal when in team mode, falls back to per-CEO. */
 export function listMissingInputs(ctx: CycleContext): string[] {
   const missing: string[] = [];
-  if (!ctx.ceo.tenXGoal?.trim()) missing.push('10x goal');
+  if (!ctx.tenXGoal?.trim()) missing.push('10x goal');
   if (!ctx.monthlyGoals) missing.push('monthly goals');
   if (ctx.journals.length === 0) missing.push('weekly journals');
   if (!ctx.monthlyReflection) missing.push('monthly reflection');

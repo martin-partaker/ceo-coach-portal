@@ -1307,9 +1307,14 @@ export const rosterRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       // Coach-scope guard: only the owning coach (or unscoped admin) can
-      // create a cycle for the target CEO.
+      // create a cycle for the target CEO. Also load the CEO's teamId
+      // so the new cycle gets tagged for team-aware generation.
       const [ceo] = await ctx.db
-        .select({ id: ceos.id, coachId: ceos.coachId })
+        .select({
+          id: ceos.id,
+          coachId: ceos.coachId,
+          teamId: ceos.teamId,
+        })
         .from(ceos)
         .where(eq(ceos.id, input.ceoId))
         .limit(1);
@@ -1333,6 +1338,7 @@ export const rosterRouter = createTRPCRouter({
         .insert(cycles)
         .values({
           ceoId: input.ceoId,
+          teamId: ceo.teamId ?? null,
           label: input.label,
           periodStart: input.periodStart ?? null,
           periodEnd: input.periodEnd ?? null,

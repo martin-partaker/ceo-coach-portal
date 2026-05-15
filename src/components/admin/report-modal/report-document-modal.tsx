@@ -215,8 +215,14 @@ export function ReportDocumentModal({
         className="flex h-[92vh] w-[96vw] max-w-[1400px] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-[1400px]"
         showCloseButton={false}
       >
+        {/* Subject label: prefer team display when this cycle belongs
+            to a coaching team — "David Harding & Dave Snyder · Tipton
+            Mills Foods" — fall back to the single CEO name otherwise. */}
+        {(() => null)()}
         <DialogTitle className="sr-only">
-          Monthly Progress Summary — {ceoName} — {cycleLabel}
+          Monthly Progress Summary — {versions.data?.teamSubject
+            ? joinWithAmpersand(versions.data.teamSubject.memberNames)
+            : ceoName} — {cycleLabel}
         </DialogTitle>
         <DialogDescription className="sr-only">
           Review and refine the v2 monthly coaching report.
@@ -229,7 +235,10 @@ export function ReportDocumentModal({
               Monthly Progress Summary
             </h2>
             <p className="truncate text-[11px] text-muted-foreground">
-              {ceoName} · {cycleLabel}
+              {versions.data?.teamSubject
+                ? `${joinWithAmpersand(versions.data.teamSubject.memberNames)} · ${versions.data.teamSubject.teamName}`
+                : ceoName}{' '}
+              · {cycleLabel}
               {periodEnd ? ` · ends ${new Date(periodEnd).toLocaleDateString()}` : ''}
             </p>
           </div>
@@ -360,7 +369,13 @@ export function ReportDocumentModal({
                     <DocumentRenderer
                       ref={documentRef}
                       report={activeShape}
-                      ceoName={ceoName}
+                      ceoName={
+                        versions.data?.teamSubject
+                          ? `${joinWithAmpersand(
+                              versions.data.teamSubject.memberNames,
+                            )} · ${versions.data.teamSubject.teamName}`
+                          : ceoName
+                      }
                       cycleLabel={cycleLabel}
                       coachName={coachName}
                       periodStart={periodStart}
@@ -673,6 +688,16 @@ function DownloadPdfButton({
       PDF
     </Button>
   );
+}
+
+/** Join names with an ampersand for joint team headers. "David & Dave"
+ *  for two, "David, Dave & Megan" for three or more. Solo cycles never
+ *  hit this — the modal short-circuits to ceoName upstream. */
+function joinWithAmpersand(names: string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
 function formatTimestamp(d: Date | string | null | undefined): string {

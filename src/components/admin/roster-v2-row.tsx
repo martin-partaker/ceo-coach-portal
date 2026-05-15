@@ -146,12 +146,63 @@ export function RosterV2Row({
           <ChevronRight className="h-3.5 w-3.5" />
         </span>
 
-        {/* CEO identity */}
+        {/* Identity — team-aware. When this CEO is in a coaching team,
+            the row's identity slot renders stacked member avatars +
+            the team label so the coach immediately sees the joint
+            subject. The lead member's avatar sits in front; teammates
+            stack behind it. */}
         <div className="flex min-w-0 items-center gap-3">
-          <CeoAvatar name={summary.ceo.name} avatarUrl={summary.ceo.avatarUrl} size="sm" />
+          {summary.team ? (
+            <div className="flex shrink-0 -space-x-2">
+              {summary.team.members.slice(0, 3).map((m) => (
+                <span
+                  key={m.id}
+                  className={cn(
+                    'inline-flex h-8 w-8 items-center justify-center rounded-full ring-2',
+                    m.id === summary.ceo.id ? 'ring-foreground/20' : 'ring-background',
+                  )}
+                  title={`${m.name}${m.memberRole ? ` — ${m.memberRole}` : ''}`}
+                >
+                  <CeoAvatar name={m.name} avatarUrl={m.avatarUrl} size="sm" />
+                </span>
+              ))}
+              {summary.team.members.length > 3 && (
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground ring-2 ring-background"
+                  title={summary.team.members
+                    .slice(3)
+                    .map((m) => m.name)
+                    .join(', ')}
+                >
+                  +{summary.team.members.length - 3}
+                </span>
+              )}
+            </div>
+          ) : (
+            <CeoAvatar name={summary.ceo.name} avatarUrl={summary.ceo.avatarUrl} size="sm" />
+          )}
           <div className="min-w-0">
             <div className="flex items-center gap-2 truncate text-sm font-medium">
-              <span className="truncate">{summary.ceo.name}</span>
+              {summary.team ? (
+                <span className="truncate">
+                  {joinNamesAmpersand(summary.team.members.map((m) => m.name))}
+                </span>
+              ) : (
+                <span className="truncate">{summary.ceo.name}</span>
+              )}
+              {summary.team && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                  style={{
+                    background:
+                      'color-mix(in oklab, oklch(58% 0.14 258), transparent 88%)',
+                    color: 'oklch(58% 0.14 258)',
+                  }}
+                  title={`Coaching team · ${summary.team.members.length} members`}
+                >
+                  Team
+                </span>
+              )}
               {liveJobForCeo && (
                 <span
                   className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
@@ -168,7 +219,9 @@ export function RosterV2Row({
               )}
             </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {summary.ceo.email ?? '(no email)'}
+              {summary.team
+                ? summary.team.name
+                : summary.ceo.email ?? '(no email)'}
             </div>
           </div>
         </div>
@@ -310,6 +363,15 @@ const READINESS_LABELS: Array<{
   { key: 'reflect', label: 'reflection' },
   { key: 'actions', label: 'actions reviewed' },
 ];
+
+/** Join names with an ampersand for joint team headers. "David & Dave"
+ *  for two, "David, Dave & Megan" for three or more. */
+function joinNamesAmpersand(names: string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
 
 function readinessSummary(r: RosterReadiness): {
   done: number;

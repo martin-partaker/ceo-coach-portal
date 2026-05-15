@@ -70,6 +70,15 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
     .where(eq(transcripts.sourceRawInputId, rawInput.id));
   const existingByCycle = new Map(existing.map((e) => [e.cycleId, e.id]));
 
+  // For team cycles, stamp which member is the transcript's primary
+  // owner — the CEO whose Zoom account / email the recording came from.
+  // The v2 prompt uses this to render the byline ("primary: David").
+  // When the transcript is genuinely joint (both members on the call),
+  // we leave this null so the renderer reads it as "joint — both
+  // members". Today we always have a primary CEO; the join table
+  // captures any additional attendees but doesn't change authorship.
+  const authoredByCeoId = rawInput.ceoId ?? null;
+
   for (const cycleId of targetCycleIds) {
     const existingId = existingByCycle.get(cycleId);
     if (existingId) {
@@ -81,6 +90,7 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
           zoomMeetingId,
           duration,
           recordedAt: rawInput.occurredAt,
+          authoredByCeoId,
         })
         .where(eq(transcripts.id, existingId));
     } else {
@@ -92,6 +102,7 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
         duration,
         recordedAt: rawInput.occurredAt,
         sourceRawInputId: rawInput.id,
+        authoredByCeoId,
       });
     }
   }

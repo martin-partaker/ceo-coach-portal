@@ -21,6 +21,14 @@ export const projectWeeklyJournal: Projector = async ({ rawInput, cycle }) => {
   const title = `Week ${weekNumber}`;
   const content = rawInput.textContent ?? '';
 
+  // For team cycles, stamp which member authored the journal so the
+  // v2 prompt can attribute the entry correctly ("David's Week 2 …"
+  // vs "Dave's Week 2 …"). The authoring CEO is the rawInput's primary
+  // ceoId — that's the email/account that submitted the form. On solo
+  // cycles this still gets populated but the team-aware renderer only
+  // surfaces the byline when team mode is on.
+  const authoredByCeoId = rawInput.ceoId ?? null;
+
   const [existing] = await db
     .select({ id: journalEntries.id })
     .from(journalEntries)
@@ -30,13 +38,20 @@ export const projectWeeklyJournal: Projector = async ({ rawInput, cycle }) => {
   if (existing) {
     await db
       .update(journalEntries)
-      .set({ cycleId: rawInput.cycleId, weekNumber, title, content })
+      .set({
+        cycleId: rawInput.cycleId,
+        authoredByCeoId,
+        weekNumber,
+        title,
+        content,
+      })
       .where(eq(journalEntries.id, existing.id));
     return;
   }
 
   await db.insert(journalEntries).values({
     cycleId: rawInput.cycleId,
+    authoredByCeoId,
     weekNumber,
     title,
     content,

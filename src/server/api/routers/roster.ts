@@ -8,6 +8,7 @@ import {
   ceoEmailAliases,
   ceoKpiDefinitions,
   coaches,
+  coachingTeams,
   cycleKpiValues,
   cycles,
   journalEntries,
@@ -74,7 +75,26 @@ export interface RosterCeoSummary {
     tenXGoal: string | null;
     /** Null when the CEO is on the roster but not yet assigned to a coach. */
     coachId: string | null;
+    /** Null when the CEO is solo. Set when they're a member of a
+     *  coaching team — shared 10x goal, joint cycles, joint reports. */
+    teamId: string | null;
+    /** Optional role within the team — "CEO" / "Co-CEO" / "COO" etc. */
+    memberRole: string | null;
   };
+  /** Team context, populated when ceo.teamId is set. Includes every
+   *  member's id + name + avatarUrl so the row can render stacked
+   *  avatars + the joint label without extra round-trips. */
+  team: {
+    id: string;
+    name: string;
+    companyName: string | null;
+    members: Array<{
+      id: string;
+      name: string;
+      avatarUrl: string | null;
+      memberRole: string | null;
+    }>;
+  } | null;
   /** Null when the CEO is unassigned. The roster page renders these into
    *  a synthetic "Unassigned" section. */
   coach: {
@@ -495,29 +515,93 @@ export const rosterRouter = createTRPCRouter({
       aliasesByCeo.set(a.ceoId, list);
     }
 
+    // Team batch fetch — collect every distinct teamId referenced by
+    // the returned CEOs, then load the teams + their full member roster
+    // in two queries. We can't just filter members by ceoIds (a team
+    // member could be on a different coach's roster the caller can't
+    // see — but for the team context to make sense we still want to
+    // surface that member's avatar). So we fetch members by teamId.
+    const teamIds = Array.from(
+      new Set(
+        ceoRows.map((r) => r.ceo.teamId).filter((id): id is string => !!id),
+      ),
+    );
+    const teamRowsById = new Map<string, typeof coachingTeams.$inferSelect>();
+    const teamMembersByTeam = new Map<
+      string,
+      Array<{ id: string; name: string; avatarUrl: string | null; memberRole: string | null }>
+    >();
+    if (teamIds.length > 0) {
+      const teamRows = await ctx.db
+        .select()
+        .from(coachingTeams)
+        .where(inArray(coachingTeams.id, teamIds));
+      for (const t of teamRows) teamRowsById.set(t.id, t);
+      const memberRows = await ctx.db
+        .select({
+          id: ceos.id,
+          name: ceos.name,
+          avatarUrl: ceos.avatarUrl,
+          teamId: ceos.teamId,
+          memberRole: ceos.memberRole,
+          createdAt: ceos.createdAt,
+        })
+        .from(ceos)
+        .where(inArray(ceos.teamId, teamIds))
+        .orderBy(asc(ceos.createdAt));
+      for (const m of memberRows) {
+        if (!m.teamId) continue;
+        const list = teamMembersByTeam.get(m.teamId) ?? [];
+        list.push({
+          id: m.id,
+          name: m.name,
+          avatarUrl: m.avatarUrl,
+          memberRole: m.memberRole,
+        });
+        teamMembersByTeam.set(m.teamId, list);
+      }
+    }
+
     return ceoRows
-      .map((r) => ({
-        ceo: {
-          id: r.ceo.id,
-          name: r.ceo.name,
-          email: r.ceo.email,
-          avatarUrl: r.ceo.avatarUrl,
-          tenXGoal: r.ceo.tenXGoal,
-          coachId: r.ceo.coachId,
-        },
-        coach: r.coach
-          ? {
-              id: r.coach.id,
-              name: r.coach.name,
-              email: r.coach.email,
-              zoomUserEmail: r.coach.zoomUserEmail,
-              isSuperAdmin: r.coach.isSuperAdmin,
-              neonAuthUserId: r.coach.neonAuthUserId,
-            }
-          : null,
-        aliasEmails: aliasesByCeo.get(r.ceo.id) ?? [],
-        cycles: cyclesByCeo.get(r.ceo.id) ?? [],
-      }))
+      .map((r) => {
+        const teamRow = r.ceo.teamId ? teamRowsById.get(r.ceo.teamId) : null;
+        const teamMembers = r.ceo.teamId
+          ? teamMembersByTeam.get(r.ceo.teamId) ?? []
+          : [];
+        return {
+          ceo: {
+            id: r.ceo.id,
+            name: r.ceo.name,
+            email: r.ceo.email,
+            avatarUrl: r.ceo.avatarUrl,
+            tenXGoal: r.ceo.tenXGoal,
+            coachId: r.ceo.coachId,
+            teamId: r.ceo.teamId,
+            memberRole: r.ceo.memberRole,
+          },
+          team:
+            teamRow
+              ? {
+                  id: teamRow.id,
+                  name: teamRow.name,
+                  companyName: teamRow.companyName,
+                  members: teamMembers,
+                }
+              : null,
+          coach: r.coach
+            ? {
+                id: r.coach.id,
+                name: r.coach.name,
+                email: r.coach.email,
+                zoomUserEmail: r.coach.zoomUserEmail,
+                isSuperAdmin: r.coach.isSuperAdmin,
+                neonAuthUserId: r.coach.neonAuthUserId,
+              }
+            : null,
+          aliasEmails: aliasesByCeo.get(r.ceo.id) ?? [],
+          cycles: cyclesByCeo.get(r.ceo.id) ?? [],
+        };
+      })
       .sort((a, b) => {
         // Unassigned CEOs sort to the end so the page's named-coach
         // sections come first.

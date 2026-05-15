@@ -93,13 +93,33 @@ export function RosterV2Page({
     });
   }
 
-  const summaries = useMemo<RosterCeoSummary[]>(() => data ?? [], [data]);
+  // Dedupe team members so each team renders as a single row. Without
+  // this, Dave Snyder and David Harding (both in Tipton Mills) would
+  // show as two identical "David & Dave · Tipton Mills" rows. We keep
+  // whichever member appears first per team — that becomes the row's
+  // "anchor" CEO. Their cycles drive the row (which is fine because
+  // team cycles share their work via cycle.teamId, not cycle.ceoId).
+  const summaries = useMemo<RosterCeoSummary[]>(() => {
+    const rows = data ?? [];
+    const seenTeams = new Set<string>();
+    const out: RosterCeoSummary[] = [];
+    for (const s of rows) {
+      if (s.ceo.teamId) {
+        if (seenTeams.has(s.ceo.teamId)) continue;
+        seenTeams.add(s.ceo.teamId);
+      }
+      out.push(s);
+    }
+    return out;
+  }, [data]);
 
   const coachOptions = useMemo(() => {
     return (coachList ?? []).map((c) => ({ id: c.id, name: c.name, email: c.email }));
   }, [coachList]);
 
-  // Filter by search across CEO name / email / alias / coach name
+  // Filter by search across CEO name / email / alias / coach name /
+  // team name + member names (so "tipton" finds the team row even if
+  // the anchor CEO is David).
   const filteredSummaries = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return summaries;
@@ -108,6 +128,11 @@ export function RosterV2Page({
       if ((s.ceo.email ?? '').toLowerCase().includes(q)) return true;
       if (s.aliasEmails.some((a) => a.toLowerCase().includes(q))) return true;
       if (s.coach?.name.toLowerCase().includes(q)) return true;
+      if (s.team) {
+        if (s.team.name.toLowerCase().includes(q)) return true;
+        if ((s.team.companyName ?? '').toLowerCase().includes(q)) return true;
+        if (s.team.members.some((m) => m.name.toLowerCase().includes(q))) return true;
+      }
       return false;
     });
   }, [summaries, query]);

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import {
   Dialog,
   DialogContent,
@@ -140,6 +141,7 @@ export function CycleWorkspace({
 
       <CycleBody
         ceo={summary.ceo}
+        team={summary.team}
         cycle={cycle}
         prevCycle={prevCycle}
         reviewKey={reviewKey}
@@ -159,12 +161,17 @@ export function CycleWorkspace({
 
 function CycleBody({
   ceo,
+  team,
   cycle,
   prevCycle,
   reviewKey,
   onActiveCycleIdChange,
 }: {
   ceo: RosterCeoSummary['ceo'];
+  /** Team context from the row's summary. When set, the workspace
+   *  surfaces a team strip above the 10x goal callout so the coach
+   *  always sees the joint context they're working in. */
+  team: RosterCeoSummary['team'];
   cycle: RosterCycle;
   prevCycle: RosterCycle | null;
   reviewKey?: number;
@@ -202,6 +209,12 @@ function CycleBody({
     <div className="grid grid-cols-1 gap-6 px-12 py-5 lg:grid-cols-[1fr_280px]">
       {/* Left column — input slots */}
       <div className="grid gap-3">
+        {/* Team context strip — shown when this CEO is part of a team.
+            Tells the coach the joint subject of the cycle so they can't
+            forget mid-workflow that the report goes to both members
+            and the inputs from every member feed it. */}
+        {team && <TeamContextStrip team={team} activeCeoId={ceo.id} />}
+
         {/* 10x goal callout — context for the AI summary, prominent so the
             super admin can see what each CEO is working toward without
             jumping to the profile. */}
@@ -727,6 +740,69 @@ function AiBadge() {
     >
       <Sparkles className="h-2.5 w-2.5" /> AI suggested
     </span>
+  );
+}
+
+/** Strip rendered at the top of the cycle workspace when the active CEO
+ *  is in a coaching team. Reminds the coach the report is joint and
+ *  surfaces every member's avatar so it's obvious who's contributing
+ *  inputs to this cycle. */
+function TeamContextStrip({
+  team,
+  activeCeoId,
+}: {
+  team: NonNullable<RosterCeoSummary['team']>;
+  activeCeoId: string;
+}) {
+  return (
+    <div
+      className="flex items-center gap-3 rounded-md border px-3 py-2"
+      style={{
+        borderColor: 'color-mix(in oklab, oklch(58% 0.14 258), transparent 60%)',
+        background: 'color-mix(in oklab, oklch(58% 0.14 258), transparent 92%)',
+      }}
+    >
+      <div className="flex shrink-0 -space-x-2">
+        {team.members.map((m) => (
+          <span
+            key={m.id}
+            className={cn(
+              'inline-flex h-6 w-6 items-center justify-center rounded-full ring-2',
+              m.id === activeCeoId ? 'ring-foreground/30' : 'ring-background',
+            )}
+            style={{ background: 'var(--muted)' }}
+            title={`${m.name}${m.memberRole ? ` — ${m.memberRole}` : ''}`}
+          >
+            <CeoAvatar name={m.name} avatarUrl={m.avatarUrl} size="sm" />
+          </span>
+        ))}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-[oklch(58%_0.14_258)]">
+          Coaching team · {team.members.length} members
+        </p>
+        <p className="truncate text-[13px] font-medium">
+          {team.name}
+          {team.companyName && team.companyName !== team.name ? (
+            <span className="ml-1.5 text-[12px] font-normal text-muted-foreground">
+              ({team.companyName})
+            </span>
+          ) : null}
+        </p>
+        <p className="truncate text-[11px] text-muted-foreground">
+          {team.members
+            .map((m) => `${m.name}${m.memberRole ? ` · ${m.memberRole}` : ''}`)
+            .join(' — ')}
+        </p>
+      </div>
+      <p
+        className="hidden shrink-0 text-right text-[10.5px] leading-snug text-muted-foreground/80 sm:block"
+        style={{ maxWidth: 160 }}
+      >
+        Inputs from every member feed this cycle. The report is one joint
+        document.
+      </p>
+    </div>
   );
 }
 

@@ -367,6 +367,7 @@ export function ReportDocumentModal({
                       periodEnd={periodEnd}
                       highlightSections={highlightedSections}
                       emphasizedSection={emphasized}
+                      reportId={versions.data?.v2?.id}
                     />
                   )}
                 </div>

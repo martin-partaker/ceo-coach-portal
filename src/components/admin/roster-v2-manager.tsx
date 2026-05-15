@@ -4,6 +4,21 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
 import type { RosterCeoSummary, RosterCycle } from '@/server/api/routers/roster';
+/** Deduplicated input-type entries for the legend strip. Some
+ *  CONTENT_TYPE_LABEL keys collapse to the same display label (e.g.
+ *  ten_x_goal + goal_worksheet both show as "10x") — surfacing them
+ *  twice in the legend is just noise. The first id in each group is
+ *  used to look up the colour. */
+const INPUT_LEGEND: Array<{ label: string; types: string[] }> = [
+  { label: 'Weekly journal', types: ['weekly_journal'] },
+  { label: 'Monthly journal', types: ['monthly_journal'] },
+  { label: 'Zoom transcript', types: ['transcript'] },
+  { label: '10x / goal worksheet', types: ['ten_x_goal', 'goal_worksheet'] },
+  { label: 'Intake', types: ['intake'] },
+  { label: 'Self-assessment', types: ['self_assessment'] },
+  { label: 'Other', types: ['unknown', 'coach_note', 'fallback_doc', 'support_feedback'] },
+];
+
 import {
   CONTENT_TYPE_DOT,
   PHASE_DOT,
@@ -102,20 +117,65 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
         </div>
       ))}
 
-      {/* Phase legend */}
-      <div className="flex items-center gap-3 border-t border-border bg-muted/30 px-4 py-2 text-[11px]">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          phase
-        </span>
-        {(['gathering', 'ready', 'generated', 'sent', 'idle'] as const).map((p) => (
-          <span key={p} className="inline-flex items-center gap-1.5">
-            <span
-              className="inline-block h-2 w-3 rounded-sm"
-              style={{ background: PHASE_FILL[p], border: `1px solid ${PHASE_STROKE[p]}` }}
-            />
-            <span className="capitalize text-muted-foreground">{p}</span>
+      {/* Legend — two rows.
+          Phase = colour of the cycle bar itself. Inputs = colour of the
+          dots stacked inside each bar (one dot per submitted input).
+          Lauren asked for this so the Gantt is interpretable at a glance
+          without having to hover every dot. */}
+      <div className="space-y-1.5 border-t border-border bg-muted/30 px-4 py-2.5 text-[11px]">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            cycle phase
           </span>
-        ))}
+          {(['gathering', 'ready', 'generated', 'sent', 'idle'] as const).map((p) => (
+            <span key={p} className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-3 rounded-sm"
+                style={{
+                  background: PHASE_FILL[p],
+                  border: `1px solid ${PHASE_STROKE[p]}`,
+                }}
+              />
+              <span className="capitalize text-muted-foreground">{p}</span>
+            </span>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            input type
+          </span>
+          {INPUT_LEGEND.map(({ types, label }) => {
+            const color = CONTENT_TYPE_DOT[types[0]] ?? 'var(--muted-foreground)';
+            return (
+              <span key={label} className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block"
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 4,
+                    background: color,
+                    border: `1px solid ${color}`,
+                  }}
+                />
+                <span className="text-muted-foreground">{label}</span>
+              </span>
+            );
+          })}
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block"
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 4,
+                background: 'transparent',
+                border: '1px solid var(--muted-foreground)',
+              }}
+            />
+            <span className="text-muted-foreground">unconfirmed (hollow)</span>
+          </span>
+        </div>
       </div>
 
       {drawerTarget && (

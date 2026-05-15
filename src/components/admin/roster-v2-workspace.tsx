@@ -85,44 +85,57 @@ export function CycleWorkspace({
 
   return (
     <div className="border-t border-border bg-muted/20">
-      {/* Cycle tabs */}
+      {/* Cycle tabs — horizontally scrollable when a CEO has many
+          cycles. The right-edge fade is a visible scroll affordance
+          (macOS hides scrollbars by default, so without this users
+          can't see there's more content offscreen). */}
       <div
-        className="flex items-center gap-1 border-b border-border px-12"
+        className="relative border-b border-border"
         style={{ paddingTop: 8 }}
       >
-        {cycles.map((c) => {
-          const active = c.id === activeCycleId;
-          return (
-            <button
-              key={c.id}
-              onClick={() => onActiveCycleIdChange(c.id)}
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
-                active
-                  ? 'border-b-2 text-foreground'
-                  : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground'
-              )}
-              style={{
-                borderBottomColor: active ? 'var(--foreground)' : 'transparent',
-                marginBottom: -1,
-              }}
-            >
-              <span
-                className="inline-block h-1.5 w-1.5 rounded-full"
-                style={{ background: PHASE_DOT[c.phase] }}
-              />
-              {deriveCycleLabel(c)}
-            </button>
-          );
-        })}
-        <button
-          onClick={() => setNewCycleOpen(true)}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-          style={{ marginBottom: -1 }}
+        <div
+          className="flex items-center gap-1 overflow-x-auto px-12 pb-px [scrollbar-color:var(--muted-foreground)_transparent] [scrollbar-width:thin]"
         >
-          <Plus className="h-3 w-3" /> New cycle
-        </button>
-        <span className="flex-1" />
+          {cycles.map((c) => {
+            const active = c.id === activeCycleId;
+            return (
+              <button
+                key={c.id}
+                onClick={() => onActiveCycleIdChange(c.id)}
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
+                  active
+                    ? 'border-b-2 text-foreground'
+                    : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground'
+                )}
+                style={{
+                  borderBottomColor: active ? 'var(--foreground)' : 'transparent',
+                  marginBottom: -1,
+                }}
+              >
+                <span
+                  className="inline-block h-1.5 w-1.5 rounded-full"
+                  style={{ background: PHASE_DOT[c.phase] }}
+                />
+                {deriveCycleLabel(c)}
+              </button>
+            );
+          })}
+          <button
+            onClick={() => setNewCycleOpen(true)}
+            className="inline-flex shrink-0 items-center gap-1 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            style={{ marginBottom: -1 }}
+          >
+            <Plus className="h-3 w-3" /> New cycle
+          </button>
+          <span className="shrink-0 pr-12" />
+        </div>
+        {/* Right-edge gradient cue: more cycles offscreen. Pointer-events
+            none so it doesn't block the rightmost tab. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-background to-transparent"
+        />
       </div>
 
       <CycleBody
@@ -976,6 +989,65 @@ function jobStageLabel(status: string): string {
   }
 }
 
+/** Inline plain-language explainer for the three generation modes.
+ *  Collapses by default; click to expand. Lives directly under the
+ *  three Generate buttons so a coach who's unsure which to click can
+ *  read about them without leaving the page or hunting through docs. */
+function GenerationModeExplainer() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground hover:text-foreground"
+      >
+        <ChevronRight
+          className={cn(
+            'h-2.5 w-2.5 transition-transform',
+            open && 'rotate-90',
+          )}
+        />
+        <span>What&apos;s the difference between these?</span>
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-1.5 rounded-md border border-border bg-muted/20 px-2.5 py-2 text-[10.5px] leading-relaxed text-muted-foreground">
+          <p>
+            <span className="font-semibold text-foreground">
+              Instant (~50s).
+            </span>{' '}
+            The AI writes a draft straight from the inputs. Fastest, but it
+            won&apos;t cite specific quotes or compare to prior cycles. Best
+            when you&apos;re short on time and plan to edit heavily yourself.
+          </p>
+          <p>
+            <span className="font-semibold text-foreground">
+              Quick (~5 min) — recommended.
+            </span>{' '}
+            The AI first extracts the named stakeholders, KPIs, commitments
+            and emotional moments from the inputs (with citations back to
+            the source), looks at how this month compares to prior cycles,
+            and then writes the draft. Good balance of speed and grounding.
+          </p>
+          <p>
+            <span className="font-semibold text-foreground">
+              Full polish (~15 min).
+            </span>{' '}
+            Everything Quick does, plus the AI reviews its own draft against
+            a 9-point quality rubric and rewrites any weak sections (up to
+            two revision passes). Highest quality, longest wait.
+          </p>
+          <p className="pt-1 text-muted-foreground/80">
+            All three modes will generate even when inputs are missing —
+            Quick and Full will explicitly flag the gaps in the report;
+            Instant just produces thinner prose in those spots.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReadinessCard({
   ceoId,
   ceoName,
@@ -1204,7 +1276,7 @@ function ReadinessCard({
                   setConfirmGapsOpen(true);
                 }
               }}
-              title="Single-shot legacy generator. Fastest but no structural grounding."
+              title="Fastest option. The AI writes a draft directly from the inputs without first extracting structured facts. Good when you're short on time and plan to edit heavily yourself."
             >
               {generate.isPending ? (
                 <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
@@ -1225,7 +1297,7 @@ function ReadinessCard({
                   setConfirmGapsOpen(true);
                 }
               }}
-              title="Extract typed facts + cross-cycle patterns + draft. No rubric review."
+              title="Recommended default. The AI reads every input, extracts the named stakeholders, KPIs, commitments and emotional events with citations back to the source, looks at how this month compares to prior cycles, then writes the draft."
             >
               {generate.isPending ? (
                 <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
@@ -1246,11 +1318,21 @@ function ReadinessCard({
                   setConfirmGapsOpen(true);
                 }
               }}
-              title="Runs the rubric self-check + up to 2 polish passes for the highest-quality output."
+              title="Everything Quick does, plus the AI reviews its own draft against a 9-point quality rubric and rewrites any weak sections (up to 2 passes). Highest-quality output, longest wait."
             >
               <Sparkles className="mr-1.5 h-3 w-3" />
               Full polish (~15 min)
             </Button>
+            {/* Plain-language explainer the coach can expand inline. Keeps
+                the buttons themselves uncluttered while still answering
+                "what's the difference?" without leaving the page. */}
+            <GenerationModeExplainer />
+            {!isReady && (
+              <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                Heads-up: you can generate even with missing inputs — the
+                report will use what&apos;s there and flag what isn&apos;t.
+              </p>
+            )}
             {generate.error && (
               <p className="mt-1 text-[11px] text-destructive">
                 {generate.error.message}

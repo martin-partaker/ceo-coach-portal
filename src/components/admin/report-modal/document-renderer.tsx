@@ -3,6 +3,7 @@
 import { forwardRef } from 'react';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { cn } from '@/lib/utils';
+import { RefineChatButton } from '@/components/admin/report-v2-extensions';
 
 /**
  * Renders a v2 DraftedReport as a styled document that mimics the PDF
@@ -91,6 +92,10 @@ type Props = {
   /** When true, render a "draft" watermark — used to distinguish first
    *  draft vs revised in the version toggle. */
   watermark?: string;
+  /** When provided, each section gets a hover "Refine" affordance that
+   *  opens a per-section chat (Stage E). Omit on legacy views that
+   *  don't have a refineable backing report. */
+  reportId?: string;
 };
 
 export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function DocumentRenderer(
@@ -105,6 +110,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
     emphasizedSection,
     onSectionClick,
     watermark,
+    reportId,
   },
   ref,
 ) {
@@ -152,6 +158,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             highlighted={highlightSections?.has('goalSummary')}
             emphasized={emphasizedSection === 'goalSummary'}
             onClick={() => onSectionClick?.('goalSummary')}
+            reportId={reportId}
           >
             <dl className="space-y-2 text-[14px] leading-relaxed">
               {r.goalSummary.tenX && (
@@ -197,6 +204,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             highlighted={highlightSections?.has('progressSummary')}
             emphasized={emphasizedSection === 'progressSummary'}
             onClick={() => onSectionClick?.('progressSummary')}
+            reportId={reportId}
           >
             <Markdown text={r.progressSummary} size="sm" />
           </DocSection>
@@ -211,6 +219,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             highlighted={highlightSections?.has('keyWins')}
             emphasized={emphasizedSection === 'keyWins'}
             onClick={() => onSectionClick?.('keyWins')}
+            reportId={reportId}
           >
             <ul className="ml-5 list-disc space-y-1.5 text-[14px] leading-relaxed marker:text-emerald-500">
               {r.keyWins.map((w, i) => (
@@ -236,6 +245,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             highlighted={highlightSections?.has('challenges')}
             emphasized={emphasizedSection === 'challenges'}
             onClick={() => onSectionClick?.('challenges')}
+            reportId={reportId}
           >
             <ul className="ml-5 list-disc space-y-1.5 text-[14px] leading-relaxed marker:text-amber-500">
               {r.challenges.map((c, i) => (
@@ -262,6 +272,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             highlighted={highlightSections?.has('patternObservations')}
             emphasized={emphasizedSection === 'patternObservations'}
             onClick={() => onSectionClick?.('patternObservations')}
+            reportId={reportId}
           >
             <Markdown text={r.patternObservations} size="sm" />
           </DocSection>
@@ -283,6 +294,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             highlighted={highlightSections?.has('suggestedNextSteps')}
             emphasized={emphasizedSection === 'suggestedNextSteps'}
             onClick={() => onSectionClick?.('suggestedNextSteps')}
+            reportId={reportId}
           >
             <ol className="ml-5 list-decimal space-y-1.5 text-[14px] leading-relaxed marker:font-semibold marker:text-blue-500">
               {r.suggestedNextSteps.map((s, i) => (
@@ -306,6 +318,7 @@ function DocSection({
   highlighted,
   emphasized,
   onClick,
+  reportId,
 }: {
   id: DocumentSectionId;
   number: number;
@@ -314,22 +327,38 @@ function DocSection({
   highlighted?: boolean;
   emphasized?: boolean;
   onClick?: () => void;
+  reportId?: string;
 }) {
+  // `goalSummary` isn't a refineable section (it's derived from
+  // CycleFacts); the rest map 1:1 to the refine schema's RefinableSection.
+  const refineSection: string | null = id === 'goalSummary' ? null : id;
   return (
     <section
       data-section={id}
       onClick={onClick}
       className={cn(
-        'scroll-mt-20 rounded-md px-3 py-2 transition-colors',
-        '-mx-3 cursor-pointer',
+        'group scroll-mt-20 rounded-md px-3 py-2 transition-colors',
+        '-mx-3',
         highlighted && 'ring-1 ring-amber-500/30',
         emphasized && 'bg-amber-500/5 ring-2 ring-amber-500/40',
-        onClick && 'hover:bg-muted/30',
+        onClick && 'cursor-pointer hover:bg-muted/30',
       )}
     >
-      <h2 className="mb-2 text-base font-semibold">
-        <span className="text-muted-foreground">{number}.</span> {title}
-      </h2>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-base font-semibold">
+          <span className="text-muted-foreground">{number}.</span> {title}
+        </h2>
+        {reportId && refineSection && (
+          <div
+            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            // Stop click bubbling so opening the refine sheet doesn't
+            // also trigger the section's onClick handler.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <RefineChatButton reportId={reportId} section={refineSection} />
+          </div>
+        )}
+      </div>
       {children}
     </section>
   );

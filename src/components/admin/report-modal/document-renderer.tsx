@@ -3,7 +3,7 @@
 import { forwardRef } from 'react';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { cn } from '@/lib/utils';
-import { RefineChatButton } from '@/components/admin/report-v2-extensions';
+import { RefineSectionPopover } from './refine-section-popover';
 
 /**
  * Renders a v2 DraftedReport as a styled document that mimics the PDF
@@ -355,7 +355,7 @@ function DocSection({
             // also trigger the section's onClick handler.
             onClick={(e) => e.stopPropagation()}
           >
-            <RefineChatButton reportId={reportId} section={refineSection} />
+            <RefineSectionPopover reportId={reportId} section={refineSection} />
           </div>
         )}
       </div>

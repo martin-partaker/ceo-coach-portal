@@ -285,6 +285,25 @@ export const reportsRouter = createTRPCRouter({
       return report ?? null;
     }),
 
+  /** Fetch a single report by its id. Used by the refine-section
+   *  popover so it can read the current section value without
+   *  re-deriving it from the modal's getForCycle cache (which the
+   *  popover isn't always nested inside, e.g. when opened from the
+   *  inspector). */
+  getForReportId: protectedProcedure
+    .input(z.object({ reportId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      // Auth: same cycle-ownership check as everywhere else.
+      await loadCycleAndCeo(ctx, report.cycleId);
+      return report;
+    }),
+
   /**
    * Returns the prompt that `generate` would build, without calling Claude
    * or persisting anything. Used by the "Inspect prompt" inspector so the
@@ -1246,6 +1265,120 @@ export const reportsRouter = createTRPCRouter({
         .returning();
 
       return { report: updated, snapshot: refinement.snapshot };
+    }),
+
+  /** Undo the latest AI refinement on a section. Pops the most recent
+   *  assistant turn off the chat log AND its preceding user turn (we
+   *  pair them so the chat history stays clean), then restores the
+   *  section to whichever snapshot was current BEFORE that turn.
+   *
+   *  - If there's an older assistant snapshot for this section, we
+   *    restore that.
+   *  - If there isn't, we delete the latest two turns and leave the
+   *    section as-is — there's nothing earlier to revert to. Coach can
+   *    edit raw if they want a clean slate.
+   *
+   *  Does NOT touch pins. Manual raw edits made via reports.update are
+   *  not in the chat history so this won't accidentally undo those. */
+  revertSectionToPriorTurn: protectedProcedure
+    .input(
+      z.object({
+        reportId: z.string().uuid(),
+        section: z.enum(REFINABLE_SECTIONS),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [report] = await ctx.db
+        .select()
+        .from(reports)
+        .where(eq(reports.id, input.reportId))
+        .limit(1);
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadCycleAndCeo(ctx, report.cycleId);
+
+      // Pull turns for this (report, section), newest first.
+      const turns = await ctx.db
+        .select()
+        .from(reportRefinements)
+        .where(
+          and(
+            eq(reportRefinements.reportId, input.reportId),
+            eq(reportRefinements.section, input.section),
+          ),
+        )
+        .orderBy(desc(reportRefinements.createdAt));
+
+      // Need at least one assistant turn to revert from.
+      const latestAssistant = turns.find((t) => t.role === 'assistant');
+      if (!latestAssistant) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Nothing to undo — no AI refinements on file for this section.',
+        });
+      }
+
+      // The snapshot to restore is the assistant turn IMMEDIATELY BEFORE
+      // the latest one. If none exists, the previous state is whatever
+      // the section looked like before any refinement — which we don't
+      // store explicitly. Fall back to: take the latest assistant's
+      // own snapshot off and remove the corresponding user turn, but
+      // leave the contentJson alone (coach can re-refine or raw-edit).
+      const assistantTurns = turns.filter((t) => t.role === 'assistant');
+      const previousAssistant =
+        assistantTurns.length >= 2 ? assistantTurns[1] : null;
+      const restoreSnapshot = previousAssistant?.sectionSnapshot ?? null;
+
+      // Find the user turn paired with the latest assistant (the one
+      // that immediately preceded it chronologically).
+      const latestAssistantIdx = turns.findIndex((t) => t.id === latestAssistant.id);
+      const pairedUserTurn = turns
+        .slice(latestAssistantIdx + 1)
+        .find((t) => t.role === 'user');
+
+      // Delete the latest assistant turn + its paired user turn.
+      const idsToDelete = [latestAssistant.id, pairedUserTurn?.id].filter(
+        (id): id is string => !!id,
+      );
+      await ctx.db
+        .delete(reportRefinements)
+        .where(inArray(reportRefinements.id, idsToDelete));
+
+      // If we have something to restore, apply it. List fields are
+      // stored as bullet-joined strings in sectionSnapshot for
+      // human readability; round-trip via the same delimiter the
+      // refiner uses ("\n• ").
+      if (restoreSnapshot !== null) {
+        const current = (report.contentJson ?? {}) as DraftedReport;
+        const isList = (
+          ['keyWins', 'challenges', 'suggestedNextSteps'] as const
+        ).includes(input.section as 'keyWins' | 'challenges' | 'suggestedNextSteps');
+        const restoredValue: string | string[] = isList
+          ? restoreSnapshot
+              .split('\n• ')
+              .map((s) => s.replace(/^•\s*/, '').trim())
+              .filter(Boolean)
+          : restoreSnapshot;
+        const reverted = applyRefinement(
+          current,
+          input.section as RefinableSection,
+          restoredValue,
+        );
+        const rawText = composeEmailRawText(reverted);
+        const [updated] = await ctx.db
+          .update(reports)
+          .set({
+            contentJson: reverted as unknown as Record<string, unknown>,
+            rawText,
+          })
+          .where(eq(reports.id, input.reportId))
+          .returning();
+        return { report: updated, restored: true };
+      }
+
+      // Nothing earlier to restore — return the report as-is with the
+      // chat log trimmed. UI shows a toast suggesting raw edit if the
+      // coach wants a clean slate.
+      return { report, restored: false };
     }),
 
   /** Pin a paragraph in a section so it's preserved across regenerations

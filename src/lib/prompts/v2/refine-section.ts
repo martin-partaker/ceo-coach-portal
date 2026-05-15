@@ -8,7 +8,7 @@ import type {
   RefinableSection,
   DraftedReport,
 } from './schemas';
-import type { CycleContext } from './context';
+import { renderContextForModel, subjectNaming, type CycleContext } from './context';
 import { stripEm, assertNotTruncated } from './post-process';
 
 
@@ -33,16 +33,18 @@ import { stripEm, assertNotTruncated } from './post-process';
  */
 
 const SYSTEM_TEMPLATE = (
-  ceoFirstName: string,
+  subjectHandle: string,
+  isTeam: boolean,
   coachName: string,
   section: RefinableSection,
   isListField: boolean,
-) => `You are ${coachName}, refining the "${section}" section of a monthly coaching summary you wrote for your CEO client ${ceoFirstName}. The coach is iterating with you on this single section. Other sections of the report are NOT in play — only ${section}.
+) => `You are ${coachName}, refining the "${section}" section of a monthly coaching summary you wrote for ${isTeam ? `your coaching team ${subjectHandle}` : `your CEO client ${subjectHandle}`}. The coach is iterating with you on this single section. Other sections of the report are NOT in play — only ${section}.
 
 ## Inputs you have
-- The full current drafted report (so you know what surrounds this section).
-- The CycleFacts (typed extraction of every concrete fact in the cycle).
-- The Patterns (cross-cycle observations).
+- The full current drafted report (so you know what surrounds this section — every change must stay coherent with the other sections).
+- **CycleFacts** — typed extraction of every concrete fact in the cycle, with sourceRefs back to journals / transcripts / KPIs. Cite these.
+- **Patterns** — cross-cycle observations (carrying-forward, evolving, resolving, new).
+- **Raw cycle inputs** — the original journals, monthly reflection, transcript, KPI series. Use these when the coach asks for something that's NOT in CycleFacts but IS in the raw inputs (a specific phrase from a journal, a number not picked up by extraction, etc.).
 - Any pinned paragraphs the coach wants kept verbatim.
 - The chat history with the coach about THIS section.
 
@@ -52,11 +54,12 @@ You will return ONLY the new value for the "${section}" section. ${isListField
   ? 'It is a list field — return a JSON array of strings, e.g. ["item 1", "item 2"]. No prose, no markdown fences, no explanation.'
   : 'It is a prose field — return a plain string with no markdown fences and no prefatory commentary. Just the new content.'}
 
-## Quality
-- Match the coach's voice (warm but direct, second-person to ${ceoFirstName}, named-concept anchors from the framework where natural).
-- Cite specifics from CycleFacts. Do not invent numbers, names, or events.
+## Quality bar (you wrote this report against these standards; refinements must preserve them)
+- Match the coach's voice — warm but direct, second-person to ${subjectHandle}${isTeam ? ` ("you both" / "the two of you" for joint moments, ${subjectHandle.split(' & ')[0]} or other member name for role-specific beats)` : ''}, named-concept anchors from the framework where natural (10x goal, constraint, say/do gap, momentum).
+- Every concrete claim must trace back to a CycleFact's evidenceClaim or a verbatim line in the raw inputs. DO NOT invent numbers, names, dates, events, or quotes.
+- Preserve specificity: if the current section names a person, a number, or a deadline, the refined version should still have at least one of each (unless the coach explicitly removes them).
 - If the coach asks to keep a pinned paragraph, include it verbatim somewhere in your output.
-- If the coach's request can't be honored from the available facts, say so in a single line and stop.`;
+- If the coach's request can't be honored from the available facts or raw inputs, say so in a single line and stop. Don't make something up to comply.`;
 
 export type RefinementHistoryItem = { role: 'user' | 'assistant'; content: string };
 
@@ -134,7 +137,7 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
     history,
     pinnedParagraphs = [],
   } = args;
-  const ceoFirstName = ctx.ceo.name.split(' ')[0];
+  const naming = subjectNaming(ctx);
   const isList = LIST_FIELDS.has(section);
 
   const currentValue = getCurrentSectionValue(currentDraft, section);
@@ -142,22 +145,31 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
     ? JSON.stringify(currentValue, null, 2)
     : currentValue;
 
-  // Initial user turn carries the context. Subsequent turns are the chat.
+  // Initial user turn carries the FULL context the drafter saw — typed
+  // facts, patterns, the entire current draft, AND the raw rendered
+  // cycle inputs (journals, transcripts, KPIs, monthly reflection,
+  // prior reports). Without the raw inputs, a refinement like "pull in
+  // that specific line from Dave's Week 3" is impossible to honor when
+  // the line never made it into the typed extraction. The extra tokens
+  // are worth it — refinements are infrequent and high-stakes.
   const contextTurnContent = [
     `## Current full draft (for surrounding-context awareness)`,
     '```json',
     JSON.stringify(currentDraft, null, 2),
     '```',
     '',
-    `## CycleFacts`,
+    `## CycleFacts (typed extraction with citations)`,
     '```json',
     JSON.stringify(facts, null, 2),
     '```',
     '',
-    `## Patterns`,
+    `## Patterns (cross-cycle)`,
     '```json',
     JSON.stringify(patterns, null, 2),
     '```',
+    '',
+    `## Raw cycle inputs (verbatim — use when refinement requires something not captured in CycleFacts)`,
+    renderContextForModel(ctx),
     '',
     `## Current value of "${section}"`,
     isList ? '```json' : '"""',
@@ -197,7 +209,13 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
     {
       model: modelId,
       max_tokens: maxTokens,
-      system: SYSTEM_TEMPLATE(ceoFirstName, ctx.coachName, section, isList),
+      system: SYSTEM_TEMPLATE(
+        naming.subjectHandle,
+        naming.isTeam,
+        ctx.coachName,
+        section,
+        isList,
+      ),
       messages,
     },
     'Stage E',

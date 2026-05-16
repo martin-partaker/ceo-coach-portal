@@ -118,6 +118,20 @@ export function RosterV2Row({
     ceoCycleIds.has(j.cycleId),
   );
 
+  // Roster-wide batch of "how many inbox items might be this CEO's?".
+  // Single shared query across every row in the table (react-query
+  // dedupes by key), so adding the badge doesn't N+1 the API. For a
+  // coaching-team row, sum across every team member's CEO id so the
+  // badge reflects the joint subject's full triage backlog.
+  const triageCounts = trpc.inbox.triagePendingCounts.useQuery();
+  const triageMemberIds = summary.team
+    ? summary.team.members.map((m) => m.id)
+    : [summary.ceo.id];
+  const triageCount = triageMemberIds.reduce(
+    (n, id) => n + (triageCounts.data?.[id] ?? 0),
+    0,
+  );
+
   return (
     <div
       className={cn(
@@ -215,6 +229,19 @@ export function RosterV2Row({
                 >
                   <Loader2 className="h-2.5 w-2.5 animate-spin" />
                   Generating · {liveJobForCeo.cycleLabel}
+                </span>
+              )}
+              {triageCount > 0 && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                  style={{
+                    background:
+                      'color-mix(in oklab, oklch(58% 0.13 64), transparent 88%)',
+                    color: 'oklch(58% 0.13 64)',
+                  }}
+                  title={`The AI thinks ${triageCount} inbox item${triageCount === 1 ? '' : 's'} might belong here. Open the workspace to review.`}
+                >
+                  {triageCount} to triage
                 </span>
               )}
             </div>

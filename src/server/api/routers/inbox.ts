@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { eq, desc, and, sql, inArray, isNotNull, isNull } from 'drizzle-orm';
+import { eq, desc, and, or, sql, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
+import { createTRPCRouter, adminProcedure, protectedProcedure } from '@/server/api/trpc';
 import {
   rawInputs,
   rawInputCeos,
@@ -1196,4 +1196,377 @@ export const inboxRouter = createTRPCRouter({
       await projectRawInput(input.rawInputId);
       return { ok: true };
     }),
+
+  // ──────────────────────────────────────────────────────────────────
+  // Coach-scoped triage hooks. These power the "untriaged content
+  // might be this CEO's" guard rail that fires before the generate
+  // pipeline. Each procedure scopes to a CEO the coach actually owns
+  // (super admins bypass the check), so it's safe to call from the
+  // coach-facing roster workspace where adminProcedure can't reach.
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Pending raw_inputs the triage suggester thinks might belong to
+   * `ceoId`, bucketed by confidence + match kind. Drives the modal
+   * that gates `generateV2` so a coach can confirm or dismiss likely
+   * matches inline before kicking off a report.
+   *
+   * Buckets:
+   *   - highConfidence — `pending_ceo` rows where the AI's primary
+   *     guess IS this CEO and match_confidence ≥ 85.
+   *   - lowConfidence  — same, but match_confidence < 85.
+   *   - alternative    — `pending_ceo` rows where this CEO is a
+   *     suggested alternative (AI's top pick was a different CEO).
+   *   - pendingCycle   — already matched to this CEO but no cycle
+   *     could be resolved (rare after the strict-matcher fix; the
+   *     coach has to pick which cycle they live in).
+   */
+  pendingForCeo: protectedProcedure
+    .input(z.object({ ceoId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      await ensureCoachOwnsCeo(ctx, input.ceoId);
+
+      const HIGH_CONF = 85;
+
+      // Single query covers all three buckets. The `@>` JSONB
+      // containment operator lets us check if `ceoId` appears
+      // anywhere inside the suggestedAlternatives array.
+      const rows = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(
+          or(
+            and(
+              eq(rawInputs.matchStatus, 'pending_ceo'),
+              eq(rawInputs.suggestedCeoId, input.ceoId),
+            ),
+            and(
+              eq(rawInputs.matchStatus, 'pending_ceo'),
+              sql`${rawInputs.suggestedAlternatives}::jsonb @> ${JSON.stringify([
+                { ceoId: input.ceoId },
+              ])}::jsonb`,
+            ),
+            and(
+              eq(rawInputs.matchStatus, 'pending_cycle'),
+              eq(rawInputs.ceoId, input.ceoId),
+            ),
+          ),
+        )
+        .orderBy(desc(rawInputs.occurredAt));
+
+      type Item = {
+        rawInputId: string;
+        contentType: string;
+        occurredAt: Date;
+        suggestedReason: string | null;
+        matchConfidence: number | null;
+        textPreview: string;
+      };
+
+      const buckets = {
+        highConfidence: [] as Item[],
+        lowConfidence: [] as Item[],
+        alternative: [] as Item[],
+        pendingCycle: [] as Item[],
+      };
+
+      for (const r of rows) {
+        const item: Item = {
+          rawInputId: r.id,
+          contentType: r.contentType,
+          occurredAt: r.occurredAt,
+          suggestedReason: r.suggestedReason,
+          matchConfidence: r.matchConfidence,
+          textPreview: (r.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
+        };
+
+        if (r.matchStatus === 'pending_cycle') {
+          buckets.pendingCycle.push(item);
+          continue;
+        }
+        if (r.suggestedCeoId === input.ceoId) {
+          if ((r.matchConfidence ?? 0) >= HIGH_CONF) {
+            buckets.highConfidence.push(item);
+          } else {
+            buckets.lowConfidence.push(item);
+          }
+          continue;
+        }
+        // Otherwise the query matched because ceoId is inside
+        // suggestedAlternatives.
+        buckets.alternative.push(item);
+      }
+
+      const total =
+        buckets.highConfidence.length +
+        buckets.lowConfidence.length +
+        buckets.alternative.length +
+        buckets.pendingCycle.length;
+
+      return { ...buckets, total };
+    }),
+
+  /**
+   * Confirm that a single `pending_ceo` row really belongs to `ceoId`.
+   * Mirrors the core of admin `assignToCeo` but scoped to a single
+   * CEO and gated by coach ownership. Resolves a cycle, flips to
+   * `matched`, replaces raw_input_ceos membership, and re-projects.
+   */
+  confirmPendingForCeo: protectedProcedure
+    .input(
+      z.object({
+        rawInputId: z.string().uuid(),
+        ceoId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const ceo = await ensureCoachOwnsCeo(ctx, input.ceoId);
+
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const cycleMatch = await ensureCycleForCeoAndDate({
+        ceoId: input.ceoId,
+        occurredAt: raw.occurredAt,
+      });
+
+      await ctx.db
+        .update(rawInputs)
+        .set({
+          ceoId: input.ceoId,
+          coachId: ceo.coachId,
+          cycleId: cycleMatch.cycleId,
+          matchStatus: 'matched',
+          matchConfidence: cycleMatch.confident ? 100 : 75,
+          resolvedAt: new Date(),
+          resolvedBy: ctx.coach.id,
+        })
+        .where(eq(rawInputs.id, input.rawInputId));
+
+      await ctx.db
+        .delete(rawInputCeos)
+        .where(eq(rawInputCeos.rawInputId, input.rawInputId));
+      await ctx.db
+        .insert(rawInputCeos)
+        .values({ rawInputId: input.rawInputId, ceoId: input.ceoId })
+        .onConflictDoNothing();
+
+      await projectRawInput(input.rawInputId);
+      return { ok: true };
+    }),
+
+  /**
+   * "Not this CEO". Doesn't try to guess who it actually belongs to —
+   * the row stays in pending_ceo for the admin inbox to triage. We
+   * just remove the suggestion pointer(s) for this CEO so it stops
+   * surfacing in their workspace dialog.
+   */
+  dismissPendingForCeo: protectedProcedure
+    .input(
+      z.object({
+        rawInputId: z.string().uuid(),
+        ceoId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await ensureCoachOwnsCeo(ctx, input.ceoId);
+
+      const [raw] = await ctx.db
+        .select()
+        .from(rawInputs)
+        .where(eq(rawInputs.id, input.rawInputId))
+        .limit(1);
+      if (!raw) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const update: { suggestedCeoId?: null; suggestedReason?: null; suggestedAlternatives?: unknown } = {};
+
+      if (raw.suggestedCeoId === input.ceoId) {
+        update.suggestedCeoId = null;
+        update.suggestedReason = null;
+      }
+      const alts = raw.suggestedAlternatives as
+        | Array<{ ceoId: string; reason: string }>
+        | null;
+      if (Array.isArray(alts)) {
+        const filtered = alts.filter((a) => a.ceoId !== input.ceoId);
+        if (filtered.length !== alts.length) {
+          update.suggestedAlternatives = filtered;
+        }
+      }
+      if (Object.keys(update).length === 0) return { ok: true, changed: false };
+
+      await ctx.db
+        .update(rawInputs)
+        .set(update)
+        .where(eq(rawInputs.id, input.rawInputId));
+      return { ok: true, changed: true };
+    }),
+
+  /**
+   * Bulk-confirm the "high-confidence" set in one shot. Used by the
+   * dialog's "Confirm all" button so the coach doesn't have to click
+   * each green-light item individually.
+   */
+  bulkConfirmPendingForCeo: protectedProcedure
+    .input(
+      z.object({
+        rawInputIds: z.array(z.string().uuid()).min(1).max(50),
+        ceoId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const ceo = await ensureCoachOwnsCeo(ctx, input.ceoId);
+
+      let confirmed = 0;
+      for (const rawInputId of input.rawInputIds) {
+        const [raw] = await ctx.db
+          .select()
+          .from(rawInputs)
+          .where(eq(rawInputs.id, rawInputId))
+          .limit(1);
+        if (!raw) continue;
+
+        const cycleMatch = await ensureCycleForCeoAndDate({
+          ceoId: input.ceoId,
+          occurredAt: raw.occurredAt,
+        });
+
+        await ctx.db
+          .update(rawInputs)
+          .set({
+            ceoId: input.ceoId,
+            coachId: ceo.coachId,
+            cycleId: cycleMatch.cycleId,
+            matchStatus: 'matched',
+            matchConfidence: cycleMatch.confident ? 100 : 75,
+            resolvedAt: new Date(),
+            resolvedBy: ctx.coach.id,
+          })
+          .where(eq(rawInputs.id, rawInputId));
+
+        await ctx.db
+          .delete(rawInputCeos)
+          .where(eq(rawInputCeos.rawInputId, rawInputId));
+        await ctx.db
+          .insert(rawInputCeos)
+          .values({ rawInputId, ceoId: input.ceoId })
+          .onConflictDoNothing();
+
+        await projectRawInput(rawInputId);
+        confirmed += 1;
+      }
+
+      return { confirmed };
+    }),
+
+  /**
+   * Batched pending-triage counts for the roster row badges. Returns a
+   * map of `ceoId -> count` covering every CEO the calling coach owns
+   * (super admins get every CEO with > 0). One query, no per-row N+1.
+   *
+   * "Count" mirrors `pendingForCeo.total`: high+low confidence primary
+   * suggestions, alternative suggestions, and pending_cycle rows.
+   */
+  triagePendingCounts: protectedProcedure.query(async ({ ctx }) => {
+    // Build the CEO scope. Coaches see only their own roster; super
+    // admins are unscoped so they can spot triage backlog org-wide.
+    const ownedCeos = ctx.realCoach?.isSuperAdmin
+      ? await ctx.db.select({ id: ceos.id }).from(ceos)
+      : await ctx.db
+          .select({ id: ceos.id })
+          .from(ceos)
+          .where(eq(ceos.coachId, ctx.coach.id));
+
+    if (ownedCeos.length === 0) return {} as Record<string, number>;
+    const ownedSet = new Set(ownedCeos.map((c) => c.id));
+
+    // Pull every pending row that could match any owned CEO. We do the
+    // bucketing client-side (here) rather than four separate SQL
+    // group-bys, because the alternative bucket needs a JSONB scan and
+    // a single fetch + in-memory grouping is simpler and faster in
+    // practice (pending volume is small).
+    const primarySuggestions = await ctx.db
+      .select({
+        suggestedCeoId: rawInputs.suggestedCeoId,
+      })
+      .from(rawInputs)
+      .where(
+        and(
+          eq(rawInputs.matchStatus, 'pending_ceo'),
+          isNotNull(rawInputs.suggestedCeoId),
+          inArray(rawInputs.suggestedCeoId, Array.from(ownedSet)),
+        ),
+      );
+
+    const pendingCycleRows = await ctx.db
+      .select({ ceoId: rawInputs.ceoId })
+      .from(rawInputs)
+      .where(
+        and(
+          eq(rawInputs.matchStatus, 'pending_cycle'),
+          isNotNull(rawInputs.ceoId),
+          inArray(rawInputs.ceoId, Array.from(ownedSet)),
+        ),
+      );
+
+    // Alternatives: scan all pending_ceo rows with a non-empty alternatives
+    // array, walk the array, and increment counts for owned CEOs that appear.
+    const altRows = await ctx.db
+      .select({ suggestedAlternatives: rawInputs.suggestedAlternatives })
+      .from(rawInputs)
+      .where(
+        and(
+          eq(rawInputs.matchStatus, 'pending_ceo'),
+          sql`jsonb_array_length(coalesce(${rawInputs.suggestedAlternatives}::jsonb, '[]'::jsonb)) > 0`,
+        ),
+      );
+
+    const counts: Record<string, number> = {};
+    for (const r of primarySuggestions) {
+      if (r.suggestedCeoId) counts[r.suggestedCeoId] = (counts[r.suggestedCeoId] ?? 0) + 1;
+    }
+    for (const r of pendingCycleRows) {
+      if (r.ceoId) counts[r.ceoId] = (counts[r.ceoId] ?? 0) + 1;
+    }
+    for (const r of altRows) {
+      const alts = r.suggestedAlternatives as
+        | Array<{ ceoId: string; reason?: string }>
+        | null;
+      if (!Array.isArray(alts)) continue;
+      for (const a of alts) {
+        if (a?.ceoId && ownedSet.has(a.ceoId)) {
+          counts[a.ceoId] = (counts[a.ceoId] ?? 0) + 1;
+        }
+      }
+    }
+
+    return counts;
+  }),
 });
+
+/** Throws unless the calling coach owns `ceoId` (or is a super admin).
+ *  Returns the CEO row so the caller can use it without re-querying. */
+async function ensureCoachOwnsCeo(
+  ctx: {
+    db: typeof import('@/db').db;
+    coach: { id: string };
+    realCoach: { isSuperAdmin: boolean } | null;
+  },
+  ceoId: string,
+) {
+  const filter = ctx.realCoach?.isSuperAdmin
+    ? eq(ceos.id, ceoId)
+    : and(eq(ceos.id, ceoId), eq(ceos.coachId, ctx.coach.id));
+  const [ceo] = await ctx.db.select().from(ceos).where(filter).limit(1);
+  if (!ceo) {
+    throw new TRPCError({
+      code: 'NOT_FOUND',
+      message: 'CEO not found or not owned by this coach',
+    });
+  }
+  return ceo;
+}

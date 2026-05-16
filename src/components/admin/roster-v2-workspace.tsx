@@ -1143,10 +1143,19 @@ function ReadinessCard({
 }) {
   const utils = trpc.useUtils();
   const [confirmGapsOpen, setConfirmGapsOpen] = useState(false);
+  const [pendingTriageOpen, setPendingTriageOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
-  // Captured when the coach clicks Quick / Full while inputs have gaps,
-  // so the ConfirmGapsDialog's confirm button knows which mode to fire.
+  // Captured when the coach clicks any generate button while inputs
+  // have gaps OR there are pending triage items, so the corresponding
+  // dialog knows which mode to fire on confirm.
   const [pendingMode, setPendingMode] = useState<'instant' | 'quick' | 'full'>('quick');
+
+  // Untriaged content the matcher *thinks* might belong to this CEO.
+  // Queried unconditionally so the readiness card can show the warning
+  // chip even before the coach considers generating; the modal reuses
+  // the same query (cached by ceoId) so opening it doesn't double-fetch.
+  const pendingTriage = trpc.inbox.pendingForCeo.useQuery({ ceoId });
+  const pendingTriageCount = pendingTriage.data?.total ?? 0;
 
   // Detect a v2 generation already in flight for THIS cycle. Reuses
   // the global listActiveJobs query the row + corner pill already poll
@@ -1195,6 +1204,27 @@ function ReadinessCard({
       setReviewOpen(true);
     },
   });
+  // Shared entry point for the three generate buttons. Routes through
+  // two guard rails in priority order:
+  //   1. If the matcher has un-triaged content that *might* be this
+  //      CEO's, surface the PendingTriageDialog first — coach can
+  //      confirm or dismiss before generating.
+  //   2. Otherwise, if the cycle still has missing required inputs,
+  //      surface the existing ConfirmGapsDialog (same flow as before).
+  //   3. Otherwise fire the mutation straight away.
+  function attemptGenerate(mode: 'instant' | 'quick' | 'full') {
+    setPendingMode(mode);
+    if (pendingTriageCount > 0) {
+      setPendingTriageOpen(true);
+      return;
+    }
+    if (!isReady) {
+      setConfirmGapsOpen(true);
+      return;
+    }
+    generate.mutate({ cycleId: cycle.id, mode });
+  }
+
   // Order mirrors the left-hand form's top-to-bottom flow so the
   // operator's eye sweeps the same sequence on both columns: the 10x
   // banner is at the top of the page, then Inputs (transcript +
@@ -1327,6 +1357,22 @@ function ReadinessCard({
                 choices rather than three different categories. Quick
                 stays the highlighted/primary option as the recommended
                 balance of speed and quality. */}
+            {pendingTriageCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setPendingTriageOpen(true)}
+                className="mb-0.5 flex items-center gap-1.5 rounded text-left text-[11px] hover:underline"
+                style={{ color: 'oklch(58% 0.13 64)' }}
+                title="The AI thinks there might be more inputs in the inbox for this CEO. Review before generating."
+              >
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                <span>
+                  {pendingTriageCount} item{pendingTriageCount === 1 ? '' : 's'} in
+                  inbox might be {ceoName.split(' ')[0]}&apos;s
+                  <span className="ml-1 text-muted-foreground">→ review</span>
+                </span>
+              </button>
+            )}
             {!isReady && (
               <div
                 className="mb-0.5 flex items-center gap-1.5 text-[11px]"
@@ -1345,13 +1391,7 @@ function ReadinessCard({
               variant="outline"
               className="h-7 text-xs"
               disabled={generate.isPending}
-              onClick={() => {
-                if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'instant' });
-                else {
-                  setPendingMode('instant');
-                  setConfirmGapsOpen(true);
-                }
-              }}
+              onClick={() => attemptGenerate('instant')}
               title="Fastest option. The AI writes a draft directly from the inputs without first extracting structured facts. Good when you're short on time and plan to edit heavily yourself."
             >
               {generate.isPending ? (
@@ -1366,13 +1406,7 @@ function ReadinessCard({
               className="h-7 text-xs"
               disabled={generate.isPending}
               style={{ background: 'oklch(58% 0.14 258)' }}
-              onClick={() => {
-                if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'quick' });
-                else {
-                  setPendingMode('quick');
-                  setConfirmGapsOpen(true);
-                }
-              }}
+              onClick={() => attemptGenerate('quick')}
               title="Recommended default. The AI reads every input, extracts the named stakeholders, KPIs, commitments and emotional events with citations back to the source, looks at how this month compares to prior cycles, then writes the draft."
             >
               {generate.isPending ? (
@@ -1387,13 +1421,7 @@ function ReadinessCard({
               variant="outline"
               className="h-7 text-xs"
               disabled={generate.isPending}
-              onClick={() => {
-                if (isReady) generate.mutate({ cycleId: cycle.id, mode: 'full' });
-                else {
-                  setPendingMode('full');
-                  setConfirmGapsOpen(true);
-                }
-              }}
+              onClick={() => attemptGenerate('full')}
               title="Everything Quick does, plus the AI reviews its own draft against a 9-point quality rubric and rewrites any weak sections (up to 2 passes). Highest-quality output, longest wait."
             >
               <Sparkles className="mr-1.5 h-3 w-3" />
@@ -1425,6 +1453,19 @@ function ReadinessCard({
               onConfirm={() =>
                 generate.mutate({ cycleId: cycle.id, mode: pendingMode })
               }
+            />
+            <PendingTriageDialog
+              open={pendingTriageOpen}
+              onOpenChange={setPendingTriageOpen}
+              ceoId={ceoId}
+              ceoName={ceoName}
+              mode={pendingMode}
+              isReadyToGenerate={isReady}
+              isGeneratePending={generate.isPending}
+              onProceedAfterTriage={() =>
+                generate.mutate({ cycleId: cycle.id, mode: pendingMode })
+              }
+              onProceedAcceptingGaps={() => setConfirmGapsOpen(true)}
             />
           </>
         )}
@@ -1537,6 +1578,405 @@ function ConfirmGapsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Pre-generation triage guard rail.
+ *
+ * Surfaces every raw_input the matcher *suspects* belongs to this CEO
+ * but hasn't fully resolved yet — so the coach can confirm or dismiss
+ * them inline before kicking off a report that would otherwise miss
+ * potentially important context.
+ *
+ * Three confidence buckets:
+ *   • highConfidence — AI's primary guess + match ≥ 85. Auto-checked
+ *     so the bulk "Confirm all" action is one click.
+ *   • lowConfidence  — AI's primary guess but < 85. Surfaced separately
+ *     so the coach must read each before confirming.
+ *   • alternative    — this CEO is a runner-up; the AI's top pick was
+ *     someone else. Lowest urgency.
+ *   • pendingCycle   — matched to this CEO but couldn't resolve a
+ *     cycle. Rare with the strict matcher.
+ *
+ * "Generate now" closes the dialog and re-enters the generate flow —
+ * if there are still input gaps, it chains into ConfirmGapsDialog.
+ */
+function PendingTriageDialog({
+  open,
+  onOpenChange,
+  ceoId,
+  ceoName,
+  mode,
+  isReadyToGenerate,
+  isGeneratePending,
+  onProceedAfterTriage,
+  onProceedAcceptingGaps,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  ceoId: string;
+  ceoName: string;
+  mode: 'instant' | 'quick' | 'full';
+  /** Whether the cycle has all required inputs after potential confirms. */
+  isReadyToGenerate: boolean;
+  /** Generate mutation pending — disables the "Generate now" CTA. */
+  isGeneratePending: boolean;
+  /** Called when the coach clicks "Generate now" and inputs are ready. */
+  onProceedAfterTriage: () => void;
+  /** Called when the coach clicks "Generate anyway" with gaps still present.
+   *  ReadinessCard chains this to the ConfirmGapsDialog. */
+  onProceedAcceptingGaps: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const isInstant = mode === 'instant';
+
+  const pending = trpc.inbox.pendingForCeo.useQuery(
+    { ceoId },
+    { enabled: open },
+  );
+
+  // Per-row pending flags so we can disable individual buttons while their
+  // mutation is in flight without blocking siblings.
+  const [busyRowIds, setBusyRowIds] = useState<Record<string, boolean>>({});
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // After any triage action: invalidate the dialog's own query (so the
+  // row disappears), the per-cycle readiness / summary (a confirmed
+  // input may flip a readiness slot to green), the admin inbox listing,
+  // and the roster-wide pending-counts batch (so row badges update).
+  async function invalidateAll() {
+    await Promise.all([
+      utils.inbox.pendingForCeo.invalidate({ ceoId }),
+      utils.inbox.triagePendingCounts.invalidate(),
+      utils.roster.cycleDetail.invalidate(),
+      utils.roster.cycleSummary.invalidate(),
+      utils.inbox.listPending.invalidate(),
+    ]);
+  }
+
+  const confirmOne = trpc.inbox.confirmPendingForCeo.useMutation({
+    onSuccess: invalidateAll,
+  });
+  const dismissOne = trpc.inbox.dismissPendingForCeo.useMutation({
+    onSuccess: invalidateAll,
+  });
+  const bulkConfirm = trpc.inbox.bulkConfirmPendingForCeo.useMutation({
+    onSuccess: invalidateAll,
+  });
+
+  async function handleConfirm(rawInputId: string) {
+    setBusyRowIds((s) => ({ ...s, [rawInputId]: true }));
+    try {
+      await confirmOne.mutateAsync({ rawInputId, ceoId });
+    } finally {
+      setBusyRowIds((s) => {
+        const next = { ...s };
+        delete next[rawInputId];
+        return next;
+      });
+    }
+  }
+  async function handleDismiss(rawInputId: string) {
+    setBusyRowIds((s) => ({ ...s, [rawInputId]: true }));
+    try {
+      await dismissOne.mutateAsync({ rawInputId, ceoId });
+    } finally {
+      setBusyRowIds((s) => {
+        const next = { ...s };
+        delete next[rawInputId];
+        return next;
+      });
+    }
+  }
+  async function handleBulkConfirmHigh() {
+    const ids = (pending.data?.highConfidence ?? []).map((i) => i.rawInputId);
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    try {
+      await bulkConfirm.mutateAsync({ rawInputIds: ids, ceoId });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  const total = pending.data?.total ?? 0;
+  const remaining = total; // refetches keep this in sync
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            Before you generate
+          </DialogTitle>
+          <DialogDescription className="pt-1">
+            The AI thinks{' '}
+            <span className="font-medium text-foreground">{remaining}</span>{' '}
+            item{remaining === 1 ? '' : 's'} in the inbox might be{' '}
+            <span className="font-medium text-foreground">{ceoName}</span>&apos;s.
+            Confirm or dismiss each below, then generate.
+          </DialogDescription>
+        </DialogHeader>
+
+        {isInstant && (
+          <div
+            className="mt-2 flex items-start gap-2 rounded-md border px-3 py-2 text-[11.5px] leading-snug"
+            style={{
+              background: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 92%)',
+              borderColor: 'color-mix(in oklab, oklch(58% 0.13 64), transparent 60%)',
+              color: 'oklch(45% 0.12 64)',
+            }}
+          >
+            <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+            <span>
+              <span className="font-medium">Instant mode skips fact extraction</span>,
+              so anything you leave un-triaged here just won&apos;t exist in
+              the report — there&apos;s no stage that can flag it as
+              missing. Quick or Full would at least surface a callout.
+            </span>
+          </div>
+        )}
+
+        {pending.isLoading && (
+          <div className="flex items-center gap-2 py-6 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Checking the inbox…
+          </div>
+        )}
+
+        {!pending.isLoading && total === 0 && (
+          <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-4 text-xs text-emerald-700 dark:text-emerald-400">
+            All clear — nothing else looks like it belongs to {ceoName}.
+            You&apos;re good to generate.
+          </div>
+        )}
+
+        <div className="mt-3 space-y-4">
+          {(pending.data?.highConfidence?.length ?? 0) > 0 && (
+            <TriageBucket
+              label="High confidence"
+              hint="The AI is fairly sure these are this CEO's. Bulk-confirm if they look right."
+              tone="strong"
+              items={pending.data!.highConfidence}
+              busyRowIds={busyRowIds}
+              onConfirm={handleConfirm}
+              onDismiss={handleDismiss}
+              bulkAction={
+                <Button
+                  size="sm"
+                  className="h-7 text-[11px]"
+                  disabled={bulkBusy}
+                  onClick={handleBulkConfirmHigh}
+                  style={{ background: 'oklch(55% 0.12 152)' }}
+                >
+                  {bulkBusy ? (
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  ) : null}
+                  Confirm all {pending.data!.highConfidence.length}
+                </Button>
+              }
+            />
+          )}
+          {(pending.data?.lowConfidence?.length ?? 0) > 0 && (
+            <TriageBucket
+              label="Possibly this CEO (low confidence)"
+              hint="The AI's top guess was this CEO but it isn't sure. Read each before confirming."
+              tone="weak"
+              items={pending.data!.lowConfidence}
+              busyRowIds={busyRowIds}
+              onConfirm={handleConfirm}
+              onDismiss={handleDismiss}
+            />
+          )}
+          {(pending.data?.alternative?.length ?? 0) > 0 && (
+            <TriageBucket
+              label="Listed as a runner-up"
+              hint="The AI matched these to a different CEO but flagged this CEO as a possible alternative."
+              tone="weak"
+              items={pending.data!.alternative}
+              busyRowIds={busyRowIds}
+              onConfirm={handleConfirm}
+              onDismiss={handleDismiss}
+            />
+          )}
+          {(pending.data?.pendingCycle?.length ?? 0) > 0 && (
+            <TriageBucket
+              label="Matched but cycle unresolved"
+              hint="Already linked to this CEO; needs a cycle. Confirm to attach to the closest cycle."
+              tone="weak"
+              items={pending.data!.pendingCycle}
+              busyRowIds={busyRowIds}
+              onConfirm={handleConfirm}
+              onDismiss={handleDismiss}
+            />
+          )}
+        </div>
+
+        <DialogFooter className="mt-5 flex-col gap-2 sm:flex-row sm:justify-between">
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {total > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  onOpenChange(false);
+                  if (isReadyToGenerate) onProceedAfterTriage();
+                  else onProceedAcceptingGaps();
+                }}
+                title="Skip the remaining items and start the report anyway."
+              >
+                Skip &amp; generate anyway
+              </Button>
+            )}
+            <Button
+              disabled={isGeneratePending}
+              onClick={() => {
+                onOpenChange(false);
+                if (isReadyToGenerate) onProceedAfterTriage();
+                else onProceedAcceptingGaps();
+              }}
+              style={{ background: 'oklch(58% 0.14 258)' }}
+            >
+              {isGeneratePending ? (
+                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              ) : (
+                <Mail className="mr-1.5 h-3 w-3" />
+              )}
+              {total === 0 ? 'Generate now' : 'Generate'}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** One confidence-grouped section of the PendingTriageDialog. */
+function TriageBucket({
+  label,
+  hint,
+  tone,
+  items,
+  busyRowIds,
+  onConfirm,
+  onDismiss,
+  bulkAction,
+}: {
+  label: string;
+  hint: string;
+  tone: 'strong' | 'weak';
+  items: Array<{
+    rawInputId: string;
+    contentType: string;
+    occurredAt: Date | string;
+    suggestedReason: string | null;
+    matchConfidence: number | null;
+    textPreview: string;
+  }>;
+  busyRowIds: Record<string, boolean>;
+  onConfirm: (rawInputId: string) => void;
+  onDismiss: (rawInputId: string) => void;
+  bulkAction?: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <div>
+          <div
+            className={cn(
+              'text-[11px] font-semibold uppercase tracking-wide',
+              tone === 'strong' ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground',
+            )}
+          >
+            {label}
+          </div>
+          <div className="text-[10.5px] text-muted-foreground">{hint}</div>
+        </div>
+        {bulkAction}
+      </div>
+      <div className="space-y-2">
+        {items.map((item) => {
+          const busy = !!busyRowIds[item.rawInputId];
+          return (
+            <div
+              key={item.rawInputId}
+              className="rounded-md border bg-card p-2.5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span className="font-medium uppercase tracking-wide">
+                      {item.contentType.replace(/_/g, ' ')}
+                    </span>
+                    <span>·</span>
+                    <span>
+                      {fmtShortDate(
+                        item.occurredAt instanceof Date
+                          ? item.occurredAt.toISOString()
+                          : item.occurredAt,
+                      )}
+                    </span>
+                    {item.matchConfidence != null && (
+                      <>
+                        <span>·</span>
+                        <span
+                          className="rounded px-1 py-px font-mono text-[10px]"
+                          style={{
+                            background: 'color-mix(in oklab, oklch(58% 0.14 258), transparent 88%)',
+                            color: 'oklch(58% 0.14 258)',
+                          }}
+                        >
+                          {item.matchConfidence}%
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {item.suggestedReason && (
+                    <div className="mt-0.5 text-[11px] italic text-muted-foreground">
+                      {item.suggestedReason}
+                    </div>
+                  )}
+                  {item.textPreview && (
+                    <div className="mt-1 line-clamp-2 text-[12px] text-foreground/85">
+                      {item.textPreview}
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px]"
+                    disabled={busy}
+                    onClick={() => onDismiss(item.rawInputId)}
+                    title="Remove this CEO from the AI's suggestions for this item."
+                  >
+                    Not theirs
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    disabled={busy}
+                    onClick={() => onConfirm(item.rawInputId)}
+                    style={{ background: 'oklch(55% 0.12 152)' }}
+                  >
+                    {busy ? (
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                    ) : null}
+                    Confirm
+                  </Button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

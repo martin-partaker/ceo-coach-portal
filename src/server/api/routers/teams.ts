@@ -3,12 +3,17 @@ import { TRPCError } from '@trpc/server';
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import {
+  actionItems,
   ceos,
   ceoKpiDefinitions,
   coachingTeams,
   coaches,
+  cycleFacts,
+  cycleKpiValues,
   cycles,
   journalEntries,
+  rawInputs,
+  reportGenerationJobs,
   reports,
   transcripts,
 } from '@/db/schema';
@@ -85,6 +90,216 @@ async function backfillCeoInputsForTeam(
         isNull(ceoKpiDefinitions.archivedAt),
       ),
     );
+}
+
+/**
+ * Merge parallel team cycles into one canonical cycle per (team,
+ * period). Pre-team CEOs each had their own monthly cycle; after
+ * formation the team has N parallel cycles for the same period, which
+ * means:
+ *
+ *  - The workspace UI shows duplicate tabs ("Mar 2026" twice).
+ *  - Generation can produce multiple reports for the same period.
+ *  - Scalar fields (monthlyGoals / monthlyReflection / additionalContext)
+ *    only live on one of the cycles even though both should be merged.
+ *
+ * For each (team, period) group with >1 cycle:
+ *
+ *  1. Pick a canonical cycle — the one with the most aggregated inputs
+ *     (journals + transcripts + action_items). Tiebreak: earliest
+ *     createdAt.
+ *  2. For every other cycle in the group, repoint EVERY child input
+ *     row (journals, transcripts, action_items, kpi_values, raw_inputs,
+ *     reports, cycle_facts, report_generation_jobs) at the canonical
+ *     cycle's id. Honor unique constraints by dropping the duplicate
+ *     child rather than failing the update.
+ *  3. Merge scalars onto canonical: prefer canonical's existing values
+ *     when non-empty; otherwise copy from the duplicate.
+ *  4. Delete the duplicate cycle. ON DELETE CASCADE only fires after
+ *     children are repointed/dropped.
+ *
+ * Idempotent — runs to completion as a no-op once cycles are merged.
+ */
+async function mergeParallelTeamCycles(
+  db: typeof dbInstance,
+  teamId: string,
+): Promise<{ groupsProcessed: number; cyclesDeleted: number }> {
+  const allTeamCycles = await db
+    .select()
+    .from(cycles)
+    .where(eq(cycles.teamId, teamId));
+
+  // Group by (period_start, period_end). Cycles without dates can't be
+  // safely merged — they have no period identity — so we skip them.
+  const groups = new Map<string, typeof allTeamCycles>();
+  for (const c of allTeamCycles) {
+    if (!c.periodStart || !c.periodEnd) continue;
+    const key = `${c.periodStart}|${c.periodEnd}`;
+    const list = groups.get(key) ?? [];
+    list.push(c);
+    groups.set(key, list);
+  }
+
+  let groupsProcessed = 0;
+  let cyclesDeleted = 0;
+
+  for (const [, list] of groups) {
+    if (list.length < 2) continue;
+    groupsProcessed += 1;
+
+    // Score each cycle by input count; tiebreak on createdAt (earlier
+    // wins, stable across reruns).
+    const ids = list.map((c) => c.id);
+    const journalCounts = await db
+      .select({ cycleId: journalEntries.cycleId, n: sql<number>`count(*)::int` })
+      .from(journalEntries)
+      .where(inArray(journalEntries.cycleId, ids))
+      .groupBy(journalEntries.cycleId);
+    const txCounts = await db
+      .select({ cycleId: transcripts.cycleId, n: sql<number>`count(*)::int` })
+      .from(transcripts)
+      .where(inArray(transcripts.cycleId, ids))
+      .groupBy(transcripts.cycleId);
+    const aiCounts = await db
+      .select({ cycleId: actionItems.cycleId, n: sql<number>`count(*)::int` })
+      .from(actionItems)
+      .where(inArray(actionItems.cycleId, ids))
+      .groupBy(actionItems.cycleId);
+
+    const scoreById = new Map<string, number>();
+    for (const r of journalCounts) scoreById.set(r.cycleId, (scoreById.get(r.cycleId) ?? 0) + r.n);
+    for (const r of txCounts) scoreById.set(r.cycleId, (scoreById.get(r.cycleId) ?? 0) + r.n);
+    for (const r of aiCounts) scoreById.set(r.cycleId, (scoreById.get(r.cycleId) ?? 0) + r.n);
+
+    const sorted = [...list].sort((a, b) => {
+      const sa = scoreById.get(a.id) ?? 0;
+      const sb = scoreById.get(b.id) ?? 0;
+      if (sa !== sb) return sb - sa; // higher score first
+      return a.createdAt.getTime() - b.createdAt.getTime(); // older first
+    });
+    const canonical = sorted[0];
+    const duplicates = sorted.slice(1);
+    const dupIds = duplicates.map((d) => d.id);
+
+    // ── Repoint child tables with no unique constraint on cycle_id.
+    await db
+      .update(journalEntries)
+      .set({ cycleId: canonical.id })
+      .where(inArray(journalEntries.cycleId, dupIds));
+    await db
+      .update(transcripts)
+      .set({ cycleId: canonical.id })
+      .where(inArray(transcripts.cycleId, dupIds));
+    await db
+      .update(actionItems)
+      .set({ cycleId: canonical.id })
+      .where(inArray(actionItems.cycleId, dupIds));
+    await db
+      .update(reports)
+      .set({ cycleId: canonical.id })
+      .where(inArray(reports.cycleId, dupIds));
+    await db
+      .update(reportGenerationJobs)
+      .set({ cycleId: canonical.id })
+      .where(inArray(reportGenerationJobs.cycleId, dupIds));
+    await db
+      .update(rawInputs)
+      .set({ cycleId: canonical.id })
+      .where(inArray(rawInputs.cycleId, dupIds));
+
+    // ── cycle_kpi_values has UNIQUE (cycle_id, definition_id). If
+    // canonical already has a value for a given definition, the
+    // duplicate's value can't be moved — drop it (canonical's wins,
+    // matching the "higher-input-count cycle is canonical" rule).
+    const canonicalKpiDefs = await db
+      .select({ definitionId: cycleKpiValues.definitionId })
+      .from(cycleKpiValues)
+      .where(eq(cycleKpiValues.cycleId, canonical.id));
+    const blockedDefIds = new Set(canonicalKpiDefs.map((r) => r.definitionId));
+    if (blockedDefIds.size > 0) {
+      await db
+        .delete(cycleKpiValues)
+        .where(
+          and(
+            inArray(cycleKpiValues.cycleId, dupIds),
+            inArray(cycleKpiValues.definitionId, [...blockedDefIds]),
+          ),
+        );
+    }
+    await db
+      .update(cycleKpiValues)
+      .set({ cycleId: canonical.id })
+      .where(inArray(cycleKpiValues.cycleId, dupIds));
+
+    // ── cycle_facts has UNIQUE (cycle_id). If canonical already has a
+    // facts row, drop the duplicate's. Otherwise move it.
+    const canonicalFacts = await db
+      .select({ id: cycleFacts.id })
+      .from(cycleFacts)
+      .where(eq(cycleFacts.cycleId, canonical.id))
+      .limit(1);
+    if (canonicalFacts.length > 0) {
+      await db
+        .delete(cycleFacts)
+        .where(inArray(cycleFacts.cycleId, dupIds));
+    } else {
+      // Pick whichever duplicate's facts to keep (newest), drop others.
+      const dupFacts = await db
+        .select()
+        .from(cycleFacts)
+        .where(inArray(cycleFacts.cycleId, dupIds))
+        .orderBy(desc(cycleFacts.generatedAt));
+      if (dupFacts.length > 1) {
+        await db
+          .delete(cycleFacts)
+          .where(
+            inArray(
+              cycleFacts.id,
+              dupFacts.slice(1).map((f) => f.id),
+            ),
+          );
+      }
+      if (dupFacts.length >= 1) {
+        await db
+          .update(cycleFacts)
+          .set({ cycleId: canonical.id })
+          .where(eq(cycleFacts.id, dupFacts[0].id));
+      }
+    }
+
+    // ── Merge scalars: prefer canonical's existing value; copy from
+    // any duplicate when canonical's is empty.
+    const scalarPatch: {
+      monthlyGoals?: string;
+      monthlyReflection?: string;
+      additionalContext?: string;
+    } = {};
+    if (!canonical.monthlyGoals?.trim()) {
+      const v = duplicates.find((d) => d.monthlyGoals?.trim())?.monthlyGoals;
+      if (v) scalarPatch.monthlyGoals = v;
+    }
+    if (!canonical.monthlyReflection?.trim()) {
+      const v = duplicates.find((d) => d.monthlyReflection?.trim())?.monthlyReflection;
+      if (v) scalarPatch.monthlyReflection = v;
+    }
+    if (!canonical.additionalContext?.trim()) {
+      const v = duplicates.find((d) => d.additionalContext?.trim())?.additionalContext;
+      if (v) scalarPatch.additionalContext = v;
+    }
+    if (Object.keys(scalarPatch).length > 0) {
+      await db
+        .update(cycles)
+        .set(scalarPatch)
+        .where(eq(cycles.id, canonical.id));
+    }
+
+    // ── Finally drop the duplicate cycle rows. All children have been
+    // repointed; cascades won't trigger.
+    await db.delete(cycles).where(inArray(cycles.id, dupIds));
+    cyclesDeleted += dupIds.length;
+  }
+
+  return { groupsProcessed, cyclesDeleted };
 }
 
 /**
@@ -331,6 +546,12 @@ export const teamsRouter = createTRPCRouter({
       // bylines. See helper docs for details.
       await backfillCeoInputsForTeam(ctx.db, team.id, input.memberCeoIds);
 
+      // Merge parallel cycles into one per (team, period). Pre-team
+      // each member had their own cycle for the same month; after
+      // formation that's redundant. Inputs are repointed at the
+      // canonical cycle and scalars merged. See helper docs.
+      await mergeParallelTeamCycles(ctx.db, team.id);
+
       return { team };
     }),
 
@@ -371,6 +592,11 @@ export const teamsRouter = createTRPCRouter({
       // existing cycles / journals / transcripts / KPIs need to roll
       // up to the team so generation fans out correctly.
       await backfillCeoInputsForTeam(ctx.db, team.id, [ceo.id]);
+
+      // The joining member's existing cycles likely overlap the
+      // team's existing cycles by period — merge them so the team
+      // ends up with one canonical cycle per period.
+      await mergeParallelTeamCycles(ctx.db, team.id);
 
       return { ok: true };
     }),
@@ -480,6 +706,26 @@ export const teamsRouter = createTRPCRouter({
       .orderBy(asc(ceos.name));
     return rows;
   }),
+
+  /** Re-run backfill + parallel-cycle merge on an existing team. Use
+   *  when data has drifted (e.g. a member was added before the merge
+   *  logic existed, or a one-off SQL form-team skipped the backfill).
+   *  Idempotent — a team in clean state returns zero work done. */
+  resync: protectedProcedure
+    .input(z.object({ teamId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const team = await loadTeamForCaller(ctx, input.teamId);
+      const memberRows = await ctx.db
+        .select({ id: ceos.id })
+        .from(ceos)
+        .where(eq(ceos.teamId, team.id));
+      const memberIds = memberRows.map((m) => m.id);
+      if (memberIds.length === 0) return { backfilled: false, merged: { groupsProcessed: 0, cyclesDeleted: 0 } };
+
+      await backfillCeoInputsForTeam(ctx.db, team.id, memberIds);
+      const merged = await mergeParallelTeamCycles(ctx.db, team.id);
+      return { backfilled: true, merged };
+    }),
 
   /** Archive a team — fully reverses formation so every member's data
    *  returns to its pre-team state. Each member's ceos.teamId,

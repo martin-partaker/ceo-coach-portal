@@ -93,20 +93,71 @@ export function RosterV2Page({
     });
   }
 
-  // Dedupe team members so each team renders as a single row. Without
-  // this, Dave Snyder and David Harding (both in Tipton Mills) would
-  // show as two identical "David & Dave · Tipton Mills" rows. We keep
-  // whichever member appears first per team — that becomes the row's
-  // "anchor" CEO. Their cycles drive the row (which is fine because
-  // team cycles share their work via cycle.teamId, not cycle.ceoId).
+  // Dedupe team members so each team renders as a single row, AND
+  // merge every team member's cycles into the kept row's `cycles`
+  // list. Without the merge, the kept anchor (whichever member came
+  // first in the response) only carries their own cycles — meaning
+  // Dave-anchor sees just May, David-anchor sees just Mar+Apr. The
+  // Manager view + RecentReports + workspace tabs all read from this,
+  // so the merge happens here once and every consumer sees the full
+  // team timeline.
+  //
+  // For parallel cycles per period (pre-merge legacy state where each
+  // member had their own monthly cycle) we dedupe by label, preferring
+  // the cycle with more submissions (richer dot strip) and tiebreaking
+  // by phase priority. After mergeParallelTeamCycles runs there's only
+  // one cycle per (team, period) anyway — this dedupe just handles
+  // any pre-migration data and stays harmless once teams are clean.
   const summaries = useMemo<RosterCeoSummary[]>(() => {
     const rows = data ?? [];
+
+    // Index by teamId so we can find every member of a team in one pass.
+    const summariesByTeam = new Map<string, RosterCeoSummary[]>();
+    for (const s of rows) {
+      if (!s.ceo.teamId) continue;
+      const list = summariesByTeam.get(s.ceo.teamId) ?? [];
+      list.push(s);
+      summariesByTeam.set(s.ceo.teamId, list);
+    }
+
+    const phasePriority: Record<RosterCeoSummary['cycles'][number]['phase'], number> = {
+      sent: 5,
+      generated: 4,
+      ready: 3,
+      gathering: 2,
+      idle: 1,
+    };
+
     const seenTeams = new Set<string>();
     const out: RosterCeoSummary[] = [];
     for (const s of rows) {
       if (s.ceo.teamId) {
         if (seenTeams.has(s.ceo.teamId)) continue;
         seenTeams.add(s.ceo.teamId);
+
+        const allMemberCycles = (summariesByTeam.get(s.ceo.teamId) ?? [])
+          .flatMap((m) => m.cycles);
+        const byLabel = new Map<string, (typeof allMemberCycles)[number]>();
+        for (const cy of allMemberCycles) {
+          const existing = byLabel.get(cy.label);
+          if (!existing) {
+            byLabel.set(cy.label, cy);
+            continue;
+          }
+          const aScore =
+            cy.submissions.length * 10 + (phasePriority[cy.phase] ?? 0);
+          const bScore =
+            existing.submissions.length * 10 +
+            (phasePriority[existing.phase] ?? 0);
+          if (aScore > bScore) byLabel.set(cy.label, cy);
+        }
+        const mergedCycles = [...byLabel.values()].sort((a, b) => {
+          const ak = a.periodStart ?? '';
+          const bk = b.periodStart ?? '';
+          return ak < bk ? -1 : 1;
+        });
+        out.push({ ...s, cycles: mergedCycles });
+        continue;
       }
       out.push(s);
     }

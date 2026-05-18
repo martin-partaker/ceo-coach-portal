@@ -15,9 +15,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Loader2, Search, Link2, Sparkles } from 'lucide-react';
+import { Loader2, Search, Link2, Sparkles, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
+import { TeamAvatars } from '@/components/ui/team-avatars';
 
 interface Props {
   rawInputId: string;
@@ -37,6 +38,19 @@ interface Props {
     avatarUrl: string | null;
     coachName: string;
   }) => void;
+  /**
+   * Team pick mode: called when the operator picks a coaching team. The
+   * caller receives the full member list (lead first) so it can stage
+   * every member as a manual pick. Falls back to calling onPick once per
+   * member if not supplied.
+   */
+  onPickTeam?: (members: Array<{
+    id: string;
+    name: string;
+    email: string | null;
+    avatarUrl: string | null;
+    coachName: string;
+  }>, team: { id: string; name: string }) => void;
   /** Optional controlled-open state. When provided, the parent owns the dialog. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -123,6 +137,7 @@ export function MatchToExistingButton({
   submissionEmail,
   onMatched,
   onPick,
+  onPickTeam,
   open: controlledOpen,
   onOpenChange,
   hideTrigger,
@@ -141,6 +156,27 @@ export function MatchToExistingButton({
   const { data: rows, isLoading } = trpc.admin.listAllCeos.useQuery(undefined, {
     enabled: open,
   });
+  // Teams the operator can route a raw input to. Picking a team
+  // expands to every member's CEO id and assigns the input to all of
+  // them at once — covers Tipton-style joint coaching submissions
+  // without forcing the operator to add each co-founder manually.
+  const { data: teams } = trpc.teams.list.useQuery(undefined, {
+    enabled: open,
+  });
+
+  // Filter teams by query — match against team name, company name, or
+  // any member name. When no query, show every team.
+  const filteredTeams = useMemo(() => {
+    if (!teams) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return teams;
+    return teams.filter((t) => {
+      if (t.name.toLowerCase().includes(q)) return true;
+      if ((t.companyName ?? '').toLowerCase().includes(q)) return true;
+      if (t.members.some((m) => m.name.toLowerCase().includes(q))) return true;
+      return false;
+    });
+  }, [teams, query]);
 
   const { suggested, filtered } = useMemo(() => {
     if (!rows) return { suggested: [] as CeoRow[], filtered: [] as CeoRow[] };
@@ -195,6 +231,39 @@ export function MatchToExistingButton({
     assign.mutate({
       rawInputId,
       ceoIds: [row.ceo.id],
+      addAliasFromSubmission: !!submissionEmail && addAlias,
+    });
+  };
+
+  const handleTeamClick = (team: NonNullable<typeof teams>[number]) => {
+    if (team.members.length === 0) return;
+    // Resolve member coach name for the pick payload. Teams have one
+    // coach shared across all members — lookup once.
+    const coachName =
+      rows?.find((r) => r.ceo.coachId === team.coachId)?.coach.name ?? '';
+    const pickMembers = team.members.map((m) => ({
+      id: m.id,
+      name: m.name,
+      email: null,
+      avatarUrl: m.avatarUrl,
+      coachName,
+    }));
+    if (onPickTeam) {
+      onPickTeam(pickMembers, { id: team.id, name: team.name });
+      setOpen(false);
+      return;
+    }
+    if (onPick) {
+      // Fallback when only single-CEO onPick is wired. Stage each
+      // member through the same handler — caller's prev-state logic
+      // (addingAnother) controls whether they replace or append.
+      pickMembers.forEach((m) => onPick(m));
+      setOpen(false);
+      return;
+    }
+    assign.mutate({
+      rawInputId,
+      ceoIds: pickMembers.map((m) => m.id),
       addAliasFromSubmission: !!submissionEmail && addAlias,
     });
   };
@@ -290,10 +359,61 @@ export function MatchToExistingButton({
                 <Loader2 className="h-4 w-4 animate-spin" />
               </div>
             )}
-            {!isLoading && filtered.length === 0 && suggested.length === 0 && (
+            {!isLoading && filtered.length === 0 && suggested.length === 0 && filteredTeams.length === 0 && (
               <p className="p-4 text-center text-sm text-muted-foreground">
                 {query ? 'No matches.' : 'No CEOs in the system yet.'}
               </p>
+            )}
+
+            {/* Teams section — surfaces coaching teams at the top so a
+                joint submission (Tipton-style) gets attached to every
+                member in one click, not by manually adding co-founders. */}
+            {!isLoading && filteredTeams.length > 0 && (
+              <>
+                <div className="flex items-center gap-1.5 border-b border-border bg-blue-500/[0.05] px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-blue-700 dark:text-blue-400">
+                  <Users className="h-3 w-3" />
+                  Teams
+                </div>
+                <div className="divide-y divide-border">
+                  {filteredTeams.map((team) => (
+                    <button
+                      key={`team-${team.id}`}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/60 disabled:opacity-50"
+                      onClick={() => handleTeamClick(team)}
+                      disabled={assign.isPending || team.members.length === 0}
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <TeamAvatars
+                          members={team.members.map((m) => ({
+                            id: m.id,
+                            name: m.name,
+                            avatarUrl: m.avatarUrl,
+                          }))}
+                          size="sm"
+                          max={3}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">
+                            {highlightMatch(team.name, query)}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {team.members.map((m) => m.name).join(' & ')}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="shrink-0 rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-700 dark:text-blue-400">
+                        Team · {team.members.length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                {(filtered.length > 0 || suggested.length > 0) && (
+                  <div className="border-y border-border bg-muted/30 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Solo CEOs
+                  </div>
+                )}
+              </>
             )}
 
             {/* Suggested matches based on submission email */}

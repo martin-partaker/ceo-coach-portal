@@ -48,9 +48,27 @@ export type CycleContext = {
   /** The shared 10x goal as written. Pulled from the team for team
    *  cycles, from the lead CEO for solo cycles. */
   tenXGoal: string | null;
+  /** Concatenated monthlyGoals from this cycle. For team cycles where
+   *  parallel cycles exist (one per member), this is the union of
+   *  every member's monthly goals for the same period. Solo cycles
+   *  just carry their own value. */
   monthlyGoals: string;
+  /** Same fan-out treatment as monthlyGoals — when in team mode we
+   *  pull every parallel cycle's reflection for the period and
+   *  concatenate with author bylines. */
   monthlyReflection: string;
   additionalContext: string;
+  /** When team mode pulled scalars from sibling cycles, this captures
+   *  per-member contributions so render-time can show "David's monthly
+   *  reflection: ..." vs "Dave's monthly reflection: ...". Empty for
+   *  solo cycles. */
+  perMemberScalars: Array<{
+    ceoId: string;
+    ceoName: string;
+    monthlyGoals: string;
+    monthlyReflection: string;
+    additionalContext: string;
+  }>;
   journals: Array<{
     title: string;
     weekNumber: number;
@@ -176,7 +194,22 @@ export async function fetchCycleContext(args: {
     .where(inArray(cycles.ceoId, memberIds))
     .orderBy(desc(transcripts.recordedAt));
 
-  const cycleTranscripts = transcriptJoined
+  // Dedupe transcripts by sourceRawInputId. The same Zoom transcript
+  // gets a row per attendee CEO (the ingestion pipeline fans out via
+  // raw_input_ceos), which after team formation means the team-aware
+  // fetcher would pull the SAME transcript content N times. We keep
+  // one row per source and prefer rows that already carry author
+  // attribution. Transcripts without a sourceRawInputId (manual paste)
+  // are kept as-is — no dedup signal.
+  const seenSources = new Set<string>();
+  const dedupedTranscriptJoined = transcriptJoined.filter(({ row }) => {
+    if (!row.sourceRawInputId) return true;
+    if (seenSources.has(row.sourceRawInputId)) return false;
+    seenSources.add(row.sourceRawInputId);
+    return true;
+  });
+
+  const cycleTranscripts = dedupedTranscriptJoined
     .filter(({ row }) =>
       inputBelongsToCycle(
         {
@@ -358,6 +391,80 @@ export async function fetchCycleContext(args: {
   // lead CEO's per-person field for solo cycles or pre-team setups.
   const tenXGoal = (team?.tenXGoal?.trim() || ceo.tenXGoal?.trim() || null) ?? null;
 
+  // Fan-out cycle-scalars across team members. For a team cycle in
+  // Apr 2026, each member typically has their OWN Apr 2026 cycle
+  // (pre-team backfill leaves parallel cycles in place). Without this
+  // fan-out, generating Mar/David's cycle would see only David's
+  // monthly reflection — Dave's reflection on his parallel Mar cycle
+  // would be invisible to the prompt. We pull every team cycle in
+  // the same period and concatenate the scalars with author bylines.
+  let perMemberScalars: CycleContext['perMemberScalars'] = [];
+  let mergedMonthlyGoals = cycle.monthlyGoals?.trim() ?? '';
+  let mergedMonthlyReflection = cycle.monthlyReflection?.trim() ?? '';
+  let mergedAdditionalContext = cycle.additionalContext?.trim() ?? '';
+
+  if (team && cycle.periodStart && cycle.periodEnd && members.length > 1) {
+    const siblingCycles = await db
+      .select({
+        id: cycles.id,
+        ceoId: cycles.ceoId,
+        monthlyGoals: cycles.monthlyGoals,
+        monthlyReflection: cycles.monthlyReflection,
+        additionalContext: cycles.additionalContext,
+      })
+      .from(cycles)
+      .where(
+        and(
+          eq(cycles.teamId, team.id),
+          eq(cycles.periodStart, cycle.periodStart),
+          eq(cycles.periodEnd, cycle.periodEnd),
+        ),
+      );
+
+    // Order siblings so the lead member comes first, then others by
+    // member display order. Stable bylines in the rendered prompt.
+    const memberOrder = new Map(members.map((m, i) => [m.id, i]));
+    siblingCycles.sort((a, b) => {
+      const aIdx = memberOrder.get(a.ceoId) ?? 999;
+      const bIdx = memberOrder.get(b.ceoId) ?? 999;
+      return aIdx - bIdx;
+    });
+
+    perMemberScalars = siblingCycles
+      .map((sc) => ({
+        ceoId: sc.ceoId,
+        ceoName: ceoNameById.get(sc.ceoId) ?? '(unknown)',
+        monthlyGoals: sc.monthlyGoals?.trim() ?? '',
+        monthlyReflection: sc.monthlyReflection?.trim() ?? '',
+        additionalContext: sc.additionalContext?.trim() ?? '',
+      }))
+      // Skip rows that contribute nothing — keeps the prompt clean.
+      .filter(
+        (m) =>
+          m.monthlyGoals || m.monthlyReflection || m.additionalContext,
+      );
+
+    // Concatenate for backwards-compat callers that read the flat
+    // string fields. Each contributor's section is bylined so the
+    // model can attribute. Empty contributions skipped.
+    if (perMemberScalars.length > 0) {
+      const concatField = (
+        get: (m: (typeof perMemberScalars)[number]) => string,
+      ) =>
+        perMemberScalars
+          .filter((m) => get(m))
+          .map((m) => `### ${m.ceoName}\n${get(m)}`)
+          .join('\n\n---\n\n');
+
+      const goals = concatField((m) => m.monthlyGoals);
+      const reflection = concatField((m) => m.monthlyReflection);
+      const extra = concatField((m) => m.additionalContext);
+      if (goals) mergedMonthlyGoals = goals;
+      if (reflection) mergedMonthlyReflection = reflection;
+      if (extra) mergedAdditionalContext = extra;
+    }
+  }
+
   return {
     cycle,
     ceo,
@@ -365,9 +472,10 @@ export async function fetchCycleContext(args: {
     members,
     coachName,
     tenXGoal,
-    monthlyGoals: cycle.monthlyGoals?.trim() ?? '',
-    monthlyReflection: cycle.monthlyReflection?.trim() ?? '',
-    additionalContext: cycle.additionalContext?.trim() ?? '',
+    monthlyGoals: mergedMonthlyGoals,
+    monthlyReflection: mergedMonthlyReflection,
+    additionalContext: mergedAdditionalContext,
+    perMemberScalars,
     journals,
     transcripts: cycleTranscripts,
     kpiSeries,

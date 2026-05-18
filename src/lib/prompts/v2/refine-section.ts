@@ -67,6 +67,12 @@ export type RefineSectionArgs = {
   ctx: CycleContext;
   facts: CycleFacts;
   patterns: Patterns;
+  /** True when CycleFacts + Patterns were actually extracted (i.e. the
+   *  cycle has been through Stage A). False when the report was
+   *  generated via the Instant / Quick path that skips Stage A — the
+   *  facts/patterns args are an empty skeleton in that case and the
+   *  refine prompt tells the model to rely on raw inputs instead. */
+  factsAvailable: boolean;
   currentDraft: DraftedReport;
   section: RefinableSection;
   /** Coach's new message for this turn. */
@@ -131,6 +137,7 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
     ctx,
     facts,
     patterns,
+    factsAvailable,
     currentDraft,
     section,
     userMessage,
@@ -152,23 +159,30 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
   // that specific line from Dave's Week 3" is impossible to honor when
   // the line never made it into the typed extraction. The extra tokens
   // are worth it — refinements are infrequent and high-stakes.
+  // When the cycle has been through Stage A we send the typed
+  // CycleFacts + Patterns JSON. When it hasn't (Instant / Quick path),
+  // we send a clear "not extracted — work from raw inputs" note so the
+  // model knows to ground in the verbatim cycle inputs instead. The
+  // raw inputs block is ALWAYS sent — that's the load-bearing context
+  // for refinements like "pull in that specific quote from Week 3".
+  const factsBlock = factsAvailable
+    ? ['## CycleFacts (typed extraction with citations)', '```json', JSON.stringify(facts, null, 2), '```'].join('\n')
+    : '## CycleFacts\n*Not extracted for this cycle (the report was generated via the Instant / Quick path which skips Stage A). Use the raw inputs below to ground any changes.*';
+  const patternsBlock = factsAvailable
+    ? ['## Patterns (cross-cycle)', '```json', JSON.stringify(patterns, null, 2), '```'].join('\n')
+    : '## Patterns\n*Not computed for this cycle. Use the raw inputs + prior reports below to identify any cross-cycle patterns yourself if the coach asks.*';
+
   const contextTurnContent = [
     `## Current full draft (for surrounding-context awareness)`,
     '```json',
     JSON.stringify(currentDraft, null, 2),
     '```',
     '',
-    `## CycleFacts (typed extraction with citations)`,
-    '```json',
-    JSON.stringify(facts, null, 2),
-    '```',
+    factsBlock,
     '',
-    `## Patterns (cross-cycle)`,
-    '```json',
-    JSON.stringify(patterns, null, 2),
-    '```',
+    patternsBlock,
     '',
-    `## Raw cycle inputs (verbatim — use when refinement requires something not captured in CycleFacts)`,
+    `## Raw cycle inputs (verbatim — ${factsAvailable ? 'use when refinement requires something not captured in CycleFacts' : 'the PRIMARY source of truth since CycleFacts is absent'})`,
     renderContextForModel(ctx),
     '',
     `## Current value of "${section}"`,

@@ -1166,16 +1166,33 @@ export const reportsRouter = createTRPCRouter({
             .limit(1)
         : [];
 
+      // Refinement used to require CycleFacts on file (Stage A output).
+      // That blocked refining reports generated via the "Instant" / "Quick"
+      // paths which skip Stage A. The refine prompt already gets the
+      // FULL raw cycle context (renderContextForModel) so it can
+      // ground in the original inputs even without the typed
+      // extraction — facts + patterns are upgrades, not requirements.
+      // When absent we pass a structurally-valid empty skeleton so the
+      // schema-typed parameters stay happy; the renderer notes the
+      // absence and tells the model to rely on the raw inputs.
       const factsRow = await loadCycleFactsRow(report.cycleId);
-      if (!factsRow) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message:
-            'No CycleFacts on file for this cycle yet. Generate the report via v2 first so refinement has typed facts to ground in.',
-        });
-      }
-      const facts = factsRow.factsJson as CycleFactsT;
-      const patterns = (factsRow.patternsJson ?? null) as PatternsT | null;
+      const facts: CycleFactsT = (factsRow?.factsJson as CycleFactsT | undefined) ?? {
+        goalCascade: {
+          tenX: '',
+          ninetyDay: null,
+          thirtyDay: null,
+          driftDetected: { changed: false, from: null, to: null, when: null, note: null },
+        },
+        effort: { weekly: [], anomalies: [] },
+        stakeholders: [],
+        emotionalEvents: [],
+        constraint: null,
+        evidenceClaims: [],
+        commitments: [],
+        coachReviewFlags: [],
+      };
+      const patterns = (factsRow?.patternsJson ?? null) as PatternsT | null;
+      const factsAvailable = !!factsRow;
 
       const cycleCtx = await fetchCycleContext({
         cycle,
@@ -1216,6 +1233,7 @@ export const reportsRouter = createTRPCRouter({
           newThisCycle: [],
           isFirstCycle: cycleCtx.isFirstCycle,
         },
+        factsAvailable,
         currentDraft,
         section: input.section,
         userMessage: input.message,

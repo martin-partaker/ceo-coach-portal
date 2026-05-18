@@ -13,11 +13,13 @@ import {
   cycles,
   journalEntries,
   rawInputs,
+  rawInputCeos,
   reportGenerationJobs,
   reports,
   transcripts,
 } from '@/db/schema';
 import type { db as dbInstance } from '@/db';
+import { projectRawInput } from '@/lib/ingestion/project';
 
 /**
  * Backfill helper — run whenever a CEO becomes part of a team.
@@ -303,6 +305,95 @@ async function mergeParallelTeamCycles(
 }
 
 /**
+ * Refuse to mutate team membership while any member has a non-terminal
+ * generation job. The merge/backfill can repoint or delete a cycle the
+ * workflow is mid-step on; stages already written would land on a
+ * deleted row. Cleaner to make the operator cancel or wait. Throws a
+ * BAD_REQUEST with the offending cycle so the UI can deep-link.
+ */
+async function assertNoActiveGenerationsForCeos(
+  db: typeof dbInstance,
+  ceoIds: string[],
+): Promise<void> {
+  if (ceoIds.length === 0) return;
+  const active = await db
+    .select({
+      jobId: reportGenerationJobs.id,
+      cycleId: reportGenerationJobs.cycleId,
+      status: reportGenerationJobs.status,
+    })
+    .from(reportGenerationJobs)
+    .innerJoin(cycles, eq(cycles.id, reportGenerationJobs.cycleId))
+    .where(
+      and(
+        inArray(cycles.ceoId, ceoIds),
+        ne(reportGenerationJobs.status, 'complete'),
+        ne(reportGenerationJobs.status, 'error'),
+      ),
+    )
+    .limit(1);
+  if (active.length > 0) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message:
+        'Cannot change team membership while a report is being generated. Wait for the run to finish or cancel it first.',
+    });
+  }
+}
+
+/**
+ * Split-on-dissolve: when CEOs leave a team (single removeMember or
+ * full archive), reconstruct per-CEO solo cycles from their authored
+ * inputs. Without this, the previous merge step destructively deleted
+ * each CEO's parallel pre-team cycles — so dissolving the team would
+ * leave the non-canonical members with NO cycle history at all.
+ *
+ * Mechanism: re-trigger the ingestion projectors for every raw_input
+ * touching these CEOs. The projectors are team-aware via
+ * `match-cycle.ts`, so once the CEO's team link has been cleared they
+ * route to per-CEO solo cycles (creating them as needed). Journal /
+ * transcript / KPI rows get upserted to the right cycle automatically,
+ * and joint transcripts get fanned out to each attendee's solo cycle
+ * via the existing raw_input_ceos linkage.
+ *
+ * Must be called AFTER `ceos.teamId` has been nulled for the leaving
+ * members (the projectors read the live state).
+ */
+async function reprojectInputsForLeavingMembers(
+  db: typeof dbInstance,
+  ceoIds: string[],
+): Promise<{ reprojected: number }> {
+  if (ceoIds.length === 0) return { reprojected: 0 };
+
+  // Collect every raw_input whose primary ceoId is one of the leavers
+  // OR whose raw_input_ceos linkage includes one of them (covers
+  // multi-attendee transcripts).
+  const direct = await db
+    .select({ id: rawInputs.id })
+    .from(rawInputs)
+    .where(inArray(rawInputs.ceoId, ceoIds));
+  const linked = await db
+    .select({ id: rawInputCeos.rawInputId })
+    .from(rawInputCeos)
+    .where(inArray(rawInputCeos.ceoId, ceoIds));
+  const allIds = Array.from(
+    new Set<string>([...direct.map((r) => r.id), ...linked.map((r) => r.id)]),
+  );
+
+  for (const id of allIds) {
+    try {
+      await projectRawInput(id);
+    } catch (e) {
+      // One bad input shouldn't block the rest of the dissolution.
+      // The orphan will be visible in triage; coaches can re-route
+      // manually if needed.
+      console.error('[reprojectInputsForLeavingMembers] failed for', id, e);
+    }
+  }
+  return { reprojected: allIds.length };
+}
+
+/**
  * Reverse of `backfillCeoInputsForTeam` — runs when a CEO leaves a
  * team (`removeMember`) or the whole team is dissolved (`archive`).
  *
@@ -510,6 +601,10 @@ export const teamsRouter = createTRPCRouter({
         });
       }
 
+      // Refuse if any member has a running v2 generation job — the
+      // merge step would repoint cycles the workflow is mid-step on.
+      await assertNoActiveGenerationsForCeos(ctx.db, input.memberCeoIds);
+
       // Seed the team's 10x goal from whichever member has one (prefer
       // the most recently updated). Coach edits after.
       const withGoal = memberRows
@@ -533,10 +628,15 @@ export const teamsRouter = createTRPCRouter({
         })
         .returning();
 
-      // Link every member to the new team in one update.
+      // Link every member to the new team AND sync each member's
+      // coachId to the resolved team coach. Without the coach sync,
+      // a member whose coachId was null (unassigned) would join the
+      // team but stay invisible to coach-scoped queries (where
+      // `ceo.coachId = X` filters them out). The team's coach is the
+      // one source of truth from this point forward.
       await ctx.db
         .update(ceos)
-        .set({ teamId: team.id })
+        .set({ teamId: team.id, coachId })
         .where(inArray(ceos.id, input.memberCeoIds));
 
       // Backfill: every existing cycle / journal / transcript / KPI
@@ -578,14 +678,28 @@ export const teamsRouter = createTRPCRouter({
           code: 'BAD_REQUEST',
           message: `${ceo.name} is already in a team.`,
         });
-      if (ceo.coachId !== team.coachId)
+      // If the CEO has a different coach, refuse — separating "join
+      // team" from "transfer coach" keeps the policy explicit. If they
+      // have NO coach assigned, the join is fine; we sync them to the
+      // team's coach so the row becomes visible in coach-scoped views.
+      if (ceo.coachId && ceo.coachId !== team.coachId) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: `${ceo.name} is on a different coach. Reassign them first.`,
         });
+      }
+
+      // Refuse if the joining CEO has a running generation job — the
+      // merge could repoint cycles the workflow is mid-step on.
+      await assertNoActiveGenerationsForCeos(ctx.db, [ceo.id]);
+
       await ctx.db
         .update(ceos)
-        .set({ teamId: team.id, memberRole: input.memberRole ?? null })
+        .set({
+          teamId: team.id,
+          memberRole: input.memberRole ?? null,
+          coachId: team.coachId, // sync if previously null
+        })
         .where(eq(ceos.id, ceo.id));
 
       // Same backfill rules as formFromMembers — the joining member's
@@ -627,16 +741,26 @@ export const teamsRouter = createTRPCRouter({
       await loadTeamForCaller(ctx, ceo.teamId);
 
       const teamId = ceo.teamId;
+
+      // Refuse during an active generation — see helper.
+      await assertNoActiveGenerationsForCeos(ctx.db, [ceo.id]);
+
       await ctx.db
         .update(ceos)
         .set({ teamId: null, memberRole: null })
         .where(eq(ceos.id, ceo.id));
 
-      // Revert cycle / KPI tagging for just this CEO. Other team
-      // members are unaffected.
+      // Revert cycle / KPI tagging for just this CEO.
       await revertTeamStampingForCeos(ctx.db, teamId, [ceo.id]);
 
-      return { ok: true };
+      // Reconstruct per-CEO cycles from the leaving member's authored
+      // inputs. Without this, the post-merge state means the leaver
+      // walks away with zero cycle history (their original cycles
+      // were deleted during the merge). The projectors fan inputs back
+      // out into solo cycles via match-cycle.ts.
+      const splitResult = await reprojectInputsForLeavingMembers(ctx.db, [ceo.id]);
+
+      return { ok: true, ...splitResult };
     }),
 
   /** Update the team's shared fields — name, company name, 10x goal,
@@ -729,9 +853,9 @@ export const teamsRouter = createTRPCRouter({
 
   /** Archive a team — fully reverses formation so every member's data
    *  returns to its pre-team state. Each member's ceos.teamId,
-   *  cycles.teamId, and ceo_kpi_definitions.teamId all get cleared.
-   *  The team row itself is soft-deleted (archivedAt set) so historical
-   *  references to it can still resolve a name. */
+   *  cycles.teamId, and ceo_kpi_definitions.teamId get cleared, and
+   *  the per-CEO inputs get re-projected so each former member ends up
+   *  with their own solo cycles (not just the canonical lead). */
   archive: protectedProcedure
     .input(z.object({ teamId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -745,25 +869,70 @@ export const teamsRouter = createTRPCRouter({
         .where(eq(ceos.teamId, team.id));
       const memberIds = memberRows.map((m) => m.id);
 
+      // Refuse during any active generation across the team. The merge
+      // and split paths both touch cycles the workflow may be on.
+      await assertNoActiveGenerationsForCeos(ctx.db, memberIds);
+
       await ctx.db
         .update(ceos)
         .set({ teamId: null, memberRole: null })
         .where(eq(ceos.teamId, team.id));
 
-      // Revert cycle / KPI tagging for every former member so the
-      // post-archive state matches the pre-formation state. Critical:
-      // without this, cycles tagged with this teamId would still resolve
-      // to the (now-archived) team and end up with `members = []` on
-      // context fetch, which would break generation.
       if (memberIds.length > 0) {
         await revertTeamStampingForCeos(ctx.db, team.id, memberIds);
+      }
+
+      // Split-on-dissolve: reconstruct per-CEO solo cycles from each
+      // former member's authored inputs. Without this, only the
+      // canonical-lead's cycles survive — the other members walk away
+      // with no history because their original cycles were deleted
+      // during the formation-time merge.
+      let splitResult = { reprojected: 0 };
+      if (memberIds.length > 0) {
+        splitResult = await reprojectInputsForLeavingMembers(ctx.db, memberIds);
       }
 
       await ctx.db
         .update(coachingTeams)
         .set({ archivedAt: new Date() })
         .where(eq(coachingTeams.id, team.id));
-      return { ok: true };
+      return { ok: true, ...splitResult };
+    }),
+
+  /** Transfer a team to a new coach. Updates the team's coachId AND
+   *  every member's coachId atomically so coach-scoped queries route
+   *  correctly. Caller must currently own the team (or be a super
+   *  admin); the new coach doesn't need to exist for the caller's
+   *  scope. */
+  transferCoach: protectedProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        newCoachId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const team = await loadTeamForCaller(ctx, input.teamId);
+      const [newCoach] = await ctx.db
+        .select()
+        .from(coaches)
+        .where(eq(coaches.id, input.newCoachId))
+        .limit(1);
+      if (!newCoach) throw new TRPCError({ code: 'NOT_FOUND', message: 'Coach not found.' });
+      if (team.coachId === newCoach.id) {
+        return { ok: true, noop: true };
+      }
+
+      // Update the team and every current member in lockstep.
+      await ctx.db
+        .update(coachingTeams)
+        .set({ coachId: newCoach.id })
+        .where(eq(coachingTeams.id, team.id));
+      await ctx.db
+        .update(ceos)
+        .set({ coachId: newCoach.id })
+        .where(eq(ceos.teamId, team.id));
+      return { ok: true, noop: false };
     }),
 });
 

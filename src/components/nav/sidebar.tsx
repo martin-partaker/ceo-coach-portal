@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import {
   Users,
+  UsersRound,
   LayoutDashboard,
   Settings,
   Plug2,
@@ -20,6 +21,7 @@ const navItems = [
 
 const adminItems = [
   { href: '/admin/ceos', label: 'Dashboard', icon: Users },
+  { href: '/admin/teams', label: 'Teams', icon: UsersRound },
   { href: '/admin/data', label: 'Data', icon: Database, showPendingBadge: true },
   { href: '/admin/integrations', label: 'Integrations', icon: Plug2 },
   { href: '/admin/settings', label: 'Settings', icon: Settings },

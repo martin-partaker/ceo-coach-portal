@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { eq, desc, sql, inArray, and } from 'drizzle-orm';
+import { eq, desc, sql, inArray, and, isNull } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, adminProcedure, protectedProcedure } from '@/server/api/trpc';
 import {
   coaches,
+  coachingTeams,
   ceos,
   cycles,
   reports,
@@ -425,6 +426,19 @@ export const adminRouter = createTRPCRouter({
         throw new TRPCError({ code: 'NOT_FOUND' });
       }
 
+      // Refuse to delete a CEO who's currently in a coaching team —
+      // cascade would silently delete their cycles (some of which may
+      // be the team's canonical), wiping the team's history and
+      // nulling journal/transcript authoredByCeoId on the rest.
+      // Operator must remove them from the team first (which splits
+      // their inputs into solo cycles cleanly).
+      if (ceo.teamId) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `${ceo.name} is currently a member of a coaching team. Remove them from the team first, then delete.`,
+        });
+      }
+
       let released = 0;
 
       if (input.releaseInputs) {
@@ -545,6 +559,27 @@ export const adminRouter = createTRPCRouter({
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
           message: `Coach has ${ceoCount} CEO${ceoCount === 1 ? '' : 's'}. Reassign or delete them first.`,
+        });
+      }
+
+      // Also refuse if the coach owns any active (non-archived) team —
+      // the team would otherwise be orphaned with a NULL coachId, and
+      // generation auth (`team.coachId !== ctx.coach.id`) would fail
+      // for everyone except super-admins.
+      const [{ teamCount }] = await ctx.db
+        .select({ teamCount: sql<number>`count(*)` })
+        .from(coachingTeams)
+        .where(
+          and(
+            eq(coachingTeams.coachId, input.coachId),
+            isNull(coachingTeams.archivedAt),
+          ),
+        );
+      const activeTeams = Number(teamCount);
+      if (activeTeams > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Coach owns ${activeTeams} active coaching team${activeTeams === 1 ? '' : 's'}. Transfer or archive them first.`,
         });
       }
 

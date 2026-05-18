@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import Link from 'next/link';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -1331,8 +1330,13 @@ function ReadinessCard({
           </>
         )}
         {!liveJob && cycle.phase === 'sent' && (
-          <Button asChild variant="outline" size="sm" className="h-7 text-xs">
-            <Link href={`/ceos/${ceoId}/cycles/${cycle.id}`}>View sent report</Link>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setReviewOpen(true)}
+          >
+            View sent report
           </Button>
         )}
         {!liveJob && cycle.phase === 'generated' && (

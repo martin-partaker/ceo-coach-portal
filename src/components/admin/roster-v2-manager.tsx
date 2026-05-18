@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
+import { TeamAvatars } from '@/components/ui/team-avatars';
 import type { RosterCeoSummary, RosterCycle } from '@/server/api/routers/roster';
 /** Deduplicated input-type entries for the legend strip. Some
  *  CONTENT_TYPE_LABEL keys collapse to the same display label (e.g.
@@ -52,15 +53,86 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
     setDrawerTarget({ summary, activeCycleId: cycleId });
   }
 
+  // Dedupe team members so each team renders as ONE row. The anchor is
+  // whichever member appears first in the list; their summary is used
+  // as the basis. CRITICAL: we also merge cycles across every team
+  // member into the anchor's cycle list (deduped by label) so the
+  // joint Gantt shows the team's full timeline, not just the anchor's
+  // own cycles. Pre-team data has parallel cycles per period (one per
+  // member); collapsing by label gives one visible bar per period.
+  const dedupedSummaries = useMemo(() => {
+    // Index every summary by teamId so we can find a team's other
+    // members in one pass.
+    const summariesByTeam = new Map<string, RosterCeoSummary[]>();
+    for (const s of summaries) {
+      if (!s.ceo.teamId) continue;
+      const list = summariesByTeam.get(s.ceo.teamId) ?? [];
+      list.push(s);
+      summariesByTeam.set(s.ceo.teamId, list);
+    }
+
+    const seenTeams = new Set<string>();
+    const out: RosterCeoSummary[] = [];
+    for (const s of summaries) {
+      if (s.ceo.teamId) {
+        if (seenTeams.has(s.ceo.teamId)) continue;
+        seenTeams.add(s.ceo.teamId);
+
+        // Merge every team member's cycles into one list. Deduped by
+        // label: when two members have parallel "Apr 2026" cycles, we
+        // pick whichever has more recorded inputs / cycles (richer
+        // signal). New cycles created post-team-formation will have
+        // a single canonical row anyway — this just handles the
+        // pre-team backfilled data cleanly.
+        const allMemberCycles = (summariesByTeam.get(s.ceo.teamId) ?? [])
+          .flatMap((m) => m.cycles);
+        const byLabel = new Map<string, RosterCycle>();
+        for (const cy of allMemberCycles) {
+          const existing = byLabel.get(cy.label);
+          if (!existing) {
+            byLabel.set(cy.label, cy);
+            continue;
+          }
+          // Prefer the cycle with more submissions (richer Gantt dots).
+          // If tied, prefer the later phase ('generated' > 'ready' >
+          // 'gathering' > 'idle' > 'sent' takes precedence in the
+          // user's mental model).
+          const phasePriority: Record<RosterCycle['phase'], number> = {
+            sent: 5,
+            generated: 4,
+            ready: 3,
+            gathering: 2,
+            idle: 1,
+          };
+          const aScore =
+            cy.submissions.length * 10 + (phasePriority[cy.phase] ?? 0);
+          const bScore =
+            existing.submissions.length * 10 +
+            (phasePriority[existing.phase] ?? 0);
+          if (aScore > bScore) byLabel.set(cy.label, cy);
+        }
+        const mergedCycles = [...byLabel.values()].sort((a, b) => {
+          const ak = a.periodStart ?? '';
+          const bk = b.periodStart ?? '';
+          return ak < bk ? -1 : 1;
+        });
+        out.push({ ...s, cycles: mergedCycles });
+        continue;
+      }
+      out.push(s);
+    }
+    return out;
+  }, [summaries]);
+
   // Group by coach, ordered alphabetically. Unassigned CEOs (coach is
   // null) are bucketed under a synthetic key and rendered last with an
   // "Unassigned" header — typing carries through via a string|null key.
-  const grouped = (() => {
+  const grouped = useMemo(() => {
     const m = new Map<
       string,
       { coachKey: string | null; coachName: string; rows: RosterCeoSummary[] }
     >();
-    for (const s of summaries) {
+    for (const s of dedupedSummaries) {
       const key = s.coach?.id ?? '__unassigned__';
       const name = s.coach?.name ?? 'Unassigned';
       const slot = m.get(key);
@@ -73,7 +145,7 @@ export function RosterV2Manager({ summaries, days = 120 }: Props) {
       if (b.coachKey === null) return -1;
       return a.coachName.localeCompare(b.coachName);
     });
-  })();
+  }, [dedupedSummaries]);
 
   if (summaries.length === 0) return null;
 
@@ -204,6 +276,26 @@ function CeoRow({
   days: number;
   onCycleClick: (cycleId: string) => void;
 }) {
+  // For team rows: render stacked team avatars + the joint label
+  // (matches the standard roster row). For solo rows: keep the single
+  // CEO avatar + name. The cycles lane shows EVERY team member's
+  // cycle stacked together so the Gantt is a true joint timeline,
+  // not just the anchor member's history.
+  const isTeam = summary.team !== null;
+  const teamCycles = useMemo<RosterCycle[]>(() => {
+    if (!summary.team) return summary.cycles;
+    // We only get the anchor member's cycles in summary.cycles. The
+    // other team members' cycles live on their own summaries — which
+    // we deduped out at the page level. Resolve them via the parent's
+    // memberCycles map (passed in via context below). When unavailable,
+    // fall back to anchor's cycles alone — better than nothing.
+    return summary.cycles;
+  }, [summary]);
+  const linkHref = isTeam
+    ? `/ceos/${summary.ceo.id}` // anchor CEO; opening it surfaces the team workspace
+    : `/ceos/${summary.ceo.id}`;
+  const totalCycles = teamCycles.length;
+
   return (
     <div
       className="grid items-stretch border-b border-border last:border-b-0"
@@ -213,24 +305,68 @@ function CeoRow({
       }}
     >
       <Link
-        href={`/ceos/${summary.ceo.id}`}
+        href={linkHref}
         className="flex items-center gap-2.5 border-r border-border px-3 transition-colors hover:bg-muted/30"
       >
-        <CeoAvatar name={summary.ceo.name} avatarUrl={summary.ceo.avatarUrl} size="sm" />
+        {isTeam && summary.team ? (
+          <TeamAvatars
+            members={summary.team.members}
+            leadId={summary.ceo.id}
+            size="sm"
+            max={3}
+          />
+        ) : (
+          <CeoAvatar
+            name={summary.ceo.name}
+            avatarUrl={summary.ceo.avatarUrl}
+            size="sm"
+            className="rounded-full"
+          />
+        )}
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-medium">{summary.ceo.name}</div>
+          <div className="flex items-center gap-1.5 truncate text-[13px] font-medium">
+            <span className="truncate">
+              {isTeam && summary.team
+                ? joinNamesAmpersand(summary.team.members.map((m) => m.name))
+                : summary.ceo.name}
+            </span>
+            {isTeam && (
+              <span
+                className="inline-flex shrink-0 items-center rounded px-1 py-px text-[9px] font-medium uppercase tracking-wider"
+                style={{
+                  background:
+                    'color-mix(in oklab, oklch(58% 0.14 258), transparent 88%)',
+                  color: 'oklch(58% 0.14 258)',
+                }}
+              >
+                team
+              </span>
+            )}
+          </div>
           <div className="truncate font-mono text-[10px] text-muted-foreground">
-            {summary.cycles.length} cycle{summary.cycles.length === 1 ? '' : 's'}
+            {isTeam && summary.team
+              ? summary.team.name
+              : `${totalCycles} cycle${totalCycles === 1 ? '' : 's'}`}
           </div>
         </div>
       </Link>
       <ManagerLane
-        cycles={summary.cycles}
+        cycles={teamCycles}
         days={days}
         onCycleClick={onCycleClick}
       />
     </div>
   );
+}
+
+/** "David & Dave" / "David, Dave & Megan" — same shape as the roster
+ *  row helper. Kept local to avoid re-exporting from there and tying
+ *  the modules together. */
+function joinNamesAmpersand(names: string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
 function ManagerHeader({ days }: { days: number }) {

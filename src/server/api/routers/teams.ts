@@ -4,11 +4,135 @@ import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import {
   ceos,
+  ceoKpiDefinitions,
   coachingTeams,
   coaches,
   cycles,
+  journalEntries,
   reports,
+  transcripts,
 } from '@/db/schema';
+import type { db as dbInstance } from '@/db';
+
+/**
+ * Backfill helper — run whenever a CEO becomes part of a team.
+ *
+ * The team-aware prompt builder reads three flags that, on rows
+ * created BEFORE the CEO was in a team, sit at NULL:
+ *  - cycles.teamId      → null means the cycle is "solo" → the
+ *                          context fetcher won't fan out across team
+ *                          members.
+ *  - journal_entries.authoredByCeoId → null means the byline renderer
+ *                          can't say "David's Week 2" vs "Dave's".
+ *  - transcripts.authoredByCeoId → same as above.
+ *  - ceo_kpi_definitions.teamId → company KPIs need to be dedupable
+ *                          across members.
+ *
+ * This helper backfills all four for the given ceoIds. For author
+ * fields it uses the original `cycle.ceoId` (the cycle's pre-team
+ * owner = the original author of every input on it). Idempotent —
+ * uses IS NULL guards so re-running is a no-op once the data is
+ * stamped.
+ */
+async function backfillCeoInputsForTeam(
+  db: typeof dbInstance,
+  teamId: string,
+  ceoIds: string[],
+): Promise<void> {
+  if (ceoIds.length === 0) return;
+
+  // 1. Tag every existing cycle for these CEOs with teamId.
+  await db
+    .update(cycles)
+    .set({ teamId })
+    .where(and(inArray(cycles.ceoId, ceoIds), isNull(cycles.teamId)));
+
+  // 2. Stamp authoredByCeoId on every journal entry / transcript whose
+  //    parent cycle belongs to one of these CEOs. Author = the cycle's
+  //    pre-team owner (which is the rawInput.ceoId that originally
+  //    routed the input here).
+  //
+  //    Drizzle doesn't expose `UPDATE … FROM` cleanly, so we use a raw
+  //    SQL update with a subquery.
+  await db.execute(sql`
+    UPDATE journal_entries
+       SET authored_by_ceo_id = c.ceo_id
+      FROM cycles c
+     WHERE journal_entries.cycle_id = c.id
+       AND c.ceo_id IN (${sql.join(ceoIds.map((id) => sql`${id}`), sql`, `)})
+       AND journal_entries.authored_by_ceo_id IS NULL
+  `);
+
+  await db.execute(sql`
+    UPDATE transcripts
+       SET authored_by_ceo_id = c.ceo_id
+      FROM cycles c
+     WHERE transcripts.cycle_id = c.id
+       AND c.ceo_id IN (${sql.join(ceoIds.map((id) => sql`${id}`), sql`, `)})
+       AND transcripts.authored_by_ceo_id IS NULL
+  `);
+
+  // 3. Tag every active KPI definition for these CEOs with teamId so
+  //    the context fetcher dedupes them as company-level metrics.
+  //    Archived defs are left alone — they're historical.
+  await db
+    .update(ceoKpiDefinitions)
+    .set({ teamId })
+    .where(
+      and(
+        inArray(ceoKpiDefinitions.ceoId, ceoIds),
+        isNull(ceoKpiDefinitions.teamId),
+        isNull(ceoKpiDefinitions.archivedAt),
+      ),
+    );
+}
+
+/**
+ * Reverse of `backfillCeoInputsForTeam` — runs when a CEO leaves a
+ * team (`removeMember`) or the whole team is dissolved (`archive`).
+ *
+ * Goal: restore the "this row was never team-stamped" state so the
+ * v2 prompt builder treats the data as solo again and the workspace
+ * UI shows it as such.
+ *
+ * What we DO revert:
+ *  - `cycles.teamId` → null for cycles whose ceoId matches the CEOs
+ *    leaving. Without this the cycle becomes orphaned: teamId points
+ *    at a team with no members, the context fetcher resolves
+ *    `members = []`, and queries like `inArray(cycles.ceoId, memberIds)`
+ *    match nothing — generation would see an empty cycle. Critical.
+ *  - `ceo_kpi_definitions.teamId` → null on this CEO's defs.
+ *
+ * What we DON'T revert:
+ *  - `journal_entries.authoredByCeoId` / `transcripts.authoredByCeoId`
+ *    stay stamped. They were ALSO stamped at ingestion time for any
+ *    inputs received post-formation, and we have no marker to tell
+ *    backfill-stamped apart from ingestion-stamped. The byline only
+ *    renders when isTeam=true (cycle.teamId set), so leftover values
+ *    are inert once the cycle is solo again.
+ */
+async function revertTeamStampingForCeos(
+  db: typeof dbInstance,
+  teamId: string,
+  ceoIds: string[],
+): Promise<void> {
+  if (ceoIds.length === 0) return;
+
+  await db
+    .update(cycles)
+    .set({ teamId: null })
+    .where(and(eq(cycles.teamId, teamId), inArray(cycles.ceoId, ceoIds)));
+
+  await db
+    .update(ceoKpiDefinitions)
+    .set({ teamId: null })
+    .where(
+      and(
+        eq(ceoKpiDefinitions.teamId, teamId),
+        inArray(ceoKpiDefinitions.ceoId, ceoIds),
+      ),
+    );
+}
 
 /**
  * Coaching teams — co-founder / co-CEO pairings (or trios). Each team
@@ -200,6 +324,13 @@ export const teamsRouter = createTRPCRouter({
         .set({ teamId: team.id })
         .where(inArray(ceos.id, input.memberCeoIds));
 
+      // Backfill: every existing cycle / journal / transcript / KPI
+      // for these members gets stamped with the team and the original
+      // author. Without this, generation on pre-team cycles still
+      // looks "solo" and the workspace / report renderer can't show
+      // bylines. See helper docs for details.
+      await backfillCeoInputsForTeam(ctx.db, team.id, input.memberCeoIds);
+
       return { team };
     }),
 
@@ -235,12 +366,24 @@ export const teamsRouter = createTRPCRouter({
         .update(ceos)
         .set({ teamId: team.id, memberRole: input.memberRole ?? null })
         .where(eq(ceos.id, ceo.id));
+
+      // Same backfill rules as formFromMembers — the joining member's
+      // existing cycles / journals / transcripts / KPIs need to roll
+      // up to the team so generation fans out correctly.
+      await backfillCeoInputsForTeam(ctx.db, team.id, [ceo.id]);
+
       return { ok: true };
     }),
 
   /** Remove a CEO from a team. The CEO becomes solo again; their team
    *  membership is cleared. The team itself stays (1-member teams are
-   *  allowed — coach can delete via `archive` if they want). */
+   *  allowed — coach can delete via `archive` if they want).
+   *
+   *  Also reverses the backfill so the leaving member's cycles + KPIs
+   *  return to their pre-team state. Without this revert, those rows
+   *  would still point at the team and generation on them would
+   *  resolve `members = []` (the CEO is no longer linked to the team),
+   *  producing empty context. */
   removeMember: protectedProcedure
     .input(z.object({ ceoId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -256,10 +399,17 @@ export const teamsRouter = createTRPCRouter({
           message: 'This CEO is not in a team.',
         });
       await loadTeamForCaller(ctx, ceo.teamId);
+
+      const teamId = ceo.teamId;
       await ctx.db
         .update(ceos)
         .set({ teamId: null, memberRole: null })
         .where(eq(ceos.id, ceo.id));
+
+      // Revert cycle / KPI tagging for just this CEO. Other team
+      // members are unaffected.
+      await revertTeamStampingForCeos(ctx.db, teamId, [ceo.id]);
+
       return { ok: true };
     }),
 
@@ -331,18 +481,38 @@ export const teamsRouter = createTRPCRouter({
     return rows;
   }),
 
-  /** Archive a team — clears members and marks the team archived.
-   *  Cycles already generated against the team stay attached to their
-   *  cycle.teamId (historical record), but no new cycles will roll up
-   *  to the team. */
+  /** Archive a team — fully reverses formation so every member's data
+   *  returns to its pre-team state. Each member's ceos.teamId,
+   *  cycles.teamId, and ceo_kpi_definitions.teamId all get cleared.
+   *  The team row itself is soft-deleted (archivedAt set) so historical
+   *  references to it can still resolve a name. */
   archive: protectedProcedure
     .input(z.object({ teamId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const team = await loadTeamForCaller(ctx, input.teamId);
+
+      // Capture the member ids BEFORE we null their teamId, so the
+      // revert helper has something to match against.
+      const memberRows = await ctx.db
+        .select({ id: ceos.id })
+        .from(ceos)
+        .where(eq(ceos.teamId, team.id));
+      const memberIds = memberRows.map((m) => m.id);
+
       await ctx.db
         .update(ceos)
         .set({ teamId: null, memberRole: null })
         .where(eq(ceos.teamId, team.id));
+
+      // Revert cycle / KPI tagging for every former member so the
+      // post-archive state matches the pre-formation state. Critical:
+      // without this, cycles tagged with this teamId would still resolve
+      // to the (now-archived) team and end up with `members = []` on
+      // context fetch, which would break generation.
+      if (memberIds.length > 0) {
+        await revertTeamStampingForCeos(ctx.db, team.id, memberIds);
+      }
+
       await ctx.db
         .update(coachingTeams)
         .set({ archivedAt: new Date() })

@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { CeoAvatar } from '@/components/ui/ceo-avatar';
+import { TeamAvatars } from '@/components/ui/team-avatars';
 import { cn } from '@/lib/utils';
 import type { RosterCeoSummary, RosterCycle, RosterReadiness } from '@/server/api/routers/roster';
 import { deriveCycleLabel } from './roster-v2-shared';
@@ -167,33 +168,19 @@ export function RosterV2Row({
             stack behind it. */}
         <div className="flex min-w-0 items-center gap-3">
           {summary.team ? (
-            <div className="flex shrink-0 -space-x-2">
-              {summary.team.members.slice(0, 3).map((m) => (
-                <span
-                  key={m.id}
-                  className={cn(
-                    'inline-flex h-8 w-8 items-center justify-center rounded-full ring-2',
-                    m.id === summary.ceo.id ? 'ring-foreground/20' : 'ring-background',
-                  )}
-                  title={`${m.name}${m.memberRole ? ` — ${m.memberRole}` : ''}`}
-                >
-                  <CeoAvatar name={m.name} avatarUrl={m.avatarUrl} size="sm" />
-                </span>
-              ))}
-              {summary.team.members.length > 3 && (
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground ring-2 ring-background"
-                  title={summary.team.members
-                    .slice(3)
-                    .map((m) => m.name)
-                    .join(', ')}
-                >
-                  +{summary.team.members.length - 3}
-                </span>
-              )}
-            </div>
+            <TeamAvatars
+              members={summary.team.members}
+              leadId={summary.ceo.id}
+              size="sm"
+              max={3}
+            />
           ) : (
-            <CeoAvatar name={summary.ceo.name} avatarUrl={summary.ceo.avatarUrl} size="sm" />
+            <CeoAvatar
+              name={summary.ceo.name}
+              avatarUrl={summary.ceo.avatarUrl}
+              size="sm"
+              className="rounded-full"
+            />
           )}
           <div className="min-w-0">
             <div className="flex items-center gap-2 truncate text-sm font-medium">

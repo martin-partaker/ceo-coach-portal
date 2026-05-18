@@ -141,11 +141,18 @@ function PopoverBody({ reportId, section }: Props) {
   );
 
   // ── Mutations ────────────────────────────────────────────────────
+  // Critical: the report modal renders from `getReportVersions`, not
+  // `getForCycle` — invalidate BOTH so the document below the popover
+  // repaints with the new section as soon as the mutation lands. Same
+  // for revert + raw edit. Without the getReportVersions invalidate,
+  // the section saves to the DB but the user has to refresh the page
+  // to see the change.
   const refine = trpc.reports.refineSectionV2.useMutation({
     onSuccess: async () => {
       await Promise.all([
         utils.reports.getForCycle.invalidate(),
         utils.reports.getForReportId.invalidate({ reportId }),
+        utils.reports.getReportVersions.invalidate(),
         utils.reports.listRefinements.invalidate({ reportId }),
       ]);
       setMessage('');
@@ -157,6 +164,7 @@ function PopoverBody({ reportId, section }: Props) {
       await Promise.all([
         utils.reports.getForCycle.invalidate(),
         utils.reports.getForReportId.invalidate({ reportId }),
+        utils.reports.getReportVersions.invalidate(),
         utils.reports.listRefinements.invalidate({ reportId }),
       ]);
     },
@@ -167,6 +175,7 @@ function PopoverBody({ reportId, section }: Props) {
       await Promise.all([
         utils.reports.getForCycle.invalidate(),
         utils.reports.getForReportId.invalidate({ reportId }),
+        utils.reports.getReportVersions.invalidate(),
       ]);
     },
   });

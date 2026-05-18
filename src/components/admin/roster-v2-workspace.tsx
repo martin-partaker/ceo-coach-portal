@@ -571,13 +571,14 @@ function CycleBody({
           isReady={isReady}
           reviewKey={reviewKey}
         />
-        <ContextInspector
-          ceoId={ceo.id}
-          ceoName={ceo.name}
-          cycle={cycle}
-          prevCycle={prevCycle}
-          submissionsCount={data?.rawInputs.length ?? cycle.submissions.length}
-        />
+        {/* "What the AI will see" + Inspect prompt panel removed —
+            the inspector renders the v1 single-shot prompt, which now
+            only matches the Instant generation mode; for Quick and
+            Full the v2 pipeline produces a different prompt entirely.
+            The v2 modal has its own "Break out to LLM" affordance
+            that's accurate for whichever mode actually ran. Keeping
+            the legacy inspector on the workspace was more confusing
+            than helpful. */}
         {/* <RecentReports ceoId={ceo.id} ceoName={ceo.name} /> */}
       </div>
     </div>

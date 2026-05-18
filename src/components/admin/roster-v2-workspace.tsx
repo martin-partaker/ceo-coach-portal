@@ -1144,6 +1144,11 @@ function ReadinessCard({
   const [confirmGapsOpen, setConfirmGapsOpen] = useState(false);
   const [pendingTriageOpen, setPendingTriageOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  // Collapsible inputs checklist. Default open when the cycle is fully
+  // ready (a clean checklist confirms readiness at a glance) and closed
+  // otherwise so the coach's eye goes to the missing-inputs callout +
+  // generate buttons below without scrolling past 6 individual rows.
+  const [checklistOpen, setChecklistOpen] = useState(false);
   // Captured when the coach clicks any generate button while inputs
   // have gaps OR there are pending triage items, so the corresponding
   // dialog knows which mode to fire on confirm.
@@ -1268,7 +1273,22 @@ function ReadinessCard({
           : { background: 'var(--background)', borderColor: 'var(--border)' }
       }
     >
-      <div className="mb-2.5 flex items-center gap-2">
+      {/* Collapsible inputs checklist. The header bar always shows the
+          status ("3 of 6 inputs ready"); the per-item list expands
+          only when the coach wants to drill in. Default open when
+          isReady so a fully-prepped cycle still confirms what's in;
+          default closed otherwise to keep the card scannable when
+          the coach is mid-workflow. */}
+      <button
+        type="button"
+        onClick={() => setChecklistOpen((v) => !v)}
+        className={cn(
+          'mb-2.5 flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-muted/40',
+          isReady && 'text-[oklch(55%_0.12_152)]',
+        )}
+        aria-expanded={checklistOpen}
+        aria-controls={`readiness-list-${cycle.id}`}
+      >
         <span
           className="grid h-5 w-5 place-items-center rounded text-[12px] text-white"
           style={{
@@ -1278,38 +1298,46 @@ function ReadinessCard({
         >
           {isReady ? '✓' : ' '}
         </span>
-        <div className={cn('text-[13px] font-semibold', isReady && 'text-[oklch(55%_0.12_152)]')}>
+        <div className="flex-1 text-[13px] font-semibold">
           {isReady ? 'All inputs complete' : `${totalReady} of ${totalSlots} inputs ready`}
         </div>
-      </div>
-      <div className="mb-3 grid gap-1">
-        {items.map((i) => {
-          const r = cycle.readiness[i.key];
-          return (
-            <div key={i.key} className="flex items-center gap-2 text-[12px]">
-              <span
-                className="grid h-3 w-3 place-items-center rounded-sm text-[8px] text-white"
-                style={{
-                  background: r.done
-                    ? r.ai
-                      ? 'color-mix(in oklab, oklch(58% 0.14 258), transparent 50%)'
-                      : 'oklch(55% 0.12 152)'
-                    : 'transparent',
-                  border: r.done ? 'none' : '1px solid var(--border)',
-                }}
-              >
-                {r.done ? '✓' : ''}
-              </span>
-              <span className={cn(r.done ? 'text-foreground/85' : 'text-muted-foreground')}>{i.label}</span>
-              {r.ai && (
-                <span className="ml-1 rounded bg-[oklch(58%_0.14_258)/15] px-1 py-px text-[9px] font-medium text-[oklch(58%_0.14_258)]">
-                  AI
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 text-muted-foreground transition-transform',
+            checklistOpen && 'rotate-90',
+          )}
+        />
+      </button>
+      {checklistOpen && (
+        <div id={`readiness-list-${cycle.id}`} className="mb-3 grid gap-1 pl-1.5">
+          {items.map((i) => {
+            const r = cycle.readiness[i.key];
+            return (
+              <div key={i.key} className="flex items-center gap-2 text-[12px]">
+                <span
+                  className="grid h-3 w-3 place-items-center rounded-sm text-[8px] text-white"
+                  style={{
+                    background: r.done
+                      ? r.ai
+                        ? 'color-mix(in oklab, oklch(58% 0.14 258), transparent 50%)'
+                        : 'oklch(55% 0.12 152)'
+                      : 'transparent',
+                    border: r.done ? 'none' : '1px solid var(--border)',
+                  }}
+                >
+                  {r.done ? '✓' : ''}
                 </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                <span className={cn(r.done ? 'text-foreground/85' : 'text-muted-foreground')}>{i.label}</span>
+                {r.ai && (
+                  <span className="ml-1 rounded bg-[oklch(58%_0.14_258)/15] px-1 py-px text-[9px] font-medium text-[oklch(58%_0.14_258)]">
+                    AI
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="grid gap-1.5">
         {liveJob && (
           <>
@@ -1356,11 +1384,9 @@ function ReadinessCard({
                   Quick   — facts + patterns + draft, no rubric (~5 min).
                   Full    — adds rubric self-check + revisions (~15 min).
                 Buttons share visual weight; the only state-driven cue
-                is the "missing inputs" chip below, hoisted out of the
-                middle button so the three options read as parallel
-                choices rather than three different categories. Quick
-                stays the highlighted/primary option as the recommended
-                balance of speed and quality. */}
+                is the "missing inputs" chip below. Quick stays the
+                highlighted/primary option as the recommended balance
+                of speed and quality. */}
             {pendingTriageCount > 0 && (
               <button
                 type="button"
@@ -1377,19 +1403,51 @@ function ReadinessCard({
                 </span>
               </button>
             )}
+
+            {/* Section header — anchors the buttons as "this is the
+                generate panel", not a continuation of the checklist. */}
+            <div className="mb-1 mt-1 flex items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Generate report
+              </span>
+              <div className="h-px flex-1 bg-border/60" />
+            </div>
+
+            {/* Combined missing-inputs + reassurance card. Replaces the
+                separate amber warning and the ghost "Heads-up" line at
+                the bottom — both said similar things in different
+                places. One block, clear: what's missing, and the
+                explicit promise that generation still works. */}
             {!isReady && (
               <div
-                className="mb-0.5 flex items-center gap-1.5 text-[11px]"
-                style={{ color: 'oklch(58% 0.13 64)' }}
+                className="mb-1 rounded-md border px-2.5 py-1.5 text-[11px] leading-relaxed"
+                style={{
+                  borderColor:
+                    'color-mix(in oklab, oklch(58% 0.13 64), transparent 65%)',
+                  background:
+                    'color-mix(in oklab, oklch(58% 0.13 64), transparent 92%)',
+                }}
               >
-                <AlertTriangle className="h-3 w-3 shrink-0" />
-                <span>
-                  Missing {missingLabels.length === 1 ? 'input' : 'inputs'}:{' '}
-                  {missingLabels.slice(0, 2).join(', ')}
-                  {missingLabels.length > 2 ? ` +${missingLabels.length - 2}` : ''}
-                </span>
+                <div
+                  className="flex items-start gap-1.5"
+                  style={{ color: 'oklch(58% 0.13 64)' }}
+                >
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span>
+                    <span className="font-medium">
+                      Missing {missingLabels.length === 1 ? 'input' : 'inputs'}:
+                    </span>{' '}
+                    {missingLabels.slice(0, 3).join(', ')}
+                    {missingLabels.length > 3 ? ` +${missingLabels.length - 3}` : ''}
+                  </span>
+                </div>
+                <p className="ml-4.5 mt-1 text-muted-foreground">
+                  You can still generate — the report will use what&apos;s
+                  there and flag what isn&apos;t.
+                </p>
               </div>
             )}
+
             <Button
               size="sm"
               variant="outline"
@@ -1433,14 +1491,11 @@ function ReadinessCard({
             </Button>
             {/* Plain-language explainer the coach can expand inline. Keeps
                 the buttons themselves uncluttered while still answering
-                "what's the difference?" without leaving the page. */}
+                "what's the difference?" without leaving the page. The
+                "you can still generate with gaps" reassurance moved up
+                into the missing-inputs card above so it's adjacent to
+                the warning it's softening. */}
             <GenerationModeExplainer />
-            {!isReady && (
-              <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
-                Heads-up: you can generate even with missing inputs — the
-                report will use what&apos;s there and flag what isn&apos;t.
-              </p>
-            )}
             {generate.error && (
               <p className="mt-1 text-[11px] text-destructive">
                 {generate.error.message}

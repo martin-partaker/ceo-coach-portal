@@ -306,7 +306,13 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
   const goalTenX = modelGoal?.tenX?.trim() || data.ceo.tenXGoal?.trim() || '';
   const goalNinety = modelGoal?.ninetyDay?.trim() ?? null;
   const goalThirty = modelGoal?.thirtyDay?.trim() ?? null;
-  const goalFlag = modelGoal?.flag?.trim() ?? null;
+  // `modelGoal.flag` is the "Flag for Coach Review" callout for goal
+  // drift / goal-figure conflicts. It is COACH-ONLY by design — the
+  // on-screen review modal surfaces it before send, but it must never
+  // appear in the PDF that lands in the CEO's inbox. We intentionally
+  // do NOT extract `goalFlag` here so it cannot accidentally be
+  // rendered downstream. (Source of truth for goal-drift visibility
+  // is the on-screen DocumentRenderer + the coachReviewFlags array.)
   // Legacy fallback for very old reports that don't have the structured
   // block — fold monthly goals into a single "Monthly goals" line below
   // the 10x bullet (mirrors the old layout).
@@ -314,7 +320,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
     ? data.cycle.monthlyGoals.trim()
     : null;
   const hasGoalSection =
-    !!goalTenX || !!goalNinety || !!goalThirty || !!goalFlag || !!legacyMonthlyGoals;
+    !!goalTenX || !!goalNinety || !!goalThirty || !!legacyMonthlyGoals;
   // Progress section now renders if there's prose OR KPIs — a cycle
   // with only KPIs (no narrative yet) still gets its own section.
   const hasProgressSection = !!progressText || kpis.length > 0;
@@ -378,12 +384,6 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               <View style={styles.paragraph}>
                 <Text style={styles.paragraphLabel}>Monthly goals</Text>
                 <MarkdownPdf text={legacyMonthlyGoals} />
-              </View>
-            )}
-            {goalFlag && (
-              <View style={styles.flagBox}>
-                <Text style={styles.flagLabel}>⚑ Flag for Coach Review: </Text>
-                <MarkdownPdf text={goalFlag} />
               </View>
             )}
             <View style={styles.divider} />

@@ -86,6 +86,10 @@ interface ReportJson {
       detail: string;
       urgency?: 'info' | 'attention' | 'urgent';
     }>;
+    closing?: {
+      sentence: string;
+      nextSessionDate: string | null;
+    } | null;
   };
 }
 

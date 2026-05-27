@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { auth } from '@/lib/auth/server';
 import { db } from '@/db';
@@ -9,6 +9,7 @@ import {
   ceos,
   ceoKpiDefinitions,
   coaches,
+  coachingTeams,
   cycleKpiValues,
   reports,
 } from '@/db/schema';
@@ -38,6 +39,16 @@ interface ReportJson {
     patternObservations?: string;
     suggestedNextSteps?: string[];
     suggestedResourceIds?: string[];
+    goalSummary?: {
+      tenX?: string;
+      ninetyDay?: string | null;
+      thirtyDay?: string | null;
+      flag?: string | null;
+    } | null;
+    closing?: {
+      sentence: string;
+      nextSessionDate: string | null;
+    } | null;
   };
 }
 
@@ -122,6 +133,43 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
+  // Team cycles: when cycle.teamId is set, the report subject is the
+  // joint team, not the single lead CEO. Load every member so the
+  // header can render "David Harding & Dave Snyder" instead of just
+  // the lead member. Solo cycles fall through with members=[ceo].
+  let team: typeof coachingTeams.$inferSelect | null = null;
+  let members: Array<typeof ceos.$inferSelect> = [ceo];
+  if (cycle.teamId) {
+    const [t] = await db
+      .select()
+      .from(coachingTeams)
+      .where(eq(coachingTeams.id, cycle.teamId))
+      .limit(1);
+    if (t) {
+      team = t;
+      const allMembers = await db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.teamId, cycle.teamId))
+        .orderBy(asc(ceos.createdAt));
+      // Lead CEO first (matches the on-screen renderer's display order),
+      // then everyone else in createdAt order.
+      const lead = allMembers.find((m) => m.id === cycle.ceoId);
+      const rest = allMembers.filter((m) => m.id !== cycle.ceoId);
+      members = lead ? [lead, ...rest] : allMembers;
+    }
+  }
+  /** Display name for the report header — joint label for teams, single
+   *  CEO for solo cycles. Pairs use " & "; trios use ", X & Y"; 4+ use
+   *  ", ", "-joined with the final " & ". Matches the convention used in
+   *  the drafter's subjectFullLabel helper. */
+  const subjectName =
+    members.length === 1
+      ? members[0].name
+      : members.length === 2
+        ? `${members[0].name} & ${members[1].name}`
+        : `${members.slice(0, -1).map((m) => m.name).join(', ')} & ${members[members.length - 1].name}`;
+
   // Coach metadata is best-effort — show the assigned coach's name as
   // the "Coach" line in the PDF subtitle when we have it.
   const [assignedCoach] = ceo.coachId
@@ -132,10 +180,16 @@ export async function GET(
         .limit(1)
     : [];
 
+  // Order by generatedAt DESC so a regenerate (which inserts a new
+  // row) is what the PDF download picks up. Without the explicit
+  // ORDER BY, Postgres returns whichever row it likes — usually the
+  // first-inserted one — and downloads silently serve the stale
+  // version even though the UI shows the regenerated draft.
   const [latestReport] = await db
     .select()
     .from(reports)
     .where(eq(reports.cycleId, cycleId))
+    .orderBy(desc(reports.generatedAt))
     .limit(1);
   if (!latestReport) {
     return NextResponse.json(
@@ -272,10 +326,14 @@ export async function GET(
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
   // ── Assemble PDF data ───────────────────────────────────────────
+  // Team-aware 10x goal: the team row holds the shared goal for team
+  // cycles; fall back to the lead CEO's goal when no team is set.
+  const tenXGoal = team?.tenXGoal ?? ceo.tenXGoal ?? null;
+
   const pdfData: CycleReportPdfData = {
     ceo: {
-      name: ceo.name,
-      tenXGoal: ceo.tenXGoal ?? null,
+      name: subjectName,
+      tenXGoal,
     },
     cycle: {
       label: cycle.label,
@@ -320,7 +378,11 @@ export async function GET(
     );
   }
 
-  const filename = `${slug(ceo.name)}_${slug(cycle.label)}_summary.pdf`;
+  // Filename mirrors the header subject — for team cycles use the team
+  // name when available (cleaner than two CEO names with " & " joining
+  // them); fall back to the joint subjectName otherwise.
+  const filenameSubject = team?.name ?? subjectName;
+  const filename = `${slug(filenameSubject)}_${slug(cycle.label)}_summary.pdf`;
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,
     headers: {

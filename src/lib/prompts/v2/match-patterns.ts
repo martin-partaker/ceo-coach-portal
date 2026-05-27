@@ -31,12 +31,13 @@ const SYSTEM_PROMPT = `You are a cross-cycle pattern matcher for an executive co
 - **evolving** — patterns that visibly shifted THIS cycle. The pattern existed before but got more specific, more severe, less severe, more deliberate, etc.
 - **resolving** — patterns that were present before and are now closing. howResolved = the specific change that ended it.
 - **newThisCycle** — patterns that only appeared this cycle. Plain strings — these are observations, not yet patterns until they recur.
+- **intraMonthTrends** — when the current cycle's effort.weekly has 3+ entries, identify within-month trends worth speaking to: effort spiking and then collapsing, a single light week pulling the total down, a daily rhythm forming or breaking. Populate this even when isFirstCycle=true — the cross-cycle arrays stay empty in that case, but the drafter still needs intra-month signal so patternObservations isn't reduced to "first cycle, no patterns yet". One sentence per trend, grounded in the weekly minutes/note pairs.
 
 ## Rules
 
-- Only call something a pattern if it appears in 2+ cycles' Facts. A single new observation goes in newThisCycle.
+- Only call something a cross-cycle pattern if it appears in 2+ cycles' Facts. A single new observation goes in newThisCycle.
 - Quote specifics. "You're still in the weeds" beats "operational tendency". Use the language the prior cycles used.
-- If priorFacts is empty, set isFirstCycle=true and leave all arrays empty. The drafter will say so explicitly.
+- If priorFacts is empty, set isFirstCycle=true and leave carryingForward/evolving/resolving/newThisCycle arrays empty. STILL populate intraMonthTrends if the current cycle has 3+ weekly entries.
 - Be precise. The drafter will inline these into the report's patternObservations section.
 
 Call the ${PATTERNS_TOOL_NAME} tool. No prose.`;
@@ -52,8 +53,14 @@ export async function matchPatterns(args: {
 }): Promise<MatchPatternsResult> {
   const { ctx, currentFacts } = args;
 
-  if (ctx.isFirstCycle) {
-    // Skip the model call — there's nothing to match against.
+  // Short-circuit ONLY when there's nothing to match against and no
+  // intra-month signal worth extracting. With 3+ weekly journals the
+  // model can still identify within-month trends (e.g. effort spike →
+  // collapse, single light week pulling totals down) that patternObservations
+  // needs — without those, a Cycle 1 report's patterns section reads
+  // as a flat "first cycle, no comparisons" disclaimer.
+  const weeklyEntries = currentFacts.effort.weekly.length;
+  if (ctx.isFirstCycle && weeklyEntries < 3) {
     return {
       patterns: {
         carryingForward: [],
@@ -61,6 +68,7 @@ export async function matchPatterns(args: {
         resolving: [],
         newThisCycle: [],
         isFirstCycle: true,
+        intraMonthTrends: [],
       },
       modelUsed: 'short-circuit:first-cycle',
     };
@@ -77,6 +85,11 @@ export async function matchPatterns(args: {
     .map((p) => `### ${p.label} (prior patternObservations prose)\n${p.text}`)
     .join('\n\n---\n\n');
 
+  const isFirstCycle = ctx.isFirstCycle;
+  const intraMonthHint = weeklyEntries >= 3
+    ? `\n\n## Intra-month context (${weeklyEntries} weekly entries this month)\nWith ${weeklyEntries} weekly journals present, populate intraMonthTrends with within-month observations grounded in the weekly minutes/notes above. Examples of what to look for: a single light week dragging the total down; effort compressed into a sprint rather than a daily rhythm; an effort spike around a specific event (e.g. an offsite).`
+    : '';
+
   const userPrompt = `## Current cycle facts (Cycle: ${ctx.cycle.label})
 \`\`\`json
 ${JSON.stringify(currentFacts, null, 2)}
@@ -86,9 +99,9 @@ ${JSON.stringify(currentFacts, null, 2)}
 ${priorFactsBlock || '(no prior CycleFacts rows — only legacy patternObservations prose available, see below)'}
 
 ## Prior cycles' patternObservations prose (legacy fallback)
-${priorPatternsBlock || '(none)'}
+${priorPatternsBlock || '(none)'}${intraMonthHint}
 
-Now identify the cross-cycle patterns. Call ${PATTERNS_TOOL_NAME}.`;
+${isFirstCycle ? 'isFirstCycle=true (no prior cycles). Leave cross-cycle arrays empty; populate intraMonthTrends if weekly entries support it. ' : ''}Now identify the patterns. Call ${PATTERNS_TOOL_NAME}.`;
 
   const modelId = MODELS.draft;
 

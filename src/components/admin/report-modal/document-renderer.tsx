@@ -70,6 +70,10 @@ export type DocumentReportShape = {
       detail: string;
       urgency?: 'info' | 'attention' | 'urgent';
     }>;
+    closing?: {
+      sentence: string;
+      nextSessionDate: string | null;
+    } | null;
   };
 };
 
@@ -195,12 +199,12 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
           </DocSection>
         )}
 
-        {/* 2. Progress Summary */}
+        {/* 2. Momentum Check (was: Progress Summary) */}
         {r.progressSummary && (
           <DocSection
             id="progressSummary"
             number={r.goalSummary ? 2 : 1}
-            title="Progress Summary"
+            title="Momentum Check"
             highlighted={highlightSections?.has('progressSummary')}
             emphasized={emphasizedSection === 'progressSummary'}
             onClick={() => onSectionClick?.('progressSummary')}
@@ -257,7 +261,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
           </DocSection>
         )}
 
-        {/* 5. Pattern Observations */}
+        {/* 5. Flight Patterns (was: Pattern Observations) */}
         {r.patternObservations && (
           <DocSection
             id="patternObservations"
@@ -268,7 +272,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
               (r.challenges?.length ? 1 : 0) +
               1
             }
-            title="Pattern Observations"
+            title="Flight Patterns"
             highlighted={highlightSections?.has('patternObservations')}
             emphasized={emphasizedSection === 'patternObservations'}
             onClick={() => onSectionClick?.('patternObservations')}
@@ -278,7 +282,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
           </DocSection>
         )}
 
-        {/* 6. Recommended Next Steps */}
+        {/* 6. Flight Plan: Recommended Next Steps */}
         {r.suggestedNextSteps && r.suggestedNextSteps.length > 0 && (
           <DocSection
             id="suggestedNextSteps"
@@ -290,7 +294,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
               (r.patternObservations ? 1 : 0) +
               1
             }
-            title="Recommended Next Steps"
+            title="Flight Plan: Recommended Next Steps"
             highlighted={highlightSections?.has('suggestedNextSteps')}
             emphasized={emphasizedSection === 'suggestedNextSteps'}
             onClick={() => onSectionClick?.('suggestedNextSteps')}
@@ -305,10 +309,40 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             </ol>
           </DocSection>
         )}
+
+        {/* Closing — encouraging sign-off + next session date */}
+        {r.closing && r.closing.sentence && (
+          <ClosingBlock
+            sentence={r.closing.sentence}
+            nextSessionDate={r.closing.nextSessionDate ?? null}
+          />
+        )}
       </div>
     </div>
   );
 });
+
+function ClosingBlock({
+  sentence,
+  nextSessionDate,
+}: {
+  sentence: string;
+  nextSessionDate: string | null;
+}) {
+  return (
+    <section
+      data-section="closing"
+      className="mt-2 border-t border-border pt-5 text-[14px] leading-relaxed"
+    >
+      <p className="italic text-foreground/90">
+        <MarkdownInline text={sentence} />
+      </p>
+      {nextSessionDate && (
+        <p className="mt-2 font-semibold">Next session: {nextSessionDate}</p>
+      )}
+    </section>
+  );
+}
 
 function DocSection({
   id,

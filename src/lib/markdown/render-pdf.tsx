@@ -34,6 +34,30 @@ const styles = StyleSheet.create({
   bulletBody: {
     flex: 1,
   },
+  table: {
+    marginBottom: 8,
+    borderTopWidth: 0.5,
+    borderTopColor: '#d1d5db',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#e5e7eb',
+  },
+  tableHeaderRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 0.8,
+    borderBottomColor: '#9ca3af',
+    backgroundColor: '#f9fafb',
+  },
+  tableCell: {
+    flex: 1,
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+  },
+  tableHeaderCellText: {
+    fontFamily: 'Helvetica-Bold',
+  },
 });
 
 const FONT_BOLD = 'Helvetica-Bold';
@@ -89,7 +113,7 @@ function renderInlines(
   });
 }
 
-/** Render a single block (paragraph or list). */
+/** Render a single block (paragraph, list, or table). */
 function renderBlock(block: Block, key: number): React.ReactElement {
   if (block.kind === 'paragraph') {
     // Soft line breaks inside a paragraph are preserved as `\n` inside
@@ -104,6 +128,34 @@ function renderBlock(block: Block, key: number): React.ReactElement {
             </React.Fragment>
           ))}
         </Text>
+      </View>
+    );
+  }
+  if (block.kind === 'table') {
+    const cellAlign = (a: 'left' | 'center' | 'right' | null) =>
+      a === 'right' ? 'right' : a === 'center' ? 'center' : 'left';
+    return (
+      <View key={key} style={styles.table}>
+        <View style={styles.tableHeaderRow}>
+          {block.header.map((cell, ci) => (
+            <View key={ci} style={styles.tableCell}>
+              <Text style={[styles.tableHeaderCellText, { textAlign: cellAlign(block.align[ci] ?? null) }]}>
+                {renderInlines(cell, { bold: true })}
+              </Text>
+            </View>
+          ))}
+        </View>
+        {block.rows.map((row, ri) => (
+          <View key={ri} style={styles.tableRow}>
+            {row.map((cell, ci) => (
+              <View key={ci} style={styles.tableCell}>
+                <Text style={{ textAlign: cellAlign(block.align[ci] ?? null) }}>
+                  {renderInlines(cell)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ))}
       </View>
     );
   }

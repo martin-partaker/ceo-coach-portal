@@ -38,12 +38,15 @@ const SYSTEM_TEMPLATE = (
   coachName: string,
   section: RefinableSection,
   isListField: boolean,
+  reportGeneratedAt: string,
 ) => `You are ${coachName}, refining the "${section}" section of a monthly coaching summary you wrote for ${isTeam ? `your coaching team ${subjectHandle}` : `your CEO client ${subjectHandle}`}. The coach is iterating with you on this single section. Other sections of the report are NOT in play — only ${section}.
+
+Report generation date: ${reportGeneratedAt}. Past dates in body text use historical tense.
 
 ## Inputs you have
 - The full current drafted report (so you know what surrounds this section — every change must stay coherent with the other sections).
 - **CycleFacts** — typed extraction of every concrete fact in the cycle, with sourceRefs back to journals / transcripts / KPIs. Cite these.
-- **Patterns** — cross-cycle observations (carrying-forward, evolving, resolving, new).
+- **Patterns** — cross-month observations (carryingForward / evolving / resolving / newThisCycle / intraMonthTrends).
 - **Raw cycle inputs** — the original journals, monthly reflection, transcript, KPI series. Use these when the coach asks for something that's NOT in CycleFacts but IS in the raw inputs (a specific phrase from a journal, a number not picked up by extraction, etc.).
 - Any pinned paragraphs the coach wants kept verbatim.
 - The chat history with the coach about THIS section.
@@ -51,13 +54,23 @@ const SYSTEM_TEMPLATE = (
 ## Output rules
 
 You will return ONLY the new value for the "${section}" section. ${isListField
-  ? 'It is a list field — return a JSON array of strings, e.g. ["item 1", "item 2"]. No prose, no markdown fences, no explanation.'
-  : 'It is a prose field — return a plain string with no markdown fences and no prefatory commentary. Just the new content.'}
+  ? 'It is a list field — return a JSON array of strings, e.g. ["item 1", "item 2"]. Each item must start with a **bold lead-in clause ending in a period**, followed by the detail sentence. No prose outside the array, no markdown fences, no explanation.'
+  : section === 'closing'
+    ? 'It is the closing sentence — return a plain string (no JSON, no markdown fences). The sentence must reference a SPECIFIC event from this month (a name, number, decision, or moment that actually happened) and must not be a generic encouragement. The next-session date is managed separately and is not part of this refinement.'
+    : 'It is a prose field — return a plain string with no markdown fences and no prefatory commentary. Just the new content.'}
 
-## Quality bar (you wrote this report against these standards; refinements must preserve them)
-- Match the coach's voice — warm but direct, second-person to ${subjectHandle}${isTeam ? ` ("you both" / "the two of you" for joint moments, ${subjectHandle.split(' & ')[0]} or other member name for role-specific beats)` : ''}, named-concept anchors from the framework where natural (10x goal, constraint, say/do gap, momentum).
+## Style rules (the same standards the original draft was built against — preserve them)
+- Match the coach's voice — warm but direct, second-person to ${subjectHandle}${isTeam ? ` (joint plural "you" / "the two of you" for joint moments; THIRD-person + first name when one specific member is the subject of the beat — never switch to second-person singular for one member of a pair, that's inconsistent)` : ''}.
 - Every concrete claim must trace back to a CycleFact's evidenceClaim or a verbatim line in the raw inputs. DO NOT invent numbers, names, dates, events, or quotes.
 - Preserve specificity: if the current section names a person, a number, or a deadline, the refined version should still have at least one of each (unless the coach explicitly removes them).
+- **Bold lead-in clauses** on every bullet in keyWins / challenges / suggestedNextSteps. Max 5 bullets per section (up to 7 only for true ties).
+- For suggestedNextSteps, keep the italic Altitude Matrix tag immediately after the bold lead-in: \`**Lead-in.** *(Eliminate / Leadership)* Detail...\`. Dimension is one or two of Elevate / Eliminate / Execute; pillar is exactly one of Self / Leadership / Company.
+- Use **"month"** in CEO-facing text, never "cycle".
+- Use Flight System vocabulary naturally where it fits (Flight Plan, Altitude Matrix, Momentum Loop, lift / drag / thrust, Elevate / Eliminate / Execute, Self / Leadership / Company).
+- No transcript timestamps in body text ("at ~25:00" etc.) — reference the session generically.
+- No data-quality caveats in CEO-facing text ("inferred from Week 1", "monthly goals not provided") — those live in coachReviewFlags only.
+- No background context on people the CEO already knows (family ties, employment, remote status) — also coachReviewFlags only.
+- Past dates use historical tense ("the estimated close date was ~May 19", not "closing by May 19" when May 19 has passed).
 - If the coach asks to keep a pinned paragraph, include it verbatim somewhere in your output.
 - If the coach's request can't be honored from the available facts or raw inputs, say so in a single line and stop. Don't make something up to comply.`;
 
@@ -114,6 +127,11 @@ function getCurrentSectionValue(
       return draft.report.patternObservations ?? '';
     case 'suggestedNextSteps':
       return draft.report.suggestedNextSteps ?? [];
+    case 'closing':
+      // Refine targets only the closing sentence — nextSessionDate is
+      // a structured date, not prose, so it stays untouched. The
+      // sentence is treated as a plain string field.
+      return draft.report.closing?.sentence ?? '';
     case 'opening':
       return draft.opening ?? '';
     case 'wins_and_progress':
@@ -218,6 +236,7 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
   const modelId = MODELS.reportPrimary;
   const maxTokens = MAX_OUTPUT_TOKENS[modelId];
 
+  const reportGeneratedAt = new Date().toISOString().slice(0, 10);
   // Streaming + overload-retry — see draft.ts (Stage C) for rationale.
   const message = await streamWithOverloadRetry(
     {
@@ -229,6 +248,7 @@ export async function refineSection(args: RefineSectionArgs): Promise<RefineSect
         ctx.coachName,
         section,
         isList,
+        reportGeneratedAt,
       ),
       messages,
     },
@@ -301,6 +321,22 @@ export function applyRefinement(
     case 'suggestedNextSteps':
       next.report.suggestedNextSteps = newValue as string[];
       break;
+    case 'closing': {
+      // Only the sentence is refined — preserve nextSessionDate from
+      // the prior draft. If there was no closing block at all, the new
+      // sentence creates one with nextSessionDate=null (the UI can
+      // edit the date separately).
+      const sentence = (newValue as string).trim();
+      if (!sentence) {
+        next.report.closing = null;
+      } else {
+        next.report.closing = {
+          sentence,
+          nextSessionDate: draft.report.closing?.nextSessionDate ?? null,
+        };
+      }
+      break;
+    }
     case 'opening':
       next.opening = newValue as string;
       break;

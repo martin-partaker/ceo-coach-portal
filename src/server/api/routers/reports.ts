@@ -1181,6 +1181,8 @@ export const reportsRouter = createTRPCRouter({
           tenX: '',
           ninetyDay: null,
           thirtyDay: null,
+          ninetyDayConstraint: null,
+          thirtyDayConstraint: null,
           driftDetected: { changed: false, from: null, to: null, when: null, note: null },
         },
         effort: { weekly: [], anomalies: [] },
@@ -1190,6 +1192,8 @@ export const reportsRouter = createTRPCRouter({
         evidenceClaims: [],
         commitments: [],
         coachReviewFlags: [],
+        nextSessionDate: null,
+        extractionWarnings: [],
       };
       const patterns = (factsRow?.patternsJson ?? null) as PatternsT | null;
       const factsAvailable = !!factsRow;
@@ -1232,6 +1236,7 @@ export const reportsRouter = createTRPCRouter({
           resolving: [],
           newThisCycle: [],
           isFirstCycle: cycleCtx.isFirstCycle,
+          intraMonthTrends: [],
         },
         factsAvailable,
         currentDraft,

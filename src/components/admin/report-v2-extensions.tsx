@@ -94,6 +94,17 @@ const RUBRIC_LABELS: Record<RubricItemId, string> = {
   counterFactualNextSteps: 'Counter-factual',
   emotionalEventsHandled: 'Emotional context',
   crossCycleDelta: 'Cross-cycle delta',
+  boldLeadIns: 'Bold lead-ins',
+  bulletCap: '≤5 bullets/section',
+  flightVocab: 'Flight vocabulary',
+  altitudeCoords: 'Altitude Matrix tags',
+  bodyNoCaveats: 'No body caveats',
+  bodyNoTimestamps: 'No timestamps in body',
+  noKnownStakeholderBackground: 'No body backstory',
+  closingSpecific: 'Closing specific',
+  coachFlagTitlesImperative: 'Imperative flag titles',
+  monthNotCycle: '"Month" not "cycle"',
+  pastDateTense: 'Past-tense for past dates',
 };
 
 export function CritiqueStrip({ reportId }: { reportId: string }) {
@@ -200,11 +211,12 @@ export function CoachReviewFlagsBanner({
 // ── RefineChatButton + Sheet ─────────────────────────────────────────
 
 const REFINABLE_LABELS: Record<string, string> = {
-  progressSummary: 'Progress Summary',
+  progressSummary: 'Momentum Check',
   keyWins: 'Key Wins',
   challenges: 'Challenges',
-  patternObservations: 'Pattern Observations',
-  suggestedNextSteps: 'Suggested Next Steps',
+  patternObservations: 'Flight Patterns',
+  suggestedNextSteps: 'Flight Plan: Next Steps',
+  closing: 'Closing',
   opening: 'Email opening',
   wins_and_progress: 'Email — wins',
   honest_feedback: 'Email — honest feedback',

@@ -68,10 +68,27 @@ export interface CycleReportPdfData {
     challenges?: string[];
     patternObservations?: string;
     suggestedNextSteps?: string[];
+    /** Structured goal cascade emitted by the model. When present, the
+     *  PDF Goal Summary uses these values (with sub-bullets per CEO for
+     *  pair-divergent goals and the goal-drift flag) instead of falling
+     *  back to the static `ceo.tenXGoal` + `cycle.monthlyGoals` strings.
+     *  Older reports without this block fall through to the legacy
+     *  cycle-row values. */
+    goalSummary?: {
+      tenX?: string;
+      ninetyDay?: string | null;
+      thirtyDay?: string | null;
+      flag?: string | null;
+    } | null;
+    closing?: {
+      sentence: string;
+      nextSessionDate: string | null;
+    } | null;
   };
   /** AI-emitted "email view" block. Used as a fallback for any
-   *  structured field that wasn't returned, plus the standalone
-   *  "Key Insight" section the structured shape doesn't model. */
+   *  structured field that wasn't returned by older runs. The PDF now
+   *  prefers the structured `report` block for every section; the email
+   *  fields only come into play when the structured block is partial. */
   email: {
     opening?: string;
     wins_and_progress?: string;
@@ -147,6 +164,23 @@ const styles = StyleSheet.create({
     marginTop: 18,
     fontSize: 9,
     color: '#777',
+  },
+  closingBlock: {
+    marginTop: 18,
+    paddingTop: 12,
+    borderTopWidth: 0.4,
+    borderTopColor: '#e5e7eb',
+  },
+  closingSentence: {
+    fontFamily: 'Helvetica-Oblique',
+    fontSize: 11,
+    lineHeight: 1.5,
+    color: '#1f2937',
+  },
+  closingNext: {
+    marginTop: 6,
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 11,
   },
   kpiGrid: {
     flexDirection: 'row',
@@ -263,16 +297,39 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
     (k) => k.label.trim() && k.value.trim(),
   );
 
+  // Prefer the model's structured goalSummary when present — it contains
+  // the 10x goal as the model extracted it FROM this month's inputs (not
+  // the stored team-profile goal which is often stale or conflicting),
+  // plus the 90-day and 30-day cascades and the goal-drift flag. Fall
+  // back to the static cycle/CEO rows for legacy reports.
+  const modelGoal = data.report.goalSummary ?? null;
+  const goalTenX = modelGoal?.tenX?.trim() || data.ceo.tenXGoal?.trim() || '';
+  const goalNinety = modelGoal?.ninetyDay?.trim() ?? null;
+  const goalThirty = modelGoal?.thirtyDay?.trim() ?? null;
+  const goalFlag = modelGoal?.flag?.trim() ?? null;
+  // Legacy fallback for very old reports that don't have the structured
+  // block — fold monthly goals into a single "Monthly goals" line below
+  // the 10x bullet (mirrors the old layout).
+  const legacyMonthlyGoals = !modelGoal && data.cycle.monthlyGoals?.trim()
+    ? data.cycle.monthlyGoals.trim()
+    : null;
   const hasGoalSection =
-    !!data.ceo.tenXGoal?.trim() || !!data.cycle.monthlyGoals?.trim();
+    !!goalTenX || !!goalNinety || !!goalThirty || !!goalFlag || !!legacyMonthlyGoals;
   // Progress section now renders if there's prose OR KPIs — a cycle
   // with only KPIs (no narrative yet) still gets its own section.
   const hasProgressSection = !!progressText || kpis.length > 0;
   const hasWinsSection = wins.length > 0 || !!winsFallback;
+  // Challenges no longer absorbs patternObservations — Flight Patterns
+  // is its own section now.
   const hasChallengesSection =
-    challenges.length > 0 || !!challengesFallback || !!patternsText;
-  const hasKeyInsightSection = !!keyInsight;
+    challenges.length > 0 || !!challengesFallback;
+  const hasFlightPatternsSection = !!patternsText;
   const hasNextStepsSection = nextSteps.length > 0 || !!nextStepsFallback;
+  // Key Insight is no longer a distinct PDF section — Eric's polished
+  // format weaves the key insight into Momentum Check / Flight Patterns
+  // / closing. We keep the email field for legacy/email-view use but
+  // don't render it in the PDF.
+  void keyInsight;
 
   return (
     <Document
@@ -290,21 +347,43 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         {hasGoalSection && (
           <>
             <Text style={styles.sectionTitle}>1. Goal Summary</Text>
-            {data.ceo.tenXGoal?.trim() && (
+            {goalTenX && (
               <View style={styles.bulletRow}>
                 <Text style={styles.bulletGlyph}>•</Text>
                 <View style={styles.bulletBody}>
-                  <Text>
-                    <Text style={styles.paragraphLabel}>10x Goal: </Text>
-                  </Text>
-                  <MarkdownPdf text={data.ceo.tenXGoal.trim()} />
+                  <Text style={styles.paragraphLabel}>10x Goal:</Text>
+                  <MarkdownPdf text={goalTenX} />
                 </View>
               </View>
             )}
-            {data.cycle.monthlyGoals?.trim() && (
+            {goalNinety && (
+              <View style={styles.bulletRow}>
+                <Text style={styles.bulletGlyph}>•</Text>
+                <View style={styles.bulletBody}>
+                  <Text style={styles.paragraphLabel}>90-Day Goal:</Text>
+                  <MarkdownPdf text={goalNinety} />
+                </View>
+              </View>
+            )}
+            {goalThirty && (
+              <View style={styles.bulletRow}>
+                <Text style={styles.bulletGlyph}>•</Text>
+                <View style={styles.bulletBody}>
+                  <Text style={styles.paragraphLabel}>30-Day Goal:</Text>
+                  <MarkdownPdf text={goalThirty} />
+                </View>
+              </View>
+            )}
+            {legacyMonthlyGoals && (
               <View style={styles.paragraph}>
                 <Text style={styles.paragraphLabel}>Monthly goals</Text>
-                <MarkdownPdf text={data.cycle.monthlyGoals.trim()} />
+                <MarkdownPdf text={legacyMonthlyGoals} />
+              </View>
+            )}
+            {goalFlag && (
+              <View style={styles.flagBox}>
+                <Text style={styles.flagLabel}>⚑ Flag for Coach Review: </Text>
+                <MarkdownPdf text={goalFlag} />
               </View>
             )}
             <View style={styles.divider} />
@@ -314,7 +393,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         {hasProgressSection && (
           <>
             <Text style={styles.sectionTitle}>
-              {sectionNumber(hasGoalSection)} Progress Assessment
+              {sectionNumber(hasGoalSection)} Momentum Check
             </Text>
             {kpis.length > 0 && (
               <View style={styles.kpiGrid}>
@@ -368,17 +447,11 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             ) : (
               <MarkdownPdf text={challengesFallback} />
             )}
-            {patternsText && (
-              <View style={styles.paragraph}>
-                <Text style={styles.paragraphLabel}>Pattern observations</Text>
-                <MarkdownPdf text={patternsText} />
-              </View>
-            )}
             <View style={styles.divider} />
           </>
         )}
 
-        {hasKeyInsightSection && (
+        {hasFlightPatternsSection && (
           <>
             <Text style={styles.sectionTitle}>
               {sectionNumber(
@@ -387,9 +460,9 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
                 hasWinsSection,
                 hasChallengesSection,
               )}{' '}
-              Key Insight
+              Flight Patterns
             </Text>
-            <MarkdownPdf text={keyInsight} />
+            <MarkdownPdf text={patternsText} />
             <View style={styles.divider} />
           </>
         )}
@@ -402,9 +475,9 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
                 hasProgressSection,
                 hasWinsSection,
                 hasChallengesSection,
-                hasKeyInsightSection,
+                hasFlightPatternsSection,
               )}{' '}
-              Recommended Next Steps
+              Flight Plan: Recommended Next Steps
             </Text>
             {nextSteps.length > 0 ? (
               nextSteps.map((step, i) => (
@@ -414,6 +487,19 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               <MarkdownPdf text={nextStepsFallback} />
             )}
           </>
+        )}
+
+        {data.report.closing?.sentence?.trim() && (
+          <View style={styles.closingBlock}>
+            <Text style={styles.closingSentence}>
+              {data.report.closing.sentence.trim()}
+            </Text>
+            {data.report.closing.nextSessionDate?.trim() && (
+              <Text style={styles.closingNext}>
+                Next session: {data.report.closing.nextSessionDate.trim()}
+              </Text>
+            )}
+          </View>
         )}
 
         {generated && (

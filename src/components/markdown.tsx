@@ -46,6 +46,48 @@ function renderBlock(block: Block, key: number): React.ReactElement {
       </p>
     );
   }
+  if (block.kind === 'table') {
+    const alignClass = (a: 'left' | 'center' | 'right' | null) =>
+      a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left';
+    return (
+      <div key={key} className="overflow-x-auto">
+        <table className="w-full border-collapse text-[13px] leading-relaxed">
+          <thead>
+            <tr className="border-b border-border">
+              {block.header.map((cell, ci) => (
+                <th
+                  key={ci}
+                  className={cn(
+                    'px-2.5 py-1.5 font-semibold text-foreground/90',
+                    alignClass(block.align[ci] ?? null),
+                  )}
+                >
+                  {renderInlines(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, ri) => (
+              <tr key={ri} className="border-b border-border/60 last:border-0">
+                {row.map((cell, ci) => (
+                  <td
+                    key={ci}
+                    className={cn(
+                      'px-2.5 py-1.5 text-foreground/85',
+                      alignClass(block.align[ci] ?? null),
+                    )}
+                  >
+                    {renderInlines(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
   if (block.ordered) {
     return (
       <ol key={key} className="grid gap-1.5 leading-relaxed text-foreground/90">

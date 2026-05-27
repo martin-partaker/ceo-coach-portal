@@ -19,12 +19,19 @@ export type Inline =
   | { kind: 'bold'; children: Inline[] }
   | { kind: 'italic'; children: Inline[] };
 
+export type TableAlign = 'left' | 'center' | 'right' | null;
 export type Block =
   | { kind: 'paragraph'; lines: Inline[][] }
   | {
       kind: 'list';
       ordered: boolean;
       items: Inline[][];
+    }
+  | {
+      kind: 'table';
+      header: Inline[][];
+      align: TableAlign[];
+      rows: Inline[][][];
     };
 
 /**
@@ -44,6 +51,23 @@ export function parseMarkdown(text: string): Block[] {
     const line = lines[i];
     if (line.trim() === '') {
       i++;
+      continue;
+    }
+    // GitHub-flavored markdown table: header row | separator | body rows.
+    // We detect by looking ahead — the current line must be pipe-delimited
+    // AND the next line must be a separator row (`|---|---|` etc.). Without
+    // both we treat the line as a normal paragraph (so isolated lines with
+    // pipes don't get misinterpreted as one-row tables).
+    if (isTableHeader(line, lines[i + 1])) {
+      const header = parseTableRow(line);
+      const align = parseTableAlign(lines[i + 1], header.length);
+      const rows: Inline[][][] = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        rows.push(parseTableRow(lines[i]));
+        i++;
+      }
+      blocks.push({ kind: 'table', header, align, rows });
       continue;
     }
     const bullet = matchBullet(line);
@@ -76,6 +100,46 @@ export function parseMarkdown(text: string): Block[] {
   }
 
   return blocks;
+}
+
+/** A row is "table-shaped" if it has at least one pipe and contains a
+ *  non-pipe character somewhere (excludes the separator row). */
+function isTableHeader(line: string, next: string | undefined): boolean {
+  if (!line || !line.includes('|')) return false;
+  if (!next) return false;
+  // Separator row: `|---|---|` with optional `:` alignment markers and
+  // optional leading/trailing pipes.
+  const sep = next.trim();
+  if (!sep) return false;
+  // Strip optional leading/trailing pipe, then every cell must be
+  // dashes-only with optional colon alignment markers.
+  const cells = sep.replace(/^\||\|$/g, '').split('|');
+  if (cells.length < 1) return false;
+  return cells.every((c) => /^\s*:?-+:?\s*$/.test(c));
+}
+
+function parseTableRow(line: string): Inline[][] {
+  // Strip a single leading and trailing pipe, then split on `|`.
+  // Embedded `|` inside cells is not supported (rare in coaching prose).
+  const trimmed = line.trim().replace(/^\||\|$/g, '');
+  return trimmed.split('|').map((c) => parseInline(c.trim()));
+}
+
+function parseTableAlign(line: string, columnCount: number): TableAlign[] {
+  const cells = line.trim().replace(/^\||\|$/g, '').split('|');
+  const align: TableAlign[] = cells.map((raw) => {
+    const c = raw.trim();
+    const left = c.startsWith(':');
+    const right = c.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return null;
+  });
+  // Pad / truncate to match the header column count so the renderer can
+  // index align[col] without a bounds check.
+  while (align.length < columnCount) align.push(null);
+  return align.slice(0, columnCount);
 }
 
 function matchBullet(line: string): { ordered: boolean; body: string } | null {

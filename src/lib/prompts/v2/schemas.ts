@@ -34,6 +34,19 @@ export const GoalCascadeSchema = z.object({
   tenX: z.string().describe('The 10x / 3-year destination as stated this cycle.'),
   ninetyDay: z.string().nullable().describe('The 90-day goal this cycle ladders into; null if not stated.'),
   thirtyDay: z.string().nullable().describe('The 30-day commitment this cycle; null if not stated.'),
+  /** The underlying constraint or problem the 90-day goal addresses
+   *  (e.g. "cash flow is gating all growth", "planning ambiguity is
+   *  slowing execution"). Drives the Goal Summary rendering: each
+   *  shorter-term goal should NAME the constraint it's solving, not
+   *  just restate the goal. Null when the goal is too generic to
+   *  attribute or no constraint is clearly named in the inputs. */
+  ninetyDayConstraint: z.string().nullable().default(null).describe(
+    'The constraint or problem the 90-day goal is addressing. Null if not clearly stated.',
+  ),
+  /** Same as above for the 30-day commitment. */
+  thirtyDayConstraint: z.string().nullable().default(null).describe(
+    'The constraint or problem the 30-day commitment is addressing. Null if not clearly stated.',
+  ),
   driftDetected: z.object({
     changed: z.boolean(),
     from: z.string().nullable(),
@@ -54,6 +67,14 @@ export const StakeholderSchema = z.object({
   name: z.string(),
   role: z.string().nullable(),
   appearsIn: z.array(z.string()).default([]),
+  /** Background context a coach needs but the CEO already knows
+   *  (family/employment/remote status, personal history). Quarantined
+   *  here so the drafter can pull it into coachReviewFlags without it
+   *  leaking into CEO-facing body text. Null when no background
+   *  detail is in the inputs. */
+  coachOnlyBackground: z.string().nullable().default(null).describe(
+    'Background context the CEO already knows but the coach needs (family ties, remote status, employment history). For coachReviewFlags only — never CEO-facing.',
+  ),
 });
 
 export const EmotionalEventSchema = z.object({
@@ -116,6 +137,22 @@ export const CycleFactsSchema = z.object({
       }),
     )
     .default([]),
+  /** Date of the next agreed-upon coaching session, when explicitly
+   *  named in the transcript or session notes (e.g. "June 10, 2026").
+   *  Null when no follow-up date was set. The drafter renders this as
+   *  the bold sign-off line after the closing sentence. */
+  nextSessionDate: z.string().nullable().default(null).describe(
+    'The agreed date for the next coaching session, when stated in the transcript. Free-text (e.g. "June 10, 2026"). Null if not stated.',
+  ),
+  /** Self-reported extraction confidence warnings. Different from
+   *  effort.anomalies (which describe the *data*); these describe
+   *  Stage A's own confidence in what it extracted (e.g. "I could
+   *  only find weekly minutes for Week 1; Weeks 3 and 4 exist but
+   *  their minute counts were not explicitly stated"). Surfaced as
+   *  [INFO] coach flags downstream. */
+  extractionWarnings: z.array(z.string()).default([]).describe(
+    'Stage A self-reported confidence warnings about the extraction itself, NOT about the data.',
+  ),
 });
 export type CycleFacts = z.infer<typeof CycleFactsSchema>;
 
@@ -156,6 +193,15 @@ export const PatternsSchema = z.object({
   /** Whether this is the first cycle for the CEO. If true, the drafter
    *  must say so explicitly rather than fabricate patterns. */
   isFirstCycle: z.boolean(),
+  /** Intra-month trends visible within the CURRENT cycle when 3+
+   *  weekly journals are present (e.g. effort spiking in Week 1 then
+   *  collapsing by Week 3). Populated by Stage B even when
+   *  isFirstCycle=true — a single cycle with enough weekly data still
+   *  shows a meaningful trend the drafter can speak to. Each entry is
+   *  a one-sentence observation grounded in the weekly inputs. */
+  intraMonthTrends: z.array(z.string()).default([]).describe(
+    'Within-cycle trends across the weekly journals (3+ weeks). Populated when isFirstCycle=true and weekly journals show movement worth flagging.',
+  ),
 });
 export type Patterns = z.infer<typeof PatternsSchema>;
 
@@ -197,6 +243,24 @@ export const DraftedReportSchema = z.object({
         }),
       )
       .default([]),
+    /** Closing send-off rendered at the bottom of the document (after
+     *  Recommended Next Steps, before Coach Review Flags). Contains an
+     *  encouraging sentence specific to this month's story and, when
+     *  the transcript named one, the next agreed coaching-session date.
+     *  Nullable for backwards compatibility — pre-v4 reports won't
+     *  have one and the renderer skips the block when it's missing. */
+    closing: z
+      .object({
+        /** One encouraging sentence that references a specific event
+         *  from this month. Must not be reused across months. */
+        sentence: z.string(),
+        /** Free-text date (e.g. "June 10, 2026"). Rendered as bold
+         *  "Next session: …" on the line below the sentence. Null when
+         *  the transcript didn't name a follow-up date. */
+        nextSessionDate: z.string().nullable(),
+      })
+      .nullable()
+      .default(null),
   }),
 });
 export type DraftedReport = z.infer<typeof DraftedReportSchema>;
@@ -263,6 +327,72 @@ export const RUBRIC_ITEMS = [
     requirement:
       'If patterns.isFirstCycle is false, patternObservations explicitly compares to prior cycles (carrying forward / evolving / resolving). If isFirstCycle is true, the report says so explicitly.',
   },
+  {
+    id: 'boldLeadIns',
+    label: 'Bold lead-in on every bullet',
+    requirement:
+      'Every bullet in keyWins, challenges, and suggestedNextSteps starts with a bolded lead-in clause (markdown **like this**) ending in a period, followed by detail. Lead-ins should be the scannable point so a coach can read just the bolded parts and follow the story.',
+  },
+  {
+    id: 'bulletCap',
+    label: 'Bullet count discipline (max 5; ties OK to 7)',
+    requirement:
+      'keyWins, challenges, and suggestedNextSteps contain no more than 5 bullets each. Up to 7 is acceptable ONLY when the rejected candidates are truly tied in priority (the tiebreaker rule); cutting below 5 is fine.',
+  },
+  {
+    id: 'flightVocab',
+    label: 'Flight System vocabulary used naturally',
+    requirement:
+      'The report uses at least 2 Flight System terms total across all sections — drawn from Flight Plan, Altitude Matrix, Momentum Loop, lift, drag, thrust, Elevate, Eliminate, Execute, Self, Leadership, Company. Used where it fits, not forced into every sentence.',
+  },
+  {
+    id: 'altitudeCoords',
+    label: 'Next Steps tagged with Altitude Matrix coordinates',
+    requirement:
+      'Every entry in suggestedNextSteps includes an italic Altitude Matrix tag in parentheses (e.g. *(Eliminate / Leadership)* or *(Elevate + Execute / Self)*) placed immediately after the bold lead-in clause. The dimension is one or two of Elevate/Eliminate/Execute; the pillar is exactly one of Self/Leadership/Company.',
+  },
+  {
+    id: 'bodyNoCaveats',
+    label: 'No data-quality caveats in CEO-facing text',
+    requirement:
+      'progressSummary, keyWins, challenges, patternObservations, and suggestedNextSteps contain no references to missing journals, inferred goals, or unavailable inputs (e.g. "inferred from Week 1", "Weeks 2–4 not provided", "monthly goals not supplied"). All data-quality observations must live in coachReviewFlags only.',
+  },
+  {
+    id: 'bodyNoTimestamps',
+    label: 'No transcript timestamps in CEO-facing text',
+    requirement:
+      'No CEO-facing section contains transcript timestamps (e.g. "~25:00", "at 14:32", "transcript ~12:00"). Reference the session generically ("in the coaching session", "in session"). Timestamps may appear in coachReviewFlags but never in body sections.',
+  },
+  {
+    id: 'noKnownStakeholderBackground',
+    label: 'No background context on people the CEO already knows',
+    requirement:
+      'Body sections do not introduce or describe people the CEO already knows (family relationships, employment status, remote-work history, who reports to whom). That background lives in coachReviewFlags only. Body text can use a stakeholder\'s name and role title, but not relational or biographical context.',
+  },
+  {
+    id: 'closingSpecific',
+    label: 'Closing sentence references this month, non-repeating',
+    requirement:
+      'report.closing is present, with a sentence that cites a concrete event/win/decision from this month (a specific name, number, or date that actually happened in the cycle). Generic encouragements ("you\'re doing great", "keep it up") fail this check.',
+  },
+  {
+    id: 'coachFlagTitlesImperative',
+    label: 'Coach flag titles are imperative',
+    requirement:
+      'Every coachReviewFlags[i].title starts with a verb in the imperative mood (e.g. "Lock the 10x goal", "Open with a personal check-in", "Probe root cause"). Declarative titles ("The 10x goal conflicts with the team profile") should be reframed as imperatives.',
+  },
+  {
+    id: 'monthNotCycle',
+    label: '"Month" used in CEO-facing text, not "cycle"',
+    requirement:
+      'CEO-facing sections (progressSummary, keyWins, challenges, patternObservations, suggestedNextSteps, opening, wins_and_progress, honest_feedback, key_insight, commitments, closing.sentence) use the word "month" rather than "cycle". Internal coach-only language ("first cycle on record" → "first month on record") follows the same rule.',
+  },
+  {
+    id: 'pastDateTense',
+    label: 'Historical tense for past deadlines',
+    requirement:
+      'Any date referenced in body sections that is before the report generation date uses historical tense (e.g. "the estimated close date was May 19", not "closing by May 19"). Future or undated commitments may use present/future tense.',
+  },
 ] as const;
 
 export type RubricItemId = (typeof RUBRIC_ITEMS)[number]['id'];
@@ -280,6 +410,7 @@ export const RubricItemResultSchema = z.object({
         'challenges',
         'patternObservations',
         'suggestedNextSteps',
+        'closing',
         'wins_and_progress',
         'honest_feedback',
         'key_insight',
@@ -318,6 +449,7 @@ export const REFINABLE_SECTIONS = [
   'challenges',
   'patternObservations',
   'suggestedNextSteps',
+  'closing',
   'opening',
   'wins_and_progress',
   'honest_feedback',

@@ -455,7 +455,19 @@ export async function generateReportWorkflow(
 
     while (!critique.pass && revisionsApplied < MAX_REVISIONS) {
       const weak = critique.weakSections as RefinableSection[];
-      if (weak.length === 0) break;
+      if (weak.length === 0) {
+        // Stage D failed the draft but returned no weak sections to
+        // rewrite — historically this fell through silently and the
+        // report finalized without a revision. Log loudly so we catch
+        // it in production and persist the reason onto the job row so
+        // the UI can surface it.
+        console.warn(
+          `[generate-report] cycleId=${args.cycleId} jobId=${args.jobId}: ` +
+            `Stage D returned pass=false with empty weakSections (topFix=${critique.topFix ?? '∅'}). ` +
+            `Skipping revision loop — the report will finalize unrevised.`,
+        );
+        break;
+      }
 
       await setJobStatusStep(args.jobId, {
         status: 'revising',
@@ -488,6 +500,22 @@ export async function generateReportWorkflow(
       critique = next.critique;
     }
 
+    // Defensive guard: in 'full' mode, the only legitimate way to
+    // finalize with critique.pass=false is "we already tried
+    // MAX_REVISIONS times". Any other path means a revision loop got
+    // skipped — log loudly so we notice. (See feedback-round-1 May 2026
+    // Tipton case: critique.pass=false, revisionsApplied=0, and the
+    // report shipped unrevised.)
+    if (!critique.pass && revisionsApplied < MAX_REVISIONS) {
+      console.warn(
+        `[generate-report] cycleId=${args.cycleId} jobId=${args.jobId}: ` +
+          `Finalising in full mode with critique.pass=false after only ${revisionsApplied} ` +
+          `revision(s) (MAX_REVISIONS=${MAX_REVISIONS}). topFix=${critique.topFix ?? '∅'}. ` +
+          `weakSections=${JSON.stringify(critique.weakSections)}. ` +
+          `Investigate why the loop didn't run.`,
+      );
+    }
+
     // ── FINALISE ─────────────────────────────────────────────────────
     await setJobStatusStep(args.jobId, {
       status: 'finalising',
@@ -507,6 +535,13 @@ export async function generateReportWorkflow(
         stage: 'complete',
         passed: critique.pass,
         revisions: revisionsApplied,
+        // When the critic never passed (out of revisions OR a weakSections=[]
+        // skip), flag it explicitly so the UI can render the report as
+        // "needs review" rather than silently green. Doesn't block
+        // finalisation — the coach still gets the draft and can iterate
+        // via Stage E.
+        criticHeldOut: critique.pass ? false : true,
+        topFix: critique.pass ? null : (critique.topFix ?? null),
       },
       finalReportId: persisted.reportId,
       critiqueId: persisted.critiqueId,

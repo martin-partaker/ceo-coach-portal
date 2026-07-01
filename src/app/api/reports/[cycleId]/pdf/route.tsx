@@ -160,16 +160,21 @@ export async function GET(
       members = lead ? [lead, ...rest] : allMembers;
     }
   }
+  // Former / inactive members drop out of the report subject (successor
+  // handover) — the PDF header + filename name only active members. Their
+  // past data still lives on the team's history. Never let it go empty.
+  const activeMembers = members.filter((m) => !m.inactiveAt);
+  const displayMembers = activeMembers.length > 0 ? activeMembers : members;
   /** Display name for the report header — joint label for teams, single
    *  CEO for solo cycles. Pairs use " & "; trios use ", X & Y"; 4+ use
    *  ", ", "-joined with the final " & ". Matches the convention used in
    *  the drafter's subjectFullLabel helper. */
   const subjectName =
-    members.length === 1
-      ? members[0].name
-      : members.length === 2
-        ? `${members[0].name} & ${members[1].name}`
-        : `${members.slice(0, -1).map((m) => m.name).join(', ')} & ${members[members.length - 1].name}`;
+    displayMembers.length === 1
+      ? displayMembers[0].name
+      : displayMembers.length === 2
+        ? `${displayMembers[0].name} & ${displayMembers[1].name}`
+        : `${displayMembers.slice(0, -1).map((m) => m.name).join(', ')} & ${displayMembers[displayMembers.length - 1].name}`;
 
   // Coach metadata is best-effort — show the assigned coach's name as
   // the "Coach" line in the PDF subtitle when we have it.

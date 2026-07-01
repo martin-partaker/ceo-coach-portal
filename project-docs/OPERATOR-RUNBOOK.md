@@ -93,9 +93,11 @@ Removing a member turns them back into a solo CEO and **preserves all their past
 Scenario: a program CEO steps into a board role and a new CEO takes over the seat.
 
 1. In **Edit team**, **Add** the new CEO as a member.
-2. **Remove** the outgoing CEO.
+2. Mark the outgoing CEO **former** (the person icon next to their row) — *don't* Remove them.
 
-The outgoing CEO keeps their historical sessions (as solo history), and from now on the team's reports run off the new member's data.
+Marking them **former** keeps the outgoing CEO's past sessions attached to the team, so the successor's reports still have the company's history and cross-month patterns as context. At the same time, new reports stop addressing the former CEO and stop showing/flagging their (now absent) data — so you won't see "missing data from the former CEO." You can reactivate them anytime.
+
+> **Former vs Remove:** *Former* keeps their history on the team (use this for a handover). *Remove* fully detaches them and sends their sessions back to their own solo record (use this only if they're leaving the program entirely).
 
 ---
 

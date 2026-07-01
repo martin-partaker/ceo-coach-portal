@@ -763,6 +763,37 @@ export const teamsRouter = createTRPCRouter({
       return { ok: true, ...splitResult };
     }),
 
+  /** Mark a team member as former / inactive (successor handover), or
+   *  reactivate them. Unlike `removeMember`, this KEEPS their data
+   *  attached to the team (teamId stays set) so past context and
+   *  cross-month patterns survive for the successor. It only flags them so
+   *  new reports stop addressing them and stop tabulating their (now
+   *  absent) effort — solving the "don't mention the former CEO's missing
+   *  data" case without losing their history. */
+  setMemberActive: protectedProcedure
+    .input(z.object({ ceoId: z.string().uuid(), inactive: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const [ceo] = await ctx.db
+        .select()
+        .from(ceos)
+        .where(eq(ceos.id, input.ceoId))
+        .limit(1);
+      if (!ceo) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!ceo.teamId)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This CEO is not in a team.',
+        });
+      await loadTeamForCaller(ctx, ceo.teamId);
+
+      await ctx.db
+        .update(ceos)
+        .set({ inactiveAt: input.inactive ? new Date() : null })
+        .where(eq(ceos.id, ceo.id));
+
+      return { ok: true };
+    }),
+
   /** Update the team's shared fields — name, company name, 10x goal,
    *  member role assignments. Keep this as one mutation so the form UI
    *  can save everything in a single round-trip. */

@@ -919,16 +919,25 @@ export const reportsRouter = createTRPCRouter({
           .limit(1);
         if (team) {
           const memberRows = await ctx.db
-            .select({ id: ceos.id, name: ceos.name, createdAt: ceos.createdAt })
+            .select({
+              id: ceos.id,
+              name: ceos.name,
+              createdAt: ceos.createdAt,
+              inactiveAt: ceos.inactiveAt,
+            })
             .from(ceos)
             .where(eq(ceos.teamId, team.id))
             .orderBy(asc(ceos.createdAt));
+          // Former / inactive members drop out of the header subject
+          // (successor handover); fall back to all if none are active.
+          const activeRows = memberRows.filter((m) => !m.inactiveAt);
+          const subjectRows = activeRows.length > 0 ? activeRows : memberRows;
           // Lead member (cycle.ceoId) first so display order is stable.
-          const leadIdx = memberRows.findIndex((m) => m.id === cycle.ceoId);
+          const leadIdx = subjectRows.findIndex((m) => m.id === cycle.ceoId);
           const ordered =
             leadIdx >= 0
-              ? [memberRows[leadIdx], ...memberRows.filter((_, i) => i !== leadIdx)]
-              : memberRows;
+              ? [subjectRows[leadIdx], ...subjectRows.filter((_, i) => i !== leadIdx)]
+              : subjectRows;
           teamSubject = {
             teamId: team.id,
             teamName: team.name,

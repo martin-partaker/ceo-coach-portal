@@ -40,9 +40,11 @@ import {
   MoreHorizontal,
   Pencil,
   RefreshCw,
+  RotateCcw,
   UserCog,
   UserMinus,
   UserPlus,
+  UserX,
   UsersRound,
 } from 'lucide-react';
 import { FormTeamDialog } from './form-team-dialog';
@@ -335,8 +337,12 @@ function EditTeamDialog({
   const removeMember = trpc.teams.removeMember.useMutation({
     onSuccess: invalidateMembership,
   });
+  const setMemberActive = trpc.teams.setMemberActive.useMutation({
+    onSuccess: invalidateMembership,
+  });
 
-  const memberBusy = addMember.isPending || removeMember.isPending;
+  const memberBusy =
+    addMember.isPending || removeMember.isPending || setMemberActive.isPending;
 
   function save() {
     update.mutate({
@@ -403,44 +409,97 @@ function EditTeamDialog({
 
           <div className="space-y-2">
             <Label className="text-[12px]">Members</Label>
-            {liveMembers.map((m) => (
-              <div key={m.id} className="flex items-center gap-2">
-                <span className="w-32 shrink-0 truncate text-[12.5px] font-medium">
-                  {m.name}
-                </span>
-                <Input
-                  value={memberRoles[m.id] ?? ''}
-                  onChange={(e) =>
-                    setMemberRoles((prev) => ({
-                      ...prev,
-                      [m.id]: e.target.value,
-                    }))
-                  }
-                  placeholder='Role (optional) — e.g. "CEO", "COO"'
-                  className="h-8 flex-1 text-[12px]"
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
-                  aria-label={`Remove ${m.name} from team`}
-                  title={
-                    liveMembers.length <= 1
-                      ? 'A team keeps at least one member — archive it instead'
-                      : `Remove ${m.name}. Their past sessions are preserved as solo history.`
-                  }
-                  disabled={memberBusy || liveMembers.length <= 1}
-                  onClick={() => removeMember.mutate({ ceoId: m.id })}
-                >
-                  {removeMember.isPending &&
-                  removeMember.variables?.ceoId === m.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <UserMinus className="h-3.5 w-3.5" />
+            {liveMembers.map((m) => {
+              const isInactive = !!m.inactiveAt;
+              const activeCount = liveMembers.filter((x) => !x.inactiveAt).length;
+              return (
+                <div
+                  key={m.id}
+                  className={cn(
+                    'flex items-center gap-2',
+                    isInactive && 'opacity-60',
                   )}
-                </Button>
-              </div>
-            ))}
+                >
+                  <span className="flex w-32 shrink-0 items-center gap-1 text-[12.5px] font-medium">
+                    <span className="truncate">{m.name}</span>
+                    {isInactive && (
+                      <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        former
+                      </span>
+                    )}
+                  </span>
+                  <Input
+                    value={memberRoles[m.id] ?? ''}
+                    onChange={(e) =>
+                      setMemberRoles((prev) => ({
+                        ...prev,
+                        [m.id]: e.target.value,
+                      }))
+                    }
+                    placeholder='Role (optional) — e.g. "CEO", "COO"'
+                    className="h-8 flex-1 text-[12px]"
+                  />
+                  {/* Mark former / reactivate — keeps the member's data on
+                      the team (unlike Remove) but drops them from new
+                      reports. The primary tool for a coachee handover. */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                    aria-label={
+                      isInactive
+                        ? `Reactivate ${m.name}`
+                        : `Mark ${m.name} as former member`
+                    }
+                    title={
+                      isInactive
+                        ? `Reactivate ${m.name} — they'll appear in new reports again.`
+                        : activeCount <= 1
+                          ? 'Keep at least one active member'
+                          : `Mark ${m.name} as a former member. Their history stays as context, but new reports won't address them or flag their missing data.`
+                    }
+                    disabled={
+                      memberBusy || (!isInactive && activeCount <= 1)
+                    }
+                    onClick={() =>
+                      setMemberActive.mutate({
+                        ceoId: m.id,
+                        inactive: !isInactive,
+                      })
+                    }
+                  >
+                    {setMemberActive.isPending &&
+                    setMemberActive.variables?.ceoId === m.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : isInactive ? (
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    ) : (
+                      <UserX className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
+                    aria-label={`Remove ${m.name} from team`}
+                    title={
+                      liveMembers.length <= 1
+                        ? 'A team keeps at least one member — archive it instead'
+                        : `Remove ${m.name} entirely. Their sessions detach from the team back to their own solo history.`
+                    }
+                    disabled={memberBusy || liveMembers.length <= 1}
+                    onClick={() => removeMember.mutate({ ceoId: m.id })}
+                  >
+                    {removeMember.isPending &&
+                    removeMember.variables?.ceoId === m.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <UserMinus className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
+              );
+            })}
 
             {/* Add a member — powers the coachee-swap case: add the new
                 CEO here, then remove the outgoing one. removeMember keeps
@@ -490,8 +549,13 @@ function EditTeamDialog({
             </div>
             <p className="text-[11px] text-muted-foreground">
               To swap a coachee (e.g. a new CEO takes over), add the new
-              member, then remove the outgoing one. Past sessions stay with
-              the outgoing CEO as solo history.
+              member, then mark the outgoing one{' '}
+              <span className="font-medium">former</span> (the person icon).
+              Their past sessions stay on the team as context for the
+              successor, but new reports won&apos;t address them or flag
+              their missing data. Use <span className="font-medium">Remove</span>{' '}
+              only to fully detach someone and send their history back to a
+              solo record.
             </p>
           </div>
 

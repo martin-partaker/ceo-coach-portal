@@ -78,6 +78,14 @@ export const ceos = pgTable('ceos', {
    *  "Co-founder" etc. Surfaces in the prompt so the model can give
    *  role-specific feedback. Informational; null for solo CEOs. */
   memberRole: text('member_role'),
+  /** When set, this CEO is a FORMER / inactive member of their team
+   *  (e.g. a CEO who handed the seat to a successor). Their historical
+   *  journals/transcripts stay attached to the team so past context and
+   *  cross-month patterns are preserved, but they are excluded from new
+   *  reports: no greeting, no per-member effort row, no missing-data
+   *  attribution. `teamId` stays set (unlike removeMember, which detaches
+   *  their data). Null for active members. */
+  inactiveAt: timestamp('inactive_at'),
   name: text('name').notNull(),
   email: text('email'),
   avatarUrl: text('avatar_url'),

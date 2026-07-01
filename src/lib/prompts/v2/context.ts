@@ -145,8 +145,17 @@ export async function fetchCycleContext(args: {
       members = lead ? [lead, ...rest] : allMembers;
     }
   }
-  const memberIds = members.map((m) => m.id);
+  // Name map spans ALL members (active + former) so historical inputs and
+  // joint transcripts still resolve a display name for attribution.
   const ceoNameById = new Map(members.map((m) => [m.id, m.name]));
+  // Former / inactive members drop out of the report subject: the report
+  // addresses only active members and only tabulates their effort. Their
+  // past data still feeds prior-cycle facts + patterns, so a successor CEO
+  // keeps full continuity. Fall back to all members if every member is
+  // somehow inactive (never generate an empty-subject report).
+  const activeMembers = members.filter((m) => !m.inactiveAt);
+  if (activeMembers.length > 0) members = activeMembers;
+  const memberIds = members.map((m) => m.id);
 
   // Journals — derived membership: include any journal whose effective
   // date sits inside this cycle's window, even if its primary cycleId

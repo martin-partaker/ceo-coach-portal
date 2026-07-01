@@ -64,7 +64,7 @@ export default async function AppLayout({
           )}
           <Topbar coachName={activeCoach.name} />
           <main className="flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
+            <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">{children}</div>
           </main>
         </div>
         <GenerationBackgroundPill />

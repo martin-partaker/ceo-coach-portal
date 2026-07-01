@@ -13,6 +13,7 @@ import {
   cycleKpiValues,
   reports,
 } from '@/db/schema';
+import { getCycleMomentum } from '@/lib/journal/cycle-momentum';
 import { IMPERSONATE_COOKIE } from '@/server/api/trpc';
 import {
   CycleReportPdf,
@@ -325,6 +326,13 @@ export async function GET(
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
+  // ── Momentum Check well-being averages ──────────────────────────
+  // Parsed from the weekly-journal 1–10 scores (energy / focus / stress /
+  // highest-leverage), averaged for this month with a stoplight colour,
+  // plus the prior month when it has data. Shared helper so the PDF and
+  // the on-screen report render identical numbers.
+  const momentum = await getCycleMomentum(cycleId);
+
   // ── Assemble PDF data ───────────────────────────────────────────
   // Team-aware 10x goal: the team row holds the shared goal for team
   // cycles; fall back to the lead CEO's goal when no team is set.
@@ -344,6 +352,7 @@ export async function GET(
       kpis: pdfKpis,
     },
     coach: assignedCoach ? { name: assignedCoach.name } : null,
+    momentum,
     report: json?.report ?? {},
     email: {
       opening: json?.opening,

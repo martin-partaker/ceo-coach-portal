@@ -102,6 +102,11 @@ export function ReportDocumentModal({
     },
   );
   const facts = trpc.reports.getFacts.useQuery({ cycleId }, { enabled: open });
+
+  const momentum = trpc.reports.getMomentum.useQuery(
+    { cycleId },
+    { enabled: open },
+  );
   const v2ReportId = versions.data?.v2?.id;
   const critique = trpc.reports.getCritique.useQuery(
     { reportId: v2ReportId ?? '' },
@@ -383,6 +388,7 @@ export function ReportDocumentModal({
                       highlightSections={highlightedSections}
                       emphasizedSection={emphasized}
                       reportId={versions.data?.v2?.id}
+                      momentum={momentum.data ?? null}
                     />
                   )}
                 </div>

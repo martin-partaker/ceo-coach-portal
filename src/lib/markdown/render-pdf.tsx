@@ -163,7 +163,11 @@ function renderBlock(block: Block, key: number): React.ReactElement {
   return (
     <View key={key} style={{ marginBottom: 6 }}>
       {block.items.map((item, ii) => (
-        <View key={ii} style={styles.bulletRow}>
+        // `wrap={false}` prevents a single list item's glyph and text
+        // from being split across a page break (client-reported PDF
+        // formatting bug where the bullet ended one page and the text
+        // started the next).
+        <View key={ii} style={styles.bulletRow} wrap={false}>
           <Text style={block.ordered ? styles.bulletNumber : styles.bulletGlyph}>
             {block.ordered ? `${ii + 1}.` : '•'}
           </Text>

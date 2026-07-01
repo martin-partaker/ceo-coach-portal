@@ -3,6 +3,7 @@
 import { forwardRef } from 'react';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { cn } from '@/lib/utils';
+import type { CycleMomentum } from '@/lib/journal/cycle-momentum';
 import { RefineSectionPopover } from './refine-section-popover';
 
 /**
@@ -100,6 +101,10 @@ type Props = {
    *  opens a per-section chat (Stage E). Omit on legacy views that
    *  don't have a refineable backing report. */
   reportId?: string;
+  /** Weekly-journal well-being averages for the Momentum Check section.
+   *  Rendered as a stoplight table above the progress prose. Omitted when
+   *  no journal scores exist for the cycle. */
+  momentum?: CycleMomentum | null;
 };
 
 export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function DocumentRenderer(
@@ -115,6 +120,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
     onSectionClick,
     watermark,
     reportId,
+    momentum,
   },
   ref,
 ) {
@@ -200,7 +206,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
         )}
 
         {/* 2. Momentum Check (was: Progress Summary) */}
-        {r.progressSummary && (
+        {(r.progressSummary || (momentum && momentum.rows.length > 0)) && (
           <DocSection
             id="progressSummary"
             number={r.goalSummary ? 2 : 1}
@@ -210,7 +216,10 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             onClick={() => onSectionClick?.('progressSummary')}
             reportId={reportId}
           >
-            <Markdown text={r.progressSummary} size="sm" />
+            {momentum && momentum.rows.length > 0 && (
+              <MomentumTable momentum={momentum} />
+            )}
+            {r.progressSummary && <Markdown text={r.progressSummary} size="sm" />}
           </DocSection>
         )}
 
@@ -245,7 +254,7 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
               (r.keyWins?.length ? 1 : 0) +
               1
             }
-            title="Challenges & Patterns"
+            title="Challenges and Patterns"
             highlighted={highlightSections?.has('challenges')}
             emphasized={emphasizedSection === 'challenges'}
             onClick={() => onSectionClick?.('challenges')}
@@ -322,6 +331,79 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
   );
 });
 
+const STOPLIGHT_BG: Record<'green' | 'yellow' | 'red', string> = {
+  green: 'bg-emerald-500',
+  yellow: 'bg-amber-500',
+  red: 'bg-red-500',
+};
+
+/**
+ * On-screen Momentum Check well-being table — mirrors the PDF. Four
+ * weekly-journal averages (energy / focus / stress / highest-leverage)
+ * with a stoplight dot, this month vs. prior month when prior data
+ * exists. Sits above the "Minutes dedicated to the 10x goal" prose.
+ */
+function MomentumTable({ momentum }: { momentum: CycleMomentum }) {
+  const hasPrev =
+    momentum.previousLabel !== null && momentum.rows.some((r) => r.previous);
+  return (
+    <div className="mb-4">
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr className="border-b border-border">
+            <th className="py-1.5 pr-3 text-left font-semibold">
+              Weekly check-in
+            </th>
+            <th className="py-1.5 pr-3 text-left font-semibold">
+              {momentum.currentLabel}
+            </th>
+            {hasPrev && (
+              <th className="py-1.5 text-left font-semibold text-muted-foreground">
+                {momentum.previousLabel}
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {momentum.rows.map((r) => (
+            <tr key={r.key} className="border-b border-border/60">
+              <td className="py-1.5 pr-3">{r.label}</td>
+              <td className="py-1.5 pr-3">
+                <MomentumScore cell={r.current} />
+              </td>
+              {hasPrev && (
+                <td className="py-1.5">
+                  <MomentumScore cell={r.previous} />
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        Averaged from weekly journals. Green 8–10, Yellow 5–7, Red 1–4
+        (stress is reversed, so a high score is red).
+      </p>
+    </div>
+  );
+}
+
+function MomentumScore({
+  cell,
+}: {
+  cell: { avg: number; color: 'green' | 'yellow' | 'red' } | null;
+}) {
+  if (!cell) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className={cn('inline-block h-2.5 w-2.5 rounded-full', STOPLIGHT_BG[cell.color])}
+      />
+      {cell.avg.toFixed(1)}
+    </span>
+  );
+}
+
 function ClosingBlock({
   sentence,
   nextSessionDate,
@@ -384,9 +466,9 @@ function DocSection({
         </h2>
         {reportId && refineSection && (
           <div
-            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-            // Stop click bubbling so opening the refine sheet doesn't
-            // also trigger the section's onClick handler.
+            // Edit affordance is permanently visible per section (was
+            // hover-only) so coaches can see at a glance that every
+            // section is editable.
             onClick={(e) => e.stopPropagation()}
           >
             <RefineSectionPopover reportId={reportId} section={refineSection} />

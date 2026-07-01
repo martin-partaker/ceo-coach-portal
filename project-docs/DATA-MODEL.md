@@ -111,6 +111,10 @@ Weekly reflections from the CEO. Typically one per week of the cycle, ingested f
 | `source_raw_input_id` | uuid            | yes      | when the entry came from an ingested Tally submission, this points back to that `raw_inputs` row. Manually-added entries leave it null.                                                            |
 | `created_at`          | timestamp       | no       |                                                                                                                                                                                                    |
 
+> **Well-being scores are inside `content`, not typed columns.** The weekly Tally journal captures four 1–10 self-ratings as plain `Q:/A:` text within `content`:
+> `Q: Energy level` / `Q: Level of focus` / `Q: Stress level` / `Q: How well did I complete highest leverage work this week?`.
+> The **Momentum Check** section of the report parses these deterministically (no LLM) and shows the monthly average per metric with a stoplight colour (green 8–10, yellow 5–7, red 1–4; **stress is reversed**), plus the prior month when available. Parser: [`src/lib/journal/momentum-metrics.ts`](../src/lib/journal/momentum-metrics.ts); per-cycle aggregation: [`src/lib/journal/cycle-momentum.ts`](../src/lib/journal/cycle-momentum.ts).
+
 ### `transcripts`
 
 Zoom session transcripts (or pasted text). One per session.

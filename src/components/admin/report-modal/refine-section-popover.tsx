@@ -14,7 +14,6 @@ import {
   Check,
   ChevronRight,
   Loader2,
-  MessageSquare,
   Pencil,
   Sparkles,
   Undo2,
@@ -77,10 +76,10 @@ export function RefineSectionPopover({ reportId, section }: Props) {
           size="sm"
           variant="ghost"
           className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-          aria-label={`Refine ${section}`}
-          title="Refine this section (AI or raw edit)"
+          aria-label={`Edit ${section}`}
+          title="Edit this section (AI refine or raw edit)"
         >
-          <MessageSquare className="h-3 w-3" />
+          <Pencil className="h-3 w-3" />
         </Button>
       </PopoverTrigger>
       <PopoverContent

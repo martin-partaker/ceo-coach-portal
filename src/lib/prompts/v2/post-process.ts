@@ -47,7 +47,7 @@ export function stripEmDashesFromDraft(
     going_deeper: stripEm(d.going_deeper),
     closing: stripEm(d.closing),
     report: {
-      progressSummary: stripEm(d.report.progressSummary),
+      progressSummary: fixMetricsHeader(stripEm(d.report.progressSummary)),
       goalSummary: d.report.goalSummary
         ? {
             tenX: stripEm(d.report.goalSummary.tenX),
@@ -65,7 +65,9 @@ export function stripEmDashesFromDraft(
       keyWins: d.report.keyWins.map(stripEm),
       challenges: d.report.challenges.map(stripEm),
       patternObservations: stripEm(d.report.patternObservations),
-      suggestedNextSteps: d.report.suggestedNextSteps.map(stripEm),
+      suggestedNextSteps: d.report.suggestedNextSteps.map((s) =>
+        moveAltitudeTagPeriod(stripEm(s)),
+      ),
       suggestedResourceIds: d.report.suggestedResourceIds,
       coachReviewFlags: d.report.coachReviewFlags.map((f) => ({
         ...f,
@@ -162,6 +164,39 @@ function stripFlagPrefix(s: string): string {
       '',
     )
     .trim();
+}
+
+/**
+ * Rename the Momentum Check metrics sub-heading to "Metrics and what
+ * moved" (client request). The drafter emits "**Metrics — what moved:**"
+ * which `stripEm` turns into "**Metrics, what moved:**"; either form (and
+ * a plain hyphen variant) is normalised here so the rendered header reads
+ * "Metrics and what moved:". Idempotent.
+ */
+export function fixMetricsHeader(s: string): string {
+  return s.replace(
+    /\*\*\s*Metrics\s*(?:,|—|–|-|and)?\s*what moved\s*:?\s*\*\*/gi,
+    '**Metrics and what moved:**',
+  );
+}
+
+/**
+ * Move the sentence-ending period from the end of a Next Step's bold
+ * lead-in to *after* the italic Altitude Matrix tag (client request):
+ *
+ *   before: **Re-engage the BD search this week.** *(Eliminate / Leadership)* Repair…
+ *   after:  **Re-engage the BD search this week** *(Eliminate / Leadership)*. Repair…
+ *
+ * Only the first "…**.** *(tag)*" pattern per string is rewritten (the
+ * lead-in). Steps that don't match (no tag, or already in the new shape)
+ * are returned unchanged, so this is safe to run on any output.
+ * Idempotent.
+ */
+export function moveAltitudeTagPeriod(s: string): string {
+  return s.replace(
+    /\.\*\*(\s*)(\*\([^)]*\)\*)/,
+    '**$1$2.',
+  );
 }
 
 /**

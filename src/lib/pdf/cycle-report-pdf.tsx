@@ -61,6 +61,21 @@ export interface CycleReportPdfData {
   coach: {
     name: string;
   } | null;
+  /** Weekly-journal well-being averages for the Momentum Check section.
+   *  Parsed from the journal 1–10 scores (energy / focus / stress /
+   *  highest-leverage work), averaged for the month with a stoplight
+   *  colour, and — when a prior month has data — the prior month too.
+   *  Null when no journal scores are available for the cycle. */
+  momentum?: {
+    currentLabel: string;
+    previousLabel: string | null;
+    rows: Array<{
+      key: string;
+      label: string;
+      current: { avg: number; color: 'green' | 'yellow' | 'red' } | null;
+      previous: { avg: number; color: 'green' | 'yellow' | 'red' } | null;
+    }>;
+  } | null;
   /** AI-emitted "structured report" block (preferred when present). */
   report: {
     progressSummary?: string;
@@ -224,7 +239,60 @@ const styles = StyleSheet.create({
     color: '#555',
     marginTop: 2,
   },
+  momentumTable: {
+    marginTop: 4,
+    marginBottom: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: '#d1d5db',
+  },
+  momentumHeaderRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 0.8,
+    borderBottomColor: '#9ca3af',
+    backgroundColor: '#f9fafb',
+  },
+  momentumRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#e5e7eb',
+  },
+  momentumCellLabel: {
+    flex: 2,
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+  },
+  momentumCell: {
+    flex: 1,
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  momentumHeaderText: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 10,
+  },
+  momentumDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  momentumValue: {
+    fontSize: 10,
+  },
+  momentumCaption: {
+    fontSize: 8,
+    color: '#777',
+    marginTop: 3,
+  },
 });
+
+const STOPLIGHT_FILL = {
+  green: '#16a34a',
+  yellow: '#eab308',
+  red: '#dc2626',
+} as const;
 
 const TREND_GLYPH = { up: '▲', down: '▼', flat: '•' } as const;
 const TREND_STYLE = {
@@ -243,18 +311,8 @@ function formatPeriod(periodStart: string | null, periodEnd: string | null): str
   return `${fmt(periodStart)} – ${fmt(periodEnd)}`;
 }
 
-function formatGeneratedAt(d: Date | null): string | null {
-  if (!d) return null;
-  return d.toLocaleDateString(undefined, {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
 export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
   const period = formatPeriod(data.cycle.periodStart, data.cycle.periodEnd);
-  const generated = formatGeneratedAt(data.generatedAt);
   const subtitleParts: string[] = [data.cycle.label];
   if (period) subtitleParts.push(`Reporting Period: ${period}`);
   if (data.coach?.name) subtitleParts.push(`Coach: ${data.coach.name}`);
@@ -395,6 +453,9 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             <Text style={styles.sectionTitle}>
               {sectionNumber(hasGoalSection)} Momentum Check
             </Text>
+            {data.momentum && data.momentum.rows.length > 0 && (
+              <MomentumTable momentum={data.momentum} />
+            )}
             {kpis.length > 0 && (
               <View style={styles.kpiGrid}>
                 {kpis.map((k, i) => (
@@ -438,7 +499,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
                 hasProgressSection,
                 hasWinsSection,
               )}{' '}
-              Challenges & Patterns
+              Challenges and Patterns
             </Text>
             {challenges.length > 0 ? (
               challenges.map((c, i) => (
@@ -501,13 +562,10 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             )}
           </View>
         )}
-
-        {generated && (
-          <Text style={styles.footer}>
-            Generated {generated}
-            {data.coach?.name ? ` by ${data.coach.name}` : ''}.
-          </Text>
-        )}
+        {/* The internal "Generated [date] by [coach]" footer was removed
+            from the CEO-facing PDF per client feedback — the coach/date
+            metadata is tracked in-app and doesn't belong on the copy the
+            CEO downloads. */}
       </Page>
     </Document>
   );
@@ -521,6 +579,76 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
 function sectionNumber(...precedingPresent: boolean[]): string {
   const idx = precedingPresent.filter(Boolean).length + 1;
   return `${idx}.`;
+}
+
+/**
+ * Momentum Check well-being table. Renders the four weekly-journal
+ * averages (energy / focus / stress / highest-leverage) with a stoplight
+ * dot, this month vs. prior month when prior data exists. Sits at the top
+ * of the Momentum Check section, above the "Minutes dedicated to the 10x
+ * goal" table that the drafter emits inside progressSummary.
+ */
+function MomentumTable({
+  momentum,
+}: {
+  momentum: NonNullable<CycleReportPdfData['momentum']>;
+}) {
+  const hasPrev =
+    momentum.previousLabel !== null && momentum.rows.some((r) => r.previous);
+  return (
+    <View style={styles.momentumTable} wrap={false}>
+      <View style={styles.momentumHeaderRow}>
+        <View style={styles.momentumCellLabel}>
+          <Text style={styles.momentumHeaderText}>Weekly check-in</Text>
+        </View>
+        <View style={styles.momentumCell}>
+          <Text style={styles.momentumHeaderText}>{momentum.currentLabel}</Text>
+        </View>
+        {hasPrev && (
+          <View style={styles.momentumCell}>
+            <Text style={styles.momentumHeaderText}>
+              {momentum.previousLabel}
+            </Text>
+          </View>
+        )}
+      </View>
+      {momentum.rows.map((r) => (
+        <View key={r.key} style={styles.momentumRow}>
+          <View style={styles.momentumCellLabel}>
+            <Text>{r.label}</Text>
+          </View>
+          <View style={styles.momentumCell}>
+            <MomentumScore cell={r.current} />
+          </View>
+          {hasPrev && (
+            <View style={styles.momentumCell}>
+              <MomentumScore cell={r.previous} />
+            </View>
+          )}
+        </View>
+      ))}
+      <Text style={styles.momentumCaption}>
+        Averaged from weekly journals. Green 8-10, Yellow 5-7, Red 1-4
+        (stress is reversed, so a high score is red).
+      </Text>
+    </View>
+  );
+}
+
+function MomentumScore({
+  cell,
+}: {
+  cell: { avg: number; color: 'green' | 'yellow' | 'red' } | null;
+}) {
+  if (!cell) return <Text style={styles.momentumValue}>—</Text>;
+  return (
+    <>
+      <View
+        style={[styles.momentumDot, { backgroundColor: STOPLIGHT_FILL[cell.color] }]}
+      />
+      <Text style={styles.momentumValue}>{cell.avg.toFixed(1)}</Text>
+    </>
+  );
 }
 
 function KpiCell({
@@ -713,7 +841,11 @@ function BulletItem({
   body: string;
 }) {
   return (
-    <View style={styles.bulletRow}>
+    // `wrap={false}` keeps the glyph and its body together — without it
+    // react-pdf can break a long bullet across a page boundary, leaving
+    // the "•" / "1." orphaned at the bottom of one page and the text at
+    // the top of the next.
+    <View style={styles.bulletRow} wrap={false}>
       <Text style={styles.bulletGlyph}>{glyph}</Text>
       <View style={styles.bulletBody}>
         {label && <Text style={styles.paragraphLabel}>{label} </Text>}

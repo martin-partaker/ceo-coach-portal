@@ -28,6 +28,7 @@ import { start, getRun } from 'workflow/api';
 import { generateReportWorkflow } from '@/workflows/generate-report';
 import { buildV2IterationBundle } from '@/lib/prompts/v2/iteration-bundle';
 import { fetchCycleContext } from '@/lib/prompts/v2/context';
+import { getCycleMomentum } from '@/lib/journal/cycle-momentum';
 import {
   refineSection as refineSectionAi,
   applyRefinement,
@@ -1102,6 +1103,18 @@ export const reportsRouter = createTRPCRouter({
 
       const row = await loadCycleFactsRow(input.cycleId);
       return row;
+    }),
+
+  /** Momentum Check well-being averages for a cycle — the four weekly
+   *  journal scores (energy / focus / stress / highest-leverage) averaged
+   *  for the month with stoplight colours, plus the prior month when it
+   *  has data. Powers the on-screen Momentum Check table; the PDF route
+   *  uses the same helper. Returns null when no journal scores exist. */
+  getMomentum: protectedProcedure
+    .input(z.object({ cycleId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      await loadCycleAndCeo(ctx, input.cycleId);
+      return getCycleMomentum(input.cycleId);
     }),
 
   /** List the per-section refinement chat history for a report.

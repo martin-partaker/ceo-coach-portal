@@ -41,6 +41,8 @@ import {
   Pencil,
   RefreshCw,
   UserCog,
+  UserMinus,
+  UserPlus,
   UsersRound,
 } from 'lucide-react';
 import { FormTeamDialog } from './form-team-dialog';
@@ -70,8 +72,8 @@ export function TeamsAdminPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold">Coaching teams</h1>
           <p className="mt-1 text-[12.5px] text-muted-foreground">
             Manage joint coaching engagements — multiple co-founders working
@@ -79,7 +81,9 @@ export function TeamsAdminPage() {
             one shared 10x goal, and produces a single joint report per cycle.
           </p>
         </div>
-        <FormTeamDialog />
+        <div className="shrink-0">
+          <FormTeamDialog />
+        </div>
       </div>
 
       {teamsQ.isLoading && (
@@ -289,6 +293,14 @@ function EditTeamDialog({
     Object.fromEntries(team.members.map((m) => [m.id, m.memberRole ?? ''])),
   );
 
+  // Read the team from the live list so add/remove-member mutations
+  // (which invalidate teams.list) update the roster shown here without
+  // reopening the dialog — the parent holds a snapshot that wouldn't
+  // otherwise refresh.
+  const teamsQ = trpc.teams.list.useQuery(undefined, { enabled: open });
+  const liveTeam = teamsQ.data?.find((t) => t.id === team.id) ?? team;
+  const liveMembers = liveTeam.members;
+
   const update = trpc.teams.update.useMutation({
     onSuccess: async () => {
       await utils.teams.list.invalidate();
@@ -296,13 +308,43 @@ function EditTeamDialog({
     },
   });
 
+  // ── Member management (add / remove / swap) ──────────────────────
+  const candidatesQ = trpc.teams.listFormCandidates.useQuery(undefined, {
+    enabled: open,
+  });
+  const candidates = useMemo(
+    () => (candidatesQ.data ?? []).filter((c) => c.id !== team.id),
+    [candidatesQ.data, team.id],
+  );
+  const [addCeoId, setAddCeoId] = useState<string>('');
+
+  const invalidateMembership = async () => {
+    await Promise.all([
+      utils.teams.list.invalidate(),
+      utils.teams.listFormCandidates.invalidate(),
+      utils.roster.cycleSummary.invalidate(),
+    ]);
+  };
+
+  const addMember = trpc.teams.addMember.useMutation({
+    onSuccess: async () => {
+      setAddCeoId('');
+      await invalidateMembership();
+    },
+  });
+  const removeMember = trpc.teams.removeMember.useMutation({
+    onSuccess: invalidateMembership,
+  });
+
+  const memberBusy = addMember.isPending || removeMember.isPending;
+
   function save() {
     update.mutate({
       teamId: team.id,
       name: name.trim(),
       companyName: companyName.trim() || null,
       tenXGoal: tenXGoal.trim() || null,
-      memberRoles: team.members.map((m) => ({
+      memberRoles: liveMembers.map((m) => ({
         ceoId: m.id,
         role: (memberRoles[m.id] ?? '').trim() || null,
       })),
@@ -361,7 +403,7 @@ function EditTeamDialog({
 
           <div className="space-y-2">
             <Label className="text-[12px]">Members</Label>
-            {team.members.map((m) => (
+            {liveMembers.map((m) => (
               <div key={m.id} className="flex items-center gap-2">
                 <span className="w-32 shrink-0 truncate text-[12.5px] font-medium">
                   {m.name}
@@ -377,13 +419,87 @@ function EditTeamDialog({
                   placeholder='Role (optional) — e.g. "CEO", "COO"'
                   className="h-8 flex-1 text-[12px]"
                 />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
+                  aria-label={`Remove ${m.name} from team`}
+                  title={
+                    liveMembers.length <= 1
+                      ? 'A team keeps at least one member — archive it instead'
+                      : `Remove ${m.name}. Their past sessions are preserved as solo history.`
+                  }
+                  disabled={memberBusy || liveMembers.length <= 1}
+                  onClick={() => removeMember.mutate({ ceoId: m.id })}
+                >
+                  {removeMember.isPending &&
+                  removeMember.variables?.ceoId === m.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <UserMinus className="h-3.5 w-3.5" />
+                  )}
+                </Button>
               </div>
             ))}
+
+            {/* Add a member — powers the coachee-swap case: add the new
+                CEO here, then remove the outgoing one. removeMember keeps
+                the outgoing CEO's prior sessions as their own solo
+                history, and future reports run off the new member. */}
+            <div className="flex items-center gap-2 pt-1">
+              <Select
+                value={addCeoId}
+                onValueChange={setAddCeoId}
+                disabled={memberBusy}
+              >
+                <SelectTrigger className="h-8 flex-1 text-[12px]">
+                  <SelectValue
+                    placeholder={
+                      candidates.length === 0
+                        ? 'No unassigned CEOs available'
+                        : 'Add a member…'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {candidates.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                      {c.email ? ` · ${c.email}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0"
+                disabled={!addCeoId || memberBusy}
+                onClick={() =>
+                  addCeoId &&
+                  addMember.mutate({ teamId: team.id, ceoId: addCeoId })
+                }
+              >
+                {addMember.isPending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Add
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              To swap a coachee (e.g. a new CEO takes over), add the new
+              member, then remove the outgoing one. Past sessions stay with
+              the outgoing CEO as solo history.
+            </p>
           </div>
 
-          {update.error && (
+          {(update.error || addMember.error || removeMember.error) && (
             <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
-              {update.error.message}
+              {update.error?.message ??
+                addMember.error?.message ??
+                removeMember.error?.message}
             </p>
           )}
         </div>

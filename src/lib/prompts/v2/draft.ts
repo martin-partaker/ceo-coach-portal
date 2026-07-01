@@ -218,6 +218,14 @@ This is a coaching TEAM, not a single CEO${teamSuffix}. Adjust voice accordingly
 
 ` : ''}
 
+## Grammar and prose quality
+The prose sections (progressSummary interpretive commentary, patternObservations, the detail sentences in every bullet, and all email fields) are read by paying clients and must be grammatically correct and professional. Before returning, self-check:
+- **Complete sentences.** No sentence fragments in prose sections. Bold lead-in clauses are the only intentional fragments; every detail sentence after them must be a complete sentence with a subject and verb.
+- **No run-on sentences / comma splices.** Do not join two independent clauses with only a comma. Use a period, or a semicolon where the clauses are closely related ("The plan is done; the execution is not.").
+- **Semicolons vs commas.** Use a semicolon (not a comma) to separate two independent clauses that aren't joined by a conjunction, and to separate list items that themselves contain commas. Never use a comma where a semicolon or period is required.
+- **Comma placement.** Use commas correctly for introductory clauses, appositives, and coordinating conjunctions joining two independent clauses ("X, and Y"). Do not drop the comma before a coordinating conjunction that joins two full clauses, and do not sprinkle commas where no pause belongs.
+- **Concise but professional.** Tighten wordiness, but never at the cost of a grammatically complete, correctly punctuated sentence.
+
 ## Framework Reference
 ${frameworkText}
 

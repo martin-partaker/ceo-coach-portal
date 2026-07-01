@@ -5,6 +5,7 @@ import { Markdown, MarkdownInline } from '@/components/markdown';
 import { cn } from '@/lib/utils';
 import type { CycleMomentum } from '@/lib/journal/cycle-momentum';
 import { RefineSectionPopover } from './refine-section-popover';
+import { GoalSummaryEditPopover } from './goal-summary-edit-popover';
 
 /**
  * Renders a v2 DraftedReport as a styled document that mimics the PDF
@@ -169,6 +170,14 @@ export const DocumentRenderer = forwardRef<HTMLDivElement, Props>(function Docum
             emphasized={emphasizedSection === 'goalSummary'}
             onClick={() => onSectionClick?.('goalSummary')}
             reportId={reportId}
+            editSlot={
+              reportId ? (
+                <GoalSummaryEditPopover
+                  reportId={reportId}
+                  value={r.goalSummary}
+                />
+              ) : undefined
+            }
           >
             <dl className="space-y-2 text-[14px] leading-relaxed">
               {r.goalSummary.tenX && (
@@ -435,6 +444,7 @@ function DocSection({
   emphasized,
   onClick,
   reportId,
+  editSlot,
 }: {
   id: DocumentSectionId;
   number: number;
@@ -444,9 +454,14 @@ function DocSection({
   emphasized?: boolean;
   onClick?: () => void;
   reportId?: string;
+  /** Custom edit control for sections that don't use the generic
+   *  per-section refine popover (e.g. Goal Summary, a structured object).
+   *  When provided it replaces the RefineSectionPopover. */
+  editSlot?: React.ReactNode;
 }) {
-  // `goalSummary` isn't a refineable section (it's derived from
-  // CycleFacts); the rest map 1:1 to the refine schema's RefinableSection.
+  // `goalSummary` isn't refineable via the generic string/list popover
+  // (it's a structured object) — it uses `editSlot` instead. The rest map
+  // 1:1 to the refine schema's RefinableSection.
   const refineSection: string | null = id === 'goalSummary' ? null : id;
   return (
     <section
@@ -464,16 +479,17 @@ function DocSection({
         <h2 className="text-base font-semibold">
           <span className="text-muted-foreground">{number}.</span> {title}
         </h2>
-        {reportId && refineSection && (
-          <div
-            // Edit affordance is permanently visible per section (was
-            // hover-only) so coaches can see at a glance that every
-            // section is editable.
-            onClick={(e) => e.stopPropagation()}
-          >
+        {/* Edit affordance is permanently visible per section (was
+            hover-only) so coaches can see at a glance that every section
+            is editable. Goal Summary uses a custom editSlot; the rest use
+            the generic refine popover. */}
+        {editSlot ? (
+          <div onClick={(e) => e.stopPropagation()}>{editSlot}</div>
+        ) : reportId && refineSection ? (
+          <div onClick={(e) => e.stopPropagation()}>
             <RefineSectionPopover reportId={reportId} section={refineSection} />
           </div>
-        )}
+        ) : null}
       </div>
       {children}
     </section>

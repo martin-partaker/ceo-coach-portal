@@ -64,6 +64,12 @@ interface GeneratedContent {
     patternObservations?: string;
     suggestedNextSteps?: string[];
     suggestedResourceIds?: string[];
+    goalSummary?: {
+      tenX?: string;
+      ninetyDay?: string | null;
+      thirtyDay?: string | null;
+      flag?: string | null;
+    } | null;
   };
 }
 
@@ -546,6 +552,17 @@ export const reportsRouter = createTRPCRouter({
         challenges: z.array(z.string()).optional(),
         patternObservations: z.string().optional(),
         suggestedNextSteps: z.array(z.string()).optional(),
+        // Goal Summary is a structured sub-object; sub-fields are merged
+        // (omitted keys keep their current value) so editing the goals
+        // never wipes the coach-only `flag`.
+        goalSummary: z
+          .object({
+            tenX: z.string().optional(),
+            ninetyDay: z.string().nullable().optional(),
+            thirtyDay: z.string().nullable().optional(),
+            flag: z.string().nullable().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -601,6 +618,18 @@ export const reportsRouter = createTRPCRouter({
             [k]: input[k],
           };
         }
+      }
+
+      // Goal Summary — merge sub-fields so the coach-only `flag` (and any
+      // untouched goal line) survives an edit to just one of the goals.
+      if (input.goalSummary !== undefined) {
+        next.report = {
+          ...(next.report ?? {}),
+          goalSummary: {
+            ...(next.report?.goalSummary ?? {}),
+            ...input.goalSummary,
+          },
+        };
       }
 
       const rawText = contentJsonToRawText(next);

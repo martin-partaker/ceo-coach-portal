@@ -409,7 +409,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         <View style={styles.divider} />
 
         {hasGoalSection && (
-          <>
+          <View wrap={false}>
             <Text style={styles.sectionTitle}>1. Goal Summary</Text>
             {goalTenX && (
               <View style={styles.bulletRow}>
@@ -445,7 +445,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               </View>
             )}
             <View style={styles.divider} />
-          </>
+          </View>
         )}
 
         {hasProgressSection && (
@@ -476,7 +476,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         )}
 
         {hasWinsSection && (
-          <>
+          <View wrap={false}>
             <Text style={styles.sectionTitle}>
               {sectionNumber(hasGoalSection, hasProgressSection)} Key Wins
             </Text>
@@ -488,11 +488,11 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               <MarkdownPdf text={winsFallback} />
             )}
             <View style={styles.divider} />
-          </>
+          </View>
         )}
 
         {hasChallengesSection && (
-          <>
+          <View wrap={false}>
             <Text style={styles.sectionTitle}>
               {sectionNumber(
                 hasGoalSection,
@@ -509,7 +509,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
               <MarkdownPdf text={challengesFallback} />
             )}
             <View style={styles.divider} />
-          </>
+          </View>
         )}
 
         {hasFlightPatternsSection && (
@@ -529,7 +529,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
         )}
 
         {hasNextStepsSection && (
-          <>
+          <View wrap={false}>
             <Text style={styles.sectionTitle}>
               {sectionNumber(
                 hasGoalSection,
@@ -547,7 +547,7 @@ export function CycleReportPdf({ data }: { data: CycleReportPdfData }) {
             ) : (
               <MarkdownPdf text={nextStepsFallback} />
             )}
-          </>
+          </View>
         )}
 
         {data.report.closing?.sentence?.trim() && (

@@ -135,7 +135,12 @@ function renderBlock(block: Block, key: number): React.ReactElement {
     const cellAlign = (a: 'left' | 'center' | 'right' | null) =>
       a === 'right' ? 'right' : a === 'center' ? 'center' : 'left';
     return (
-      <View key={key} style={styles.table}>
+      // `wrap={false}` keeps the whole table on one page so it isn't
+      // split mid-table across a page break (e.g. the "Minutes dedicated
+      // to the 10x goal" table showing Week 1 on one page and Week 2 on
+      // the next). These tables are short (a handful of rows), so keeping
+      // them intact is safe.
+      <View key={key} style={styles.table} wrap={false}>
         <View style={styles.tableHeaderRow}>
           {block.header.map((cell, ci) => (
             <View key={ci} style={styles.tableCell}>

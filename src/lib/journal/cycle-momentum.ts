@@ -28,28 +28,52 @@ export async function getCycleMomentum(
   cycleId: string,
 ): Promise<CycleMomentum | null> {
   const [cycle] = await db
-    .select({ id: cycles.id, ceoId: cycles.ceoId, label: cycles.label })
+    .select({
+      id: cycles.id,
+      ceoId: cycles.ceoId,
+      teamId: cycles.teamId,
+      label: cycles.label,
+      periodStart: cycles.periodStart,
+    })
     .from(cycles)
     .where(eq(cycles.id, cycleId))
     .limit(1);
   if (!cycle) return null;
 
-  // The "previous month" is the cycle immediately before this one for the
-  // same (lead) CEO, ordered by period. Team cycles carry the lead CEO's
-  // id so this walks the team's timeline correctly. journal_entries link
-  // by cycleId, so a team cycle's query captures every member's journals.
-  const ceoCycles = await db
+  // The "previous month" is the cycle in the same engagement immediately
+  // before this one by period. For TEAM cycles we MUST scope by teamId,
+  // not ceoId: a team's canonical cycle can carry a different lead
+  // member's ceoId each month (e.g. May's lead is Dave, June's is David),
+  // so a ceoId filter silently skips months. Solo cycles scope by ceoId.
+  // journal_entries link by cycleId, so a team cycle's query captures
+  // every member's journals.
+  const scope = cycle.teamId
+    ? eq(cycles.teamId, cycle.teamId)
+    : eq(cycles.ceoId, cycle.ceoId);
+  const scoped = await db
     .select({
       id: cycles.id,
       label: cycles.label,
       periodStart: cycles.periodStart,
-      createdAt: cycles.createdAt,
     })
     .from(cycles)
-    .where(eq(cycles.ceoId, cycle.ceoId))
+    .where(scope)
     .orderBy(asc(cycles.periodStart), asc(cycles.createdAt));
-  const idx = ceoCycles.findIndex((c) => c.id === cycleId);
-  const prev = idx > 0 ? ceoCycles[idx - 1] : null;
+  // `period_start` is a `date` column → an ISO 'YYYY-MM-DD' string, which
+  // sorts chronologically as a plain string comparison.
+  const curStart = cycle.periodStart;
+  // Most recent cycle whose period starts strictly before the current one.
+  const prev =
+    curStart === null
+      ? null
+      : ([...scoped]
+          .reverse()
+          .find(
+            (c) =>
+              c.id !== cycleId &&
+              c.periodStart !== null &&
+              c.periodStart < curStart,
+          ) ?? null);
 
   const ids = [cycleId, ...(prev ? [prev.id] : [])];
   const journals = await db

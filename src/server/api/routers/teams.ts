@@ -715,6 +715,13 @@ export const teamsRouter = createTRPCRouter({
       // ends up with one canonical cycle per period.
       await mergeParallelTeamCycles(ctx.db, team.id);
 
+      // Force a fresh Stage A on the team's cycles — membership changed, so
+      // any cached facts are stale (see setMemberActive for the rationale).
+      await ctx.db
+        .update(cycles)
+        .set({ updatedAt: new Date() })
+        .where(eq(cycles.teamId, team.id));
+
       return { ok: true };
     }),
 
@@ -766,6 +773,13 @@ export const teamsRouter = createTRPCRouter({
       // out into solo cycles via match-cycle.ts.
       const splitResult = await reprojectInputsForLeavingMembers(ctx.db, [ceo.id]);
 
+      // Force a fresh Stage A on the team's remaining cycles — the roster
+      // changed (see setMemberActive for the rationale).
+      await ctx.db
+        .update(cycles)
+        .set({ updatedAt: new Date() })
+        .where(eq(cycles.teamId, teamId));
+
       return { ok: true, ...splitResult };
     }),
 
@@ -796,6 +810,18 @@ export const teamsRouter = createTRPCRouter({
         .update(ceos)
         .set({ inactiveAt: input.inactive ? new Date() : null })
         .where(eq(ceos.id, ceo.id));
+
+      // Invalidate cached CycleFacts for the team's cycles. Cached facts
+      // are keyed on input timestamps (latestInputTimestamp), which don't
+      // move when membership changes — so without this, a regenerate would
+      // reuse stale facts that still list the former member's effort/claims
+      // and re-surface them in the report body. Bumping cycles.updatedAt
+      // (which the staleness check reads) forces a fresh Stage A on the
+      // next generate. Works for both mark-former and reactivate.
+      await ctx.db
+        .update(cycles)
+        .set({ updatedAt: new Date() })
+        .where(eq(cycles.teamId, ceo.teamId));
 
       return { ok: true };
     }),

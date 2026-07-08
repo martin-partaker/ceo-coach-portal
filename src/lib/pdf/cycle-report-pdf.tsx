@@ -613,10 +613,6 @@ function MomentumTable({
         <View style={styles.momentumCellLabel}>
           <Text style={styles.momentumHeaderText}>Weekly check-in</Text>
         </View>
-        <View style={styles.momentumHeaderCell}>
-          <Text style={styles.momentumHeaderText}>{momentum.currentLabel}</Text>
-          <Text style={styles.momentumHeaderCaption}>This month</Text>
-        </View>
         {hasPrev && (
           <View style={styles.momentumHeaderCell}>
             <Text style={styles.momentumHeaderText}>
@@ -625,20 +621,24 @@ function MomentumTable({
             <Text style={styles.momentumHeaderCaption}>Previous month</Text>
           </View>
         )}
+        <View style={styles.momentumHeaderCell}>
+          <Text style={styles.momentumHeaderText}>{momentum.currentLabel}</Text>
+          <Text style={styles.momentumHeaderCaption}>This month</Text>
+        </View>
       </View>
       {momentum.rows.map((r) => (
         <View key={r.key} style={styles.momentumRow}>
           <View style={styles.momentumCellLabel}>
             <Text>{r.label}</Text>
           </View>
-          <View style={styles.momentumCell}>
-            <MomentumScore cell={r.current} />
-          </View>
           {hasPrev && (
             <View style={styles.momentumCell}>
               <MomentumScore cell={r.previous} />
             </View>
           )}
+          <View style={styles.momentumCell}>
+            <MomentumScore cell={r.current} />
+          </View>
         </View>
       ))}
       <Text style={styles.momentumCaption}>

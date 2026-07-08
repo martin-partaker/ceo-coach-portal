@@ -363,34 +363,34 @@ function MomentumTable({ momentum }: { momentum: CycleMomentum }) {
             <th className="py-1.5 pr-3 text-left align-bottom font-semibold">
               Weekly check-in
             </th>
-            <th className="py-1.5 pr-3 text-left align-bottom font-semibold">
-              <div>{momentum.currentLabel}</div>
-              <div className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-                This month
-              </div>
-            </th>
             {hasPrev && (
-              <th className="py-1.5 text-left align-bottom font-semibold text-muted-foreground">
+              <th className="py-1.5 pr-3 text-left align-bottom font-semibold text-muted-foreground">
                 <div>{momentum.previousLabel}</div>
                 <div className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
                   Previous month
                 </div>
               </th>
             )}
+            <th className="py-1.5 pr-3 text-left align-bottom font-semibold">
+              <div>{momentum.currentLabel}</div>
+              <div className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                This month
+              </div>
+            </th>
           </tr>
         </thead>
         <tbody>
           {momentum.rows.map((r) => (
             <tr key={r.key} className="border-b border-border/60">
               <td className="py-1.5 pr-3">{r.label}</td>
-              <td className="py-1.5 pr-3">
-                <MomentumScore cell={r.current} />
-              </td>
               {hasPrev && (
-                <td className="py-1.5">
+                <td className="py-1.5 pr-3">
                   <MomentumScore cell={r.previous} />
                 </td>
               )}
+              <td className="py-1.5">
+                <MomentumScore cell={r.current} />
+              </td>
             </tr>
           ))}
         </tbody>

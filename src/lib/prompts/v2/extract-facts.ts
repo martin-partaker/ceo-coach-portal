@@ -110,6 +110,22 @@ export async function extractFacts(ctx: CycleContext): Promise<ExtractFactsResul
   // field on sourceRef ("David's Week 2 journal") rather than adding a
   // new schema field — keeps the existing CycleFacts shape stable.
   const naming = subjectNaming(ctx);
+  // The hint's member list must include EVERY name that appears in the
+  // input bylines — including a former/inactive member whose historical
+  // (or mid-handover) inputs are still in context — so Stage A doesn't
+  // misclassify a bylined former member as an EXTERNAL stakeholder.
+  // `naming.firstNames` is active-only, so union it with input authors.
+  const teamFirstNames = Array.from(
+    new Set([
+      ...naming.firstNames,
+      ...ctx.journals.flatMap((j) =>
+        j.authoredBy ? [j.authoredBy.ceoName.split(' ')[0]] : [],
+      ),
+      ...ctx.transcripts.flatMap((t) =>
+        t.authoredBy ? [t.authoredBy.ceoName.split(' ')[0]] : [],
+      ),
+    ]),
+  );
   // Gate on `ctx.team` (team exists), NOT naming.isTeam (active-member
   // count > 1). renderContextForModel tags journals with author bylines
   // whenever a team exists, so the extractor needs the attribution hint on
@@ -121,7 +137,7 @@ export async function extractFacts(ctx: CycleContext): Promise<ExtractFactsResul
 
 ## TEAM CYCLE — attribution matters
 This cycle belongs to a coaching team (${naming.subjectFullLabel}). Journals and transcripts above are tagged with the authoring team member's name in their titles ("David's Weekly Journal — Week 2 …"). When you build evidenceClaims, stakeholders, emotionalEvents, and commitments:
-- The team has ${naming.firstNames.length} members: ${naming.firstNames.join(', ')}. DON'T list the team's own members in \`stakeholders\` — they are the subjects of the report, not external stakeholders.
+- These are team members (current or former), NOT external stakeholders — do not list any of them in \`stakeholders\`: ${teamFirstNames.join(', ')}.
 - For every claim, set sourceRef.locator to include the authoring member when relevant: "David's Week 2 journal", "Dave's Monthly Reflection", "Joint coaching transcript ~14:00". This lets the drafter attribute the claim to the right person.
 - emotionalEvents and commitments tied to one specific member must say so in the locator + description.
 - The 10x goal is TEAM-LEVEL — extract it from any member's input (they should agree) and capture any drift as you would for a solo CEO.

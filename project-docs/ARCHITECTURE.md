@@ -24,7 +24,7 @@ Auth: Neon Auth (email/password) → session cookie → tRPC context
 ### API Layer (tRPC v11)
 - **Context:** Session + coach resolved per-request in `createTRPCContext`
 - **Procedures:** `publicProcedure`, `protectedProcedure` (authenticated + coach row), `adminProcedure` (super admin)
-- **Routers:** `coaches`, `ceos`, `cycles` (more in later phases: `reports`, `actionItems`, `curriculum`, `zoom`)
+- **Routers:** `coaches`, `ceos`, `teams`, `cycles`, `roster`, `reports`, `inbox` (Triage), `actionItems`, `zoom`, `admin`
 - **Server caller:** `createServerCaller()` for RSC pages (no HTTP round-trip)
 - **Client:** `trpc` React hooks with `httpBatchLink` + superjson transformer
 
@@ -63,5 +63,14 @@ useMutation (trpc.xxx.useMutation) → HTTP POST → /api/trpc/[trpc] → tRPC r
 | Database | Postgres | Neon (EU, aws-eu-west-2) |
 | Auth | Email/password | Neon Auth |
 | Hosting | Deploy + CDN | Vercel |
-| AI | Report generation | OpenAI (GPT) |
+| AI | Report generation | Anthropic (Claude) |
 | Video | Transcript fetch | Zoom (Server-to-Server OAuth) |
+| Forms | Journals / intakes / goals | Tally (webhook) |
+
+## Report generation pipeline
+
+Reports are produced by a five-stage AI pipeline in `src/lib/prompts/v2/`, run as a durable Vercel Workflow. See [DEVELOPER-GUIDE.md](./DEVELOPER-GUIDE.md#3-the-report-pipeline-the-important-part) for detail:
+
+```
+inputs → A: extract-facts → B: match-patterns → C: draft → D: critique → (E: refine on demand) → PDF
+```

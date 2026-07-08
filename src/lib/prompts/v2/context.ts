@@ -41,9 +41,16 @@ export type CycleContext = {
   /** The team this cycle belongs to, or null for solo cycles. */
   team: CoachingTeam | null;
   /** Every CEO whose inputs feed this cycle's report. For solo, a
-   *  single-element list with `ceo`. For team cycles, every member of
-   *  the team in stable display order (lead first). */
+   *  single-element list with `ceo`. For team cycles, every ACTIVE member
+   *  of the team in stable display order (lead first). Former/inactive
+   *  members are excluded (see `formerMemberNames`). */
   members: Ceo[];
+  /** Names of team members who have been marked FORMER/inactive (successor
+   *  handover). Their historical data still feeds context + patterns, but
+   *  the drafter must NOT name, address, or reference them anywhere in the
+   *  CEO-facing report. Empty for solo cycles and teams with no former
+   *  members. */
+  formerMemberNames: string[];
   coachName: string;
   /** The shared 10x goal as written. Pulled from the team for team
    *  cycles, from the lead CEO for solo cycles. */
@@ -161,6 +168,14 @@ export async function fetchCycleContext(args: {
   // all members if every member is somehow inactive (never emit an empty
   // subject).
   const activeMembers = members.filter((m) => !m.inactiveAt);
+  // Names of former/inactive members, captured BEFORE we narrow `members`
+  // to active. Only when at least one member is active (a real handover) —
+  // the all-inactive fallback keeps everyone as the subject, so there's no
+  // one to suppress. Passed to the drafter as a do-not-name list.
+  const formerMemberNames =
+    activeMembers.length > 0
+      ? members.filter((m) => m.inactiveAt).map((m) => m.name)
+      : [];
   if (activeMembers.length > 0) members = activeMembers;
 
   // Journals — derived membership: include any journal whose effective
@@ -502,6 +517,7 @@ export async function fetchCycleContext(args: {
     ceo,
     team,
     members,
+    formerMemberNames,
     coachName,
     tenXGoal,
     monthlyGoals: mergedMonthlyGoals,

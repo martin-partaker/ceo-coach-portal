@@ -130,8 +130,20 @@ export async function draftReport(args: DraftArgs): Promise<DraftResult> {
     ? '- David: Build exec alignment through 5 hours of structured meeting time.\\n- Dave: Define the new identity and qualifying rules for new prospects.'
     : 'Build exec alignment through 5 hours of structured meeting time.';
 
-  const systemPrompt = `You are ghostwriting the monthly coaching summary that ${ctx.coachName} sends to their ${naming.isTeam ? `coaching team ${subjectFullLabel}` : `CEO client ${subjectFullLabel}`}. Both outputs go to ${naming.isTeam ? 'the team' : 'the CEO'} — the email lands in their inbox, the structured report is rendered as a PDF "Monthly Progress Summary" they download. Write everything as if ${subjectHandle} ${naming.isTeam ? 'are' : 'is'} reading it.
+  // Successor handover — a do-not-name list for members marked FORMER.
+  // Their historical inputs are still in context for continuity, but they
+  // must never appear in the CEO-facing report (name, address, absence, or
+  // attribution). Empty string when there are no former members.
+  const formerMemberBlock =
+    ctx.formerMemberNames.length > 0
+      ? `
+# 🚫 FORMER MEMBERS — DO NOT NAME OR REFERENCE
+${ctx.formerMemberNames.length === 1 ? 'This person has' : 'These people have'} handed over and ${ctx.formerMemberNames.length === 1 ? 'is' : 'are'} NO LONGER a coachee on this report: ${ctx.formerMemberNames.join(', ')}. Their past inputs appear in the context for continuity ONLY. In every CEO-facing section (progressSummary, keyWins, challenges, patternObservations, suggestedNextSteps, closing) and every email field: do NOT name, address, or reference them; do NOT mention their absence or any lack of recent data from them; frame any carried-forward pattern in terms of the current coachee(s) or the company, never the former member; attribute nothing to them.
+`
+      : '';
 
+  const systemPrompt = `You are ghostwriting the monthly coaching summary that ${ctx.coachName} sends to their ${naming.isTeam ? `coaching team ${subjectFullLabel}` : `CEO client ${subjectFullLabel}`}. Both outputs go to ${naming.isTeam ? 'the team' : 'the CEO'} — the email lands in their inbox, the structured report is rendered as a PDF "Monthly Progress Summary" they download. Write everything as if ${subjectHandle} ${naming.isTeam ? 'are' : 'is'} reading it.
+${formerMemberBlock}
 # 🚨 NON-NEGOTIABLE FORMAT RULES — read these before anything else
 
 These rules are enforced by the rubric. Violations are auto-rejected. Every single output MUST satisfy ALL of them.

@@ -113,6 +113,22 @@ function renderInlines(
   });
 }
 
+/** Flatten inline runs to their plain text (for blank-cell detection). */
+function inlineText(runs: Inline[]): string {
+  return runs
+    .map((r) =>
+      r.kind === 'text' ? r.text : 'children' in r ? inlineText(r.children) : '',
+    )
+    .join('');
+}
+
+/** A table cell that's empty or only punctuation (a lone "," / "-" / dash)
+ *  — usually a missing value the model left blank, which the em-dash
+ *  stripper turned into a stray comma. Rendered as an empty cell. */
+function isBlankCell(runs: Inline[]): boolean {
+  return /^[\s,.;–—-]*$/.test(inlineText(runs));
+}
+
 /** Render a single block (paragraph, list, or table). */
 function renderBlock(block: Block, key: number): React.ReactElement {
   if (block.kind === 'paragraph') {
@@ -155,7 +171,7 @@ function renderBlock(block: Block, key: number): React.ReactElement {
             {row.map((cell, ci) => (
               <View key={ci} style={styles.tableCell}>
                 <Text style={{ textAlign: cellAlign(block.align[ci] ?? null) }}>
-                  {renderInlines(cell)}
+                  {isBlankCell(cell) ? '' : renderInlines(cell)}
                 </Text>
               </View>
             ))}
@@ -200,5 +216,30 @@ function renderBlock(block: Block, key: number): React.ReactElement {
 export function MarkdownPdf({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
   if (blocks.length === 0) return <Text> </Text>;
-  return <>{blocks.map((b, i) => renderBlock(b, i))}</>;
+  const out: React.ReactElement[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    const next = blocks[i + 1];
+    // Keep a short single-line heading (e.g. "**Minutes dedicated to the
+    // 10x goal**") glued to the table that follows it, so the heading
+    // isn't orphaned at the bottom of a page while its table starts the
+    // next one. Both are small, so wrap={false} won't clip.
+    if (
+      b.kind === 'paragraph' &&
+      b.lines.length === 1 &&
+      next &&
+      next.kind === 'table'
+    ) {
+      out.push(
+        <View key={i} wrap={false}>
+          {renderBlock(b, i)}
+          {renderBlock(next, i + 1)}
+        </View>,
+      );
+      i++; // consumed the table too
+    } else {
+      out.push(renderBlock(b, i));
+    }
+  }
+  return <>{out}</>;
 }

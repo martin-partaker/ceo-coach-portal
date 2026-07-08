@@ -110,7 +110,13 @@ export async function extractFacts(ctx: CycleContext): Promise<ExtractFactsResul
   // field on sourceRef ("David's Week 2 journal") rather than adding a
   // new schema field — keeps the existing CycleFacts shape stable.
   const naming = subjectNaming(ctx);
-  const teamHint = naming.isTeam
+  // Gate on `ctx.team` (team exists), NOT naming.isTeam (active-member
+  // count > 1). renderContextForModel tags journals with author bylines
+  // whenever a team exists, so the extractor needs the attribution hint on
+  // the same condition. Otherwise a team collapsed to one active member
+  // (succession) would render multi-author bylines with no instruction to
+  // attribute them.
+  const teamHint = ctx.team
     ? `
 
 ## TEAM CYCLE — attribution matters

@@ -439,6 +439,17 @@ export async function fetchCycleContext(args: {
           eq(cycles.teamId, team.id),
           eq(cycles.periodStart, cycle.periodStart),
           eq(cycles.periodEnd, cycle.periodEnd),
+          // ACTIVE members only. Monthly goals/reflection are per-member
+          // form fields rendered with a name byline ("### David"), so a
+          // former member's scalars (or a canonical cycle they own) must
+          // not appear in the CEO-facing prompt. When the canonical cycle
+          // is owned by a former member it's excluded here and the raw
+          // `cycle.monthly*` fallback (set above, un-bylined) is used, so
+          // the team's reflection content is preserved without the name.
+          inArray(
+            cycles.ceoId,
+            members.map((m) => m.id),
+          ),
         ),
       );
 

@@ -130,7 +130,7 @@ export async function draftReport(args: DraftArgs): Promise<DraftResult> {
     ? '- David: Build exec alignment through 5 hours of structured meeting time.\\n- Dave: Define the new identity and qualifying rules for new prospects.'
     : 'Build exec alignment through 5 hours of structured meeting time.';
 
-  const systemPrompt = `You are ghostwriting the monthly coaching summary that ${ctx.coachName} sends to their ${naming.isTeam ? `coaching team ${subjectFullLabel}` : `CEO client ${ctx.ceo.name}`}. Both outputs go to ${naming.isTeam ? 'the team' : 'the CEO'} — the email lands in their inbox, the structured report is rendered as a PDF "Monthly Progress Summary" they download. Write everything as if ${subjectHandle} ${naming.isTeam ? 'are' : 'is'} reading it.
+  const systemPrompt = `You are ghostwriting the monthly coaching summary that ${ctx.coachName} sends to their ${naming.isTeam ? `coaching team ${subjectFullLabel}` : `CEO client ${subjectFullLabel}`}. Both outputs go to ${naming.isTeam ? 'the team' : 'the CEO'} — the email lands in their inbox, the structured report is rendered as a PDF "Monthly Progress Summary" they download. Write everything as if ${subjectHandle} ${naming.isTeam ? 'are' : 'is'} reading it.
 
 # 🚨 NON-NEGOTIABLE FORMAT RULES — read these before anything else
 

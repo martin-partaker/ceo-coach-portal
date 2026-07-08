@@ -418,7 +418,13 @@ export async function fetchCycleContext(args: {
   let mergedMonthlyReflection = cycle.monthlyReflection?.trim() ?? '';
   let mergedAdditionalContext = cycle.additionalContext?.trim() ?? '';
 
-  if (team && cycle.periodStart && cycle.periodEnd && members.length > 1) {
+  // Gate on `team` + period only — NOT on the active-member count. This is
+  // data gathering (sibling-cycle monthly scalars), so it must run even
+  // when only one member is active (succession handover); otherwise the
+  // active member's monthly goals/reflection from a parallel cycle would
+  // be dropped and the prompt would fall back to the canonical cycle's
+  // scalars, which may belong to the former member.
+  if (team && cycle.periodStart && cycle.periodEnd) {
     const siblingCycles = await db
       .select({
         id: cycles.id,
@@ -637,9 +643,13 @@ export function subjectNaming(ctx: CycleContext): {
   const subjectHandle = isTeam ? joinWithAmpersand(firstNames) : firstNames[0] ?? ctx.ceo.name;
   const fullNames = ctx.members.map((m) => m.name);
   const teamLabel = ctx.team ? ctx.team.name : null;
+  // Non-team fallback names the sole ACTIVE member (ctx.members is already
+  // active-filtered), NOT ctx.ceo — the cycle owner (cycles.ceo_id) can be
+  // a now-former member after a succession handover, and naming them here
+  // would leak the former CEO into the report header/subject.
   const subjectFullLabel = isTeam
     ? `${joinWithAmpersand(fullNames)}${teamLabel ? ` · ${teamLabel}` : ''}`
-    : ctx.ceo.name;
+    : fullNames[0] ?? ctx.ceo.name;
   return { isTeam, firstNames, subjectHandle, subjectFullLabel, teamLabel };
 }
 

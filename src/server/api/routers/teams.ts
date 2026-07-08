@@ -699,6 +699,9 @@ export const teamsRouter = createTRPCRouter({
           teamId: team.id,
           memberRole: input.memberRole ?? null,
           coachId: team.coachId, // sync if previously null
+          // Always join as active — clears any stale former-member flag
+          // left over from a previous team membership.
+          inactiveAt: null,
         })
         .where(eq(ceos.id, ceo.id));
 
@@ -747,7 +750,10 @@ export const teamsRouter = createTRPCRouter({
 
       await ctx.db
         .update(ceos)
-        .set({ teamId: null, memberRole: null })
+        // Clear the former-member flag on the way out — once solo again
+        // they're a normal active CEO, and setMemberActive can't reach a
+        // teamless CEO to clear it later.
+        .set({ teamId: null, memberRole: null, inactiveAt: null })
         .where(eq(ceos.id, ceo.id));
 
       // Revert cycle / KPI tagging for just this CEO.

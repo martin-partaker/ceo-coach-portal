@@ -108,8 +108,44 @@ export async function getCycleMomentum(
 
   if (rows.length === 0) return null;
   return {
-    currentLabel: cycle.label,
-    previousLabel: prev?.label ?? null,
+    // Clean, full-month labels derived from the cycle's actual period so
+    // the header reads "June 2026" (not the stored short label "Jun
+    // 2026") and matches the model-written minutes table below it.
+    currentLabel: formatMonthLabel(cycle.periodStart, cycle.label),
+    previousLabel: prev ? formatMonthLabel(prev.periodStart, prev.label) : null,
     rows,
   };
+}
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * Turn a cycle's `period_start` (ISO 'YYYY-MM-DD') into a full "Month
+ * YYYY" label. Falls back to the stored cycle label for custom/non-month
+ * cycles or when the date is missing.
+ */
+function formatMonthLabel(periodStart: string | null, fallback: string): string {
+  if (periodStart) {
+    const m = /^(\d{4})-(\d{2})/.exec(periodStart);
+    if (m) {
+      const monthIdx = Number(m[2]) - 1;
+      if (monthIdx >= 0 && monthIdx < 12) {
+        return `${MONTH_NAMES[monthIdx]} ${m[1]}`;
+      }
+    }
+  }
+  return fallback;
 }

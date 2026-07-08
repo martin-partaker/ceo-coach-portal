@@ -360,15 +360,21 @@ function MomentumTable({ momentum }: { momentum: CycleMomentum }) {
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr className="border-b border-border">
-            <th className="py-1.5 pr-3 text-left font-semibold">
+            <th className="py-1.5 pr-3 text-left align-bottom font-semibold">
               Weekly check-in
             </th>
-            <th className="py-1.5 pr-3 text-left font-semibold">
-              {momentum.currentLabel}
+            <th className="py-1.5 pr-3 text-left align-bottom font-semibold">
+              <div>{momentum.currentLabel}</div>
+              <div className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                This month
+              </div>
             </th>
             {hasPrev && (
-              <th className="py-1.5 text-left font-semibold text-muted-foreground">
-                {momentum.previousLabel}
+              <th className="py-1.5 text-left align-bottom font-semibold text-muted-foreground">
+                <div>{momentum.previousLabel}</div>
+                <div className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                  Previous month
+                </div>
               </th>
             )}
           </tr>

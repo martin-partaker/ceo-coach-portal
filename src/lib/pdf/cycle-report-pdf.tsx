@@ -269,9 +269,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
   },
+  momentumHeaderCell: {
+    flex: 1,
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+  },
   momentumHeaderText: {
     fontFamily: 'Helvetica-Bold',
     fontSize: 10,
+  },
+  momentumHeaderCaption: {
+    fontSize: 6.5,
+    color: '#777',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    marginTop: 1,
   },
   momentumDot: {
     width: 7,
@@ -601,14 +613,16 @@ function MomentumTable({
         <View style={styles.momentumCellLabel}>
           <Text style={styles.momentumHeaderText}>Weekly check-in</Text>
         </View>
-        <View style={styles.momentumCell}>
+        <View style={styles.momentumHeaderCell}>
           <Text style={styles.momentumHeaderText}>{momentum.currentLabel}</Text>
+          <Text style={styles.momentumHeaderCaption}>This month</Text>
         </View>
         {hasPrev && (
-          <View style={styles.momentumCell}>
+          <View style={styles.momentumHeaderCell}>
             <Text style={styles.momentumHeaderText}>
               {momentum.previousLabel}
             </Text>
+            <Text style={styles.momentumHeaderCaption}>Previous month</Text>
           </View>
         )}
       </View>

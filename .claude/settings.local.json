@@ -69,7 +69,28 @@
       "Bash(node *)",
       "Bash(xargs -I{} basename {})",
       "Bash(python3 *)",
-      "Bash(grep -nB1 -A2 \"sourceRawInputId\\\\|raw_input_ceos\" src/db/schema.ts)"
+      "Bash(grep -nB1 -A2 \"sourceRawInputId\\\\|raw_input_ceos\" src/db/schema.ts)",
+      "mcp__Neon__describe_table_schema",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Bash(git pull *)",
+      "Bash(git merge *)",
+      "Bash(break)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} in %{time_total}s\\\\n\" -L http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:3000/admin/ceos)",
+      "Bash(pkill -f \"next-server\")",
+      "Bash(lsof -ti:3000)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" -L http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"signin HTTP %{http_code}\\\\n\" -L http://localhost:3000/)",
+      "Bash(xargs kill -9)",
+      "Bash(echo \"port 3000: $\\(lsof -ti:3000 || echo free\\)\")",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git *)",
+      "Bash(grep -n \"^    members,\\\\|    members,$\\\\|    coachName,\" src/lib/prompts/v2/context.ts)"
     ]
   }
 }

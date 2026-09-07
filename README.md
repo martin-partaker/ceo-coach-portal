@@ -1,4 +1,4 @@
-# ceo-coach-portal
+# ceo-coach-portal <!-- staging -->
 
 > Scaffolded with [Claude Code Mastery Starter Kit](https://github.com/TheDecipherist/claude-code-mastery-project-starter-kit) (clean mode)
 

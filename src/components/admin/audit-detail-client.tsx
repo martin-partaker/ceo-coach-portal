@@ -4,9 +4,13 @@ import Link from 'next/link';
 import { ArrowLeft, Loader2, AlertTriangle, Info } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { ConfidenceBadge, formatClock } from './audit-confidence';
+import {
+  ConfidenceBadge,
+  Pill,
+  VERDICT_TONE,
+  formatClock,
+} from './audit-confidence';
 
 const FAMILY_LABEL: Record<string, { title: string; blurb: string }> = {
   A: {
@@ -57,9 +61,9 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
     return (
       <div className="space-y-4">
         <BackLink />
-        <Card className="border-amber-200 bg-amber-50 p-4">
-          <p className="flex gap-2 text-sm text-amber-900">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <Card className="border-l-4 border-l-amber-500 bg-amber-500/5 p-4">
+          <p className="flex gap-2 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
             <span>{data.reason}</span>
           </p>
         </Card>
@@ -122,9 +126,9 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
             {/* The distinction this whole section exists to protect: a family
                 with nothing in it is only good news if it was looked at. */}
             {!examined ? (
-              <Card className="border-amber-200 bg-amber-50 p-4">
-                <p className="flex gap-2 text-sm text-amber-900">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <Card className="border-l-4 border-l-amber-500 bg-amber-500/5 p-4">
+                <p className="flex gap-2 text-sm">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                   <span>
                     <strong>Not examined.</strong> This family was not run for
                     this session, so an empty list here means nothing was
@@ -176,16 +180,14 @@ type FindingShape = {
 };
 
 function Finding({ f }: { f: FindingShape }) {
+  // Verdict lives on the left edge, so the card keeps the app's own surface
+  // and the text stays the most legible thing in it.
   const tone = f.notAssessed
-    ? 'border-zinc-300 bg-zinc-50'
-    : f.verdict === 'concern'
-      ? 'border-rose-200 bg-rose-50/60'
-      : f.verdict === 'review'
-        ? 'border-amber-200 bg-amber-50/50'
-        : 'border-emerald-200 bg-emerald-50/40';
+    ? VERDICT_TONE.notAssessed
+    : (VERDICT_TONE[f.verdict] ?? VERDICT_TONE.review);
 
   return (
-    <Card className={cn('p-4', tone)}>
+    <Card className={cn('border-l-4 p-4', tone.edge)}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="font-medium">
           {f.step ? (
@@ -193,21 +195,7 @@ function Finding({ f }: { f: FindingShape }) {
           ) : null}
           {f.name}
         </p>
-        <div className="flex items-center gap-2">
-          {f.notAssessed ? (
-            <Badge variant="outline" className="bg-white">
-              not assessed
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="bg-white">
-              {f.verdict === 'concern'
-                ? 'to raise'
-                : f.verdict === 'review'
-                  ? 'to review'
-                  : 'clear'}
-            </Badge>
-          )}
-        </div>
+        <Pill className={tone.pill}>{tone.label}</Pill>
       </div>
 
       <p className="mt-2 text-sm">{f.detail}</p>
@@ -219,10 +207,10 @@ function Finding({ f }: { f: FindingShape }) {
             return (
               <blockquote
                 key={i}
-                className="border-l-2 border-zinc-300 pl-3 text-sm"
+                className="rounded-sm border-l-2 border-border bg-muted/40 py-2 pr-3 pl-3 text-sm"
               >
                 {clock ? (
-                  <span className="mr-2 font-mono text-xs text-muted-foreground">
+                  <span className="mr-2 font-mono text-xs tabular-nums text-muted-foreground">
                     {clock}
                   </span>
                 ) : null}

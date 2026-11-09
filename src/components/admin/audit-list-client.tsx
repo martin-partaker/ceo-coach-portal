@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { Loader2, Clock, AlertTriangle } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { Card } from '@/components/ui/card';
-import { ConfidenceBadge } from './audit-confidence';
+import { cn } from '@/lib/utils';
+import { ConfidenceBadge, CONFIDENCE_TONE } from './audit-confidence';
 
 export function AuditListClient() {
   const { data, isLoading, error } = trpc.audit.list.useQuery();
@@ -39,7 +40,13 @@ export function AuditListClient() {
         <div className="space-y-2">
           {audited.map((r) => (
             <Link key={r.auditId} href={`/admin/audit/${r.auditId}`}>
-              <Card className="p-4 transition-colors hover:bg-accent/40">
+              <Card
+                className={cn(
+                  'border-l-4 p-4 transition-colors hover:bg-accent/40',
+                  (CONFIDENCE_TONE[r.confidence] ?? CONFIDENCE_TONE.undetermined)
+                    .edge,
+                )}
+              >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium">
@@ -71,8 +78,14 @@ export function AuditListClient() {
                   </div>
                 </div>
 
-                <div className="mt-3 flex flex-wrap gap-4 text-xs">
-                  <span className={r.concernCount > 0 ? 'font-medium' : ''}>
+                <div className="mt-3 flex flex-wrap items-center gap-4 text-xs">
+                  <span
+                    className={cn(
+                      r.concernCount > 0
+                        ? 'font-medium text-rose-700 dark:text-rose-300'
+                        : 'text-muted-foreground',
+                    )}
+                  >
                     {r.concernCount} to raise
                   </span>
                   <span className="text-muted-foreground">
@@ -105,7 +118,10 @@ export function AuditListClient() {
           </p>
           <div className="space-y-2">
             {notAudited.map((r) => (
-              <Card key={r.auditId} className="p-4">
+              <Card
+                key={r.auditId}
+                className="border-l-4 border-l-zinc-400 p-4 dark:border-l-zinc-500"
+              >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium">
@@ -127,7 +143,7 @@ export function AuditListClient() {
                   <ConfidenceBadge value={r.confidence} />
                 </div>
                 <p className="mt-3 flex gap-2 text-xs text-muted-foreground">
-                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
                   <span>{r.confidenceReason}</span>
                 </p>
               </Card>

@@ -66,3 +66,7 @@ dev-docs/
 claude-design/
 
 feedback-round-1/
+/.swc
+
+# database pglite locale, generato da pnpm dev
+/.pglite-data/

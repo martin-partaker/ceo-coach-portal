@@ -10,6 +10,7 @@ import {
   Settings,
   Plug2,
   Database,
+  ClipboardCheck,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { trpc } from '@/lib/trpc/client';
@@ -23,6 +24,7 @@ const adminItems = [
   { href: '/admin/ceos', label: 'Dashboard', icon: Users },
   { href: '/admin/teams', label: 'Teams', icon: UsersRound },
   { href: '/admin/data', label: 'Data', icon: Database, showPendingBadge: true },
+  { href: '/admin/audit', label: 'Session review', icon: ClipboardCheck },
   { href: '/admin/integrations', label: 'Integrations', icon: Plug2 },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];

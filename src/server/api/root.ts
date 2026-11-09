@@ -9,6 +9,7 @@ import { adminRouter } from './routers/admin';
 import { inboxRouter } from './routers/inbox';
 import { rosterRouter } from './routers/roster';
 import { teamsRouter } from './routers/teams';
+import { auditRouter } from './routers/audit';
 
 export const appRouter = createTRPCRouter({
   coaches: coachesRouter,
@@ -21,6 +22,7 @@ export const appRouter = createTRPCRouter({
   inbox: inboxRouter,
   roster: rosterRouter,
   teams: teamsRouter,
+  audit: auditRouter,
 });
 
 export type AppRouter = typeof appRouter;

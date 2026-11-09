@@ -175,6 +175,11 @@ export const transcripts = pgTable('transcripts', {
   duration: integer('duration'), // minutes
   recordedAt: timestamp('recorded_at'),
   sourceRawInputId: uuid('source_raw_input_id'),
+  /** Start second of each line of `content`, comma separated. The VTT cue
+   *  lines are stripped before persistence, so without this there is no way
+   *  to jump from a quote to the moment in the recording. Null where the
+   *  timing was never captured or could not be recovered. */
+  cueTimes: text('cue_times'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -593,11 +598,66 @@ export type NewCoachingTeam = typeof coachingTeams.$inferInsert;
 export type CeoKpiDefinition = typeof ceoKpiDefinitions.$inferSelect;
 export type CycleKpiValue = typeof cycleKpiValues.$inferSelect;
 export type KpiKind = 'number' | 'currency' | 'percent' | 'count' | 'text';
+/**
+ * Stage: the quality audit of a coaching session.
+ *
+ * Deliberately a reader-only table in this app. The evaluators are Python,
+ * have their own test suite, and keep running offline; they emit the shape
+ * in `src/lib/audit/contract.ts` and this table stores it. Nothing here was
+ * ported, so there is no second implementation to drift.
+ *
+ * Modelled on `reportCritiques`: the facts a list screen needs are
+ * denormalised into columns, the rest stays in one JSON blob.
+ *
+ * History is kept — several rows per transcript, newest by `generatedAt` —
+ * so a verdict can be traced to the criteria version that produced it.
+ */
+export const transcriptAudits = pgTable(
+  'transcript_audits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    transcriptId: uuid('transcript_id')
+      .notNull()
+      .references(() => transcripts.id, { onDelete: 'cascade' }),
+    /** Matches AUDIT_CONTRACT_VERSION. A mismatch must fail loudly, not render. */
+    contractVersion: integer('contract_version').notNull(),
+    criteriaVersion: text('criteria_version').notNull(),
+    sessionNo: integer('session_no'),
+    /** `confirmed` | `probable` | `undetermined`. Never hidden in the UI:
+     *  Lauren opens recordings by hand precisely because she cannot tell. */
+    sessionConfidence: text('session_confidence').notNull(),
+    sessionConfidenceReason: text('session_confidence_reason').notNull(),
+    /** SHA256 of `transcripts.content` when this ran. Every quote in
+     *  `resultJson` is a line index into that exact text, so if the stored
+     *  content no longer hashes to this the audit is stale and must be
+     *  refused rather than pointed at lines that have moved. */
+    contentSha256: text('content_sha256').notNull(),
+    /** An `AuditResult`. Validate with `isAuditResult` at the boundary. */
+    resultJson: jsonb('result_json').notNull(),
+    concernCount: integer('concern_count').notNull().default(0),
+    reviewCount: integer('review_count').notNull().default(0),
+    /** Criteria that could not be assessed because their input was absent.
+     *  Distinct from zero findings, and must never read as a pass — the
+     *  Family D bug is exactly this distinction collapsing. */
+    notAssessedCount: integer('not_assessed_count').notNull().default(0),
+    generatedAt: timestamp('generated_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    byTranscript: index('transcript_audits_transcript_idx').on(t.transcriptId),
+    latest: index('transcript_audits_latest_idx').on(
+      t.transcriptId,
+      t.generatedAt,
+    ),
+  }),
+);
+
 export type CycleFacts = typeof cycleFacts.$inferSelect;
 export type ReportCritique = typeof reportCritiques.$inferSelect;
 export type ReportPin = typeof reportPins.$inferSelect;
 export type ReportRefinement = typeof reportRefinements.$inferSelect;
 export type ReportGenerationJob = typeof reportGenerationJobs.$inferSelect;
+export type TranscriptAudit = typeof transcriptAudits.$inferSelect;
+export type NewTranscriptAudit = typeof transcriptAudits.$inferInsert;
 export type ReportGenerationJobStatus =
   | 'pending'
   | 'extracting_facts'

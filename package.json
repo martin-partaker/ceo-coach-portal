@@ -24,7 +24,10 @@
     "inspect:state": "tsx --env-file=.env scripts/inspect-state.ts",
     "reset:ingestion": "tsx --env-file=.env scripts/reset-ingestion.ts",
     "activate:forms": "tsx --env-file=.env scripts/activate-forms.ts",
-    "inspect:projection": "tsx --env-file=.env scripts/inspect-projection.ts"
+    "inspect:projection": "tsx --env-file=.env scripts/inspect-projection.ts",
+    "backfill:vtt-cues": "tsx --env-file=.env scripts/backfill-vtt-cues.ts",
+    "audit:export": "tsx scripts/export-audit-input.ts",
+    "audit:import": "tsx scripts/import-audits.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

@@ -128,8 +128,12 @@ async function main() {
   }
 
   const counts = (a: AuditResult) => ({
-    concern: a.findings.filter((f) => f.verdict === 'concern').length,
-    review: a.findings.filter((f) => f.verdict === 'review').length,
+    // A finding that could not be assessed still carries a verdict in the
+    // JSON, and it belongs in ONE count. Counting it here as well made the
+    // list say "15 to review · 2 not assessed" for a session whose detail
+    // page, which excludes them, said 13.
+    concern: a.findings.filter((f) => f.verdict === 'concern' && !f.notAssessed).length,
+    review: a.findings.filter((f) => f.verdict === 'review' && !f.notAssessed).length,
     notAssessed: a.findings.filter((f) => f.notAssessed).length,
   });
 

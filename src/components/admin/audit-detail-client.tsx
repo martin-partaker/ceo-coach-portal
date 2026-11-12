@@ -230,7 +230,8 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
                 ? 'The time beside each quote opens the transcript at that passage. '
                 : 'Each quote opens the transcript at that passage. '}
               {transcript.recordingUrl
-                ? 'Zoom cannot open a recording at a given minute: the link starts it from the beginning.'
+                ? 'Zoom cannot open a recording at a given minute: the link starts it from the ' +
+                  'beginning, and Zoom may ask for the recording’s passcode, which is not kept here.'
                 : 'No Zoom link is stored for this recording.'}
             </p>
           ) : null}

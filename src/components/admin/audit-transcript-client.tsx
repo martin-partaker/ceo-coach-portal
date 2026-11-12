@@ -127,7 +127,7 @@ export function AuditTranscriptClient({ auditId }: { auditId: string }) {
           {data.hasCueTimes
             ? 'The time beside each line is its moment in the recording. Zoom cannot open a ' +
               'recording at a given minute, so the link starts it from the beginning: move to ' +
-              'the time shown here. '
+              'the time shown here. Zoom may ask for the recording’s passcode, which is not kept here. '
             : 'No cue times were captured for this recording, so lines are numbered instead of timed. '}
           Shaded lines are the ones the audit quotes.
         </p>

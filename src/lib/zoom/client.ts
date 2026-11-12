@@ -1,3 +1,4 @@
+import { parseVtt } from './vtt';
 
 const ZOOM_ACCOUNT_ID = process.env.ZOOM_ACCOUNT_ID!;
 const ZOOM_CLIENT_ID = process.env.ZOOM_CLIENT_ID!;
@@ -48,8 +49,20 @@ async function zoomFetch(path: string, params?: Record<string, string>): Promise
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${token}` },
   });
+  if (res.status !== 401) return res;
 
-  return res;
+  // A Server-to-Server OAuth app has one live token at a time: when any
+  // other process asks Zoom for a token with these credentials, ours stops
+  // working before it expires (Zoom staff, dev forum, 2022 and 2023 — "not
+  // properly documented"). The cache above does not know that, so without
+  // this every call from a warm instance would keep failing until the dead
+  // token's own expiry, up to an hour. Drop it, ask again, retry once.
+  // Once only: two processes renewing against each other must not loop.
+  cachedToken = null;
+  const fresh = await getAccessToken();
+  return fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${fresh}` },
+  });
 }
 
 export interface ZoomRecording {
@@ -122,7 +135,7 @@ export async function listRecordings(userEmail: string, fromDate?: string, toDat
  */
 export async function fetchTranscriptByUuid(
   meetingUuid: string
-): Promise<{ transcript: string; meetingTopic: string } | null> {
+): Promise<{ transcript: string; cueTimes: string | null; meetingTopic: string } | null> {
   const encoded = encodeMeetingUuid(meetingUuid);
   const res = await zoomFetch(`/meetings/${encoded}/recordings`);
 
@@ -142,15 +155,24 @@ export async function fetchTranscriptByUuid(
   if (!transcriptFile) return null;
 
   const token = await getAccessToken();
-  const downloadRes = await fetch(`${transcriptFile.download_url}?access_token=${token}`);
+  let downloadRes = await fetch(`${transcriptFile.download_url}?access_token=${token}`);
+  if (downloadRes.status === 401) {
+    // Same single retry as zoomFetch, for the same reason.
+    cachedToken = null;
+    const fresh = await getAccessToken();
+    downloadRes = await fetch(`${transcriptFile.download_url}?access_token=${fresh}`);
+  }
 
   if (!downloadRes.ok) {
     throw new Error(`Transcript download failed (${downloadRes.status})`);
   }
 
-  const rawTranscript = await downloadRes.text();
+  // `transcript` is what it always was. `cueTimes` is new: the start second
+  // of each of its lines, which the old cleaning step used to discard.
+  const parsed = parseVtt(await downloadRes.text());
   return {
-    transcript: cleanVttTranscript(rawTranscript),
+    transcript: parsed.content,
+    cueTimes: parsed.cueTimes,
     meetingTopic: data.topic ?? 'Untitled meeting',
   };
 }
@@ -247,20 +269,4 @@ export async function fetchParticipants(meetingUuid: string): Promise<ZoomPartic
   }
 
   return out;
-}
-
-function cleanVttTranscript(vtt: string): string {
-  return vtt
-    .split('\n')
-    .filter((line) => {
-      // Remove VTT headers, timestamps, and blank lines
-      if (line.startsWith('WEBVTT')) return false;
-      if (line.startsWith('NOTE')) return false;
-      if (/^\d+$/.test(line.trim())) return false;
-      if (/^\d{2}:\d{2}:\d{2}/.test(line.trim())) return false;
-      if (line.trim() === '') return false;
-      return true;
-    })
-    .join('\n')
-    .trim();
 }

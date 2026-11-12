@@ -49,6 +49,9 @@ export async function ingestZoomMeeting(args: {
   }
 
   let transcriptText: string | null = args.prefetched?.transcriptText ?? null;
+  // Start second of each transcript line. Only a live fetch has it: the
+  // prefetched path hands over text that was already stripped of its cues.
+  let cueTimes: string | null = null;
   if (transcriptText == null) {
     // Fetch by UUID, not numeric ID. Recurring meetings (Personal Meeting
     // Rooms, scheduled series) share one numeric ID across every occurrence;
@@ -56,6 +59,7 @@ export async function ingestZoomMeeting(args: {
     // would copy that one transcript onto every UUID.
     const fetched = await fetchTranscriptByUuid(meeting.uuid);
     transcriptText = fetched?.transcript ?? null;
+    cueTimes = fetched?.cueTimes ?? null;
   }
   if (!transcriptText) {
     await insertPendingNoTranscript({ coachId, meeting, occurredAt });
@@ -125,6 +129,10 @@ export async function ingestZoomMeeting(args: {
     },
     participants,
     classification,
+    // Kept on the raw input so the timings survive triage: the transcript
+    // row is only created once an operator confirms the CEO, possibly days
+    // later, and the projector reads them from here.
+    cueTimes,
   };
 
   const [inserted] = await db

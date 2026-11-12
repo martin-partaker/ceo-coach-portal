@@ -1,4 +1,4 @@
-import { eq, and, notInArray } from 'drizzle-orm';
+import { eq, and, notInArray, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { transcripts, rawInputCeos } from '@/db/schema';
 import { ensureCycleForCeoAndDate } from '@/lib/ingestion/match-cycle';
@@ -10,6 +10,21 @@ interface TranscriptPayload {
     topic?: string;
     duration?: number;
   };
+  cueTimes?: unknown;
+}
+
+/**
+ * The cue times this raw input carries, or null when it has none usable.
+ *
+ * Refuses a value that does not line up one-to-one with the text: every
+ * consumer indexes cue times by line number, so a misaligned list is worse
+ * than none.
+ */
+function alignedCueTimes(payload: TranscriptPayload, text: string): string | null {
+  const raw = payload.cueTimes;
+  if (typeof raw !== 'string' || raw === '') return null;
+  if (raw.split(',').length !== text.split('\n').length) return null;
+  return raw;
 }
 
 interface ClassificationLite {
@@ -42,6 +57,7 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
   const duration = payload.meeting?.duration ?? null;
   const zoomMeetingId =
     payload.meeting?.id != null ? String(payload.meeting.id) : null;
+  const cueTimes = alignedCueTimes(payload, rawInput.textContent);
 
   // Source of truth for membership: join table ∪ primary ceoId.
   const linkRows = await db
@@ -91,6 +107,15 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
           duration,
           recordedAt: rawInput.occurredAt,
           authoredByCeoId,
+          // Raw inputs ingested before cue capture existed carry no timings,
+          // and 146 of their transcripts had them recovered afterwards by
+          // `scripts/backfill-vtt-cues.ts`. Re-projecting one of those (a
+          // re-triage, a cycle move) must not wipe what was recovered — but
+          // only while the text is still the text those timings were
+          // measured on. If the content is changing, they go.
+          cueTimes:
+            cueTimes ??
+            sql<string | null>`CASE WHEN ${transcripts.content} = ${rawInput.textContent} THEN ${transcripts.cueTimes} ELSE NULL END`,
         })
         .where(eq(transcripts.id, existingId));
     } else {
@@ -103,6 +128,7 @@ export const projectTranscript: Projector = async ({ rawInput }) => {
         recordedAt: rawInput.occurredAt,
         sourceRawInputId: rawInput.id,
         authoredByCeoId,
+        cueTimes,
       });
     }
   }

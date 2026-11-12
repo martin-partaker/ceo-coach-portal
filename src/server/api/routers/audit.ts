@@ -51,7 +51,15 @@ export const auditRouter = createTRPCRouter({
         recordedAt: transcripts.recordedAt,
         hasCueTimes: sql<boolean>`${transcripts.cueTimes} IS NOT NULL`,
         ceoName: ceos.name,
-        coachName: coaches.name,
+        /**
+         * Who coached THIS session, read from the transcript's own speaker
+         * label — not the CEO's current coach. CEOs change coach mid-programme
+         * (one audited Session 1 was run by a coach the CEO has since left),
+         * and a screen that judges a session must not put it under the name
+         * of someone who was not in it. Falls back to the current coach only
+         * when the audit carries no label.
+         */
+        coachName: sql<string | null>`coalesce(${transcriptAudits.resultJson} ->> 'coachLabel', ${coaches.name})`,
       })
       .from(transcriptAudits)
       .innerJoin(transcripts, eq(transcripts.id, transcriptAudits.transcriptId))

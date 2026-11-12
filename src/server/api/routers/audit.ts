@@ -1,7 +1,9 @@
 import { z } from 'zod';
-import { desc, eq, sql } from 'drizzle-orm';
+import { TRPCError } from '@trpc/server';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
+  auditFeedback,
   transcriptAudits,
   transcripts,
   rawInputs,
@@ -11,15 +13,25 @@ import {
 } from '@/db/schema';
 import {
   AUDIT_CONTRACT_VERSION,
+  FEEDBACK_REASONS,
+  FEEDBACK_VERDICTS,
+  findingStepKey,
   isAuditResult,
   resolveEvidence,
   type AuditResult,
 } from '@/lib/audit/contract';
 
+const feedbackTarget = z.object({
+  auditId: z.string().uuid(),
+  findingId: z.string().min(1).max(120),
+  findingStep: z.string().max(60).nullable(),
+});
+
 /**
- * Session quality audits. Read-only in this version: the verdicts are produced
- * offline by the Python evaluators and loaded by `scripts/import-audits.ts`.
- * Agree / Disagree capture is deliberately not here yet.
+ * Session quality audits. The verdicts are produced offline by the Python
+ * evaluators and loaded by `scripts/import-audits.ts`; nothing here changes
+ * one. What a reviewer thinks of a finding is written beside it, in
+ * `audit_feedback`, by `setFeedback`.
  *
  * CEO attribution goes through `rawInputCeos`, never
  * `transcripts.authoredByCeoId` — that column is NULL on 40 of 257 rows and a
@@ -47,6 +59,12 @@ export const auditRouter = createTRPCRouter({
               ${transcriptAudits.resultJson} -> 'familiesExamined')),
             '{}'
           )`,
+        /** How many findings of THIS audit the signed-in reviewer has answered. */
+        answeredCount: sql<number>`(
+          SELECT count(*)::int FROM ${auditFeedback} af
+          WHERE af.audit_id = ${transcriptAudits.id}
+            AND af.coach_id = ${ctx.coach.id}
+        )`,
         title: transcripts.title,
         recordedAt: transcripts.recordedAt,
         hasCueTimes: sql<boolean>`${transcripts.cueTimes} IS NOT NULL`,
@@ -154,12 +172,45 @@ export const auditRouter = createTRPCRouter({
       }
 
       const typed: AuditResult = result;
-      const findings = typed.findings.map((f) => ({
-        ...f,
-        quotes: f.evidence
-          .map((e) => resolveEvidence(row.content, row.cueTimes, e))
-          .filter((q): q is { text: string; startSec: number | null } => q !== null),
-      }));
+
+      // Answers given on THIS audit only. An answer to an earlier audit of
+      // the same session was about that version's verdict and is not carried
+      // over to this one.
+      const answers = await ctx.db
+        .select({
+          findingId: auditFeedback.findingId,
+          findingStep: auditFeedback.findingStep,
+          verdict: auditFeedback.verdict,
+          reason: auditFeedback.reason,
+          note: auditFeedback.note,
+          coachId: auditFeedback.coachId,
+          coachName: coaches.name,
+          updatedAt: auditFeedback.updatedAt,
+        })
+        .from(auditFeedback)
+        .innerJoin(coaches, eq(coaches.id, auditFeedback.coachId))
+        .where(eq(auditFeedback.auditId, input.auditId));
+      const answersFor = (id: string, step: string | null) =>
+        answers.filter(
+          (a) => a.findingId === id && a.findingStep === findingStepKey(step),
+        );
+
+      const findings = typed.findings.map((f) => {
+        const all = answersFor(f.id, f.step).map(({ coachId, ...a }) => ({
+          ...a,
+          mine: coachId === ctx.coach.id,
+        }));
+        return {
+          ...f,
+          quotes: f.evidence
+            .map((e) => resolveEvidence(row.content, row.cueTimes, e))
+            .filter((q): q is { text: string; startSec: number | null } => q !== null),
+          feedback: {
+            mine: all.find((a) => a.mine) ?? null,
+            others: all.filter((a) => !a.mine),
+          },
+        };
+      });
 
       return {
         state: 'ok' as const,
@@ -185,4 +236,82 @@ export const auditRouter = createTRPCRouter({
         },
       };
     }),
+
+  /**
+   * Record what the signed-in reviewer thinks of one finding. One answer per
+   * reviewer per finding per audit; answering again replaces it.
+   *
+   * The finding has to exist in the audit named. Without that check a stale
+   * page, or a finding id from another criteria version, would store an
+   * answer to a question this audit never asked.
+   */
+  setFeedback: adminProcedure
+    .input(
+      feedbackTarget.extend({
+        verdict: z.enum(FEEDBACK_VERDICTS),
+        reason: z.enum(FEEDBACK_REASONS).nullable().optional(),
+        note: z.string().max(2000).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [audit] = await ctx.db
+        .select({ resultJson: transcriptAudits.resultJson })
+        .from(transcriptAudits)
+        .where(eq(transcriptAudits.id, input.auditId))
+        .limit(1);
+      if (!audit || !isAuditResult(audit.resultJson)) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Audit not found.' });
+      }
+      const step = findingStepKey(input.findingStep);
+      const exists = audit.resultJson.findings.some(
+        (f) => f.id === input.findingId && findingStepKey(f.step) === step,
+      );
+      if (!exists) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'That finding is not part of this audit. Reload the page.',
+        });
+      }
+
+      // A reason explains a disagreement; it means nothing beside "agree".
+      const reason = input.verdict === 'disagree' ? (input.reason ?? null) : null;
+      const note = input.note?.trim() ? input.note.trim() : null;
+
+      await ctx.db
+        .insert(auditFeedback)
+        .values({
+          auditId: input.auditId,
+          findingId: input.findingId,
+          findingStep: step,
+          verdict: input.verdict,
+          reason,
+          note,
+          coachId: ctx.coach.id,
+        })
+        .onConflictDoUpdate({
+          target: [
+            auditFeedback.auditId,
+            auditFeedback.findingId,
+            auditFeedback.findingStep,
+            auditFeedback.coachId,
+          ],
+          set: { verdict: input.verdict, reason, note, updatedAt: new Date() },
+        });
+      return { ok: true as const };
+    }),
+
+  /** Take back the signed-in reviewer's own answer to one finding. */
+  clearFeedback: adminProcedure.input(feedbackTarget).mutation(async ({ ctx, input }) => {
+    await ctx.db
+      .delete(auditFeedback)
+      .where(
+        and(
+          eq(auditFeedback.auditId, input.auditId),
+          eq(auditFeedback.findingId, input.findingId),
+          eq(auditFeedback.findingStep, findingStepKey(input.findingStep)),
+          eq(auditFeedback.coachId, ctx.coach.id),
+        ),
+      );
+    return { ok: true as const };
+  }),
 });

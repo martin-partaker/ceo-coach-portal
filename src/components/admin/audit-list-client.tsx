@@ -98,6 +98,12 @@ export function AuditListClient() {
                       {r.notAssessedCount} not assessed
                     </span>
                   ) : null}
+                  {/* The reviewer's own progress through this session. */}
+                  {r.answeredCount > 0 ? (
+                    <span className="ml-auto text-emerald-700 dark:text-emerald-300">
+                      {r.answeredCount} answered by you
+                    </span>
+                  ) : null}
                 </div>
               </Card>
             </Link>

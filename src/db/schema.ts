@@ -651,6 +651,54 @@ export const transcriptAudits = pgTable(
   }),
 );
 
+/**
+ * What a reviewer said about one finding of one audit.
+ *
+ * Keyed to the AUDIT, not the transcript. Audits are versioned and every
+ * criteria change regenerates them, so an answer has to stay attached to the
+ * exact criteria that produced the finding it is about: "disagree" with a
+ * verdict under one version says nothing about the verdict under the next.
+ *
+ * `findingStep` is part of the key because one criterion can appear twice in
+ * an audit under different steps (`landed.none` on 3.4 and on 4). It is ''
+ * rather than NULL when the finding has no step, so the unique index holds.
+ *
+ * `reason` only accompanies a disagreement, and exists to tell two different
+ * jobs apart: the criterion is wrong, or the criterion is right and the quote
+ * is wrong. `wrong_severity` is how weightings arrive as data.
+ */
+export const auditFeedback = pgTable(
+  'audit_feedback',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    auditId: uuid('audit_id')
+      .notNull()
+      .references(() => transcriptAudits.id, { onDelete: 'cascade' }),
+    findingId: text('finding_id').notNull(),
+    findingStep: text('finding_step').notNull().default(''),
+    /** `agree` | `disagree` | `unsure`. */
+    verdict: text('verdict').notNull(),
+    /** `false_finding` | `wrong_quote` | `not_applicable` | `wrong_severity`. */
+    reason: text('reason'),
+    note: text('note'),
+    /** Who answered: the real signed-in person, never an impersonated coach. */
+    coachId: uuid('coach_id')
+      .notNull()
+      .references(() => coaches.id),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    oneAnswer: uniqueIndex('audit_feedback_one_answer_idx').on(
+      t.auditId,
+      t.findingId,
+      t.findingStep,
+      t.coachId,
+    ),
+    byAudit: index('audit_feedback_audit_idx').on(t.auditId),
+  }),
+);
+
 export type CycleFacts = typeof cycleFacts.$inferSelect;
 export type ReportCritique = typeof reportCritiques.$inferSelect;
 export type ReportPin = typeof reportPins.$inferSelect;
@@ -658,6 +706,7 @@ export type ReportRefinement = typeof reportRefinements.$inferSelect;
 export type ReportGenerationJob = typeof reportGenerationJobs.$inferSelect;
 export type TranscriptAudit = typeof transcriptAudits.$inferSelect;
 export type NewTranscriptAudit = typeof transcriptAudits.$inferInsert;
+export type AuditFeedback = typeof auditFeedback.$inferSelect;
 export type ReportGenerationJobStatus =
   | 'pending'
   | 'extracting_facts'

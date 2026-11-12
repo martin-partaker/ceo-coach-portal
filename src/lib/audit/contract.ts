@@ -197,3 +197,28 @@ export function isAuditResult(v: unknown): v is AuditResult {
     Array.isArray(o.familiesExamined)
   );
 }
+
+/**
+ * A reviewer's answer to one finding. Not part of what the evaluators write:
+ * it is stored beside the audit, in `audit_feedback`, keyed to the audit id
+ * so it stays attached to the criteria version it was given under.
+ */
+export const FEEDBACK_VERDICTS = ['agree', 'disagree', 'unsure'] as const;
+export type FeedbackVerdict = (typeof FEEDBACK_VERDICTS)[number];
+
+/**
+ * Why a reviewer disagrees. The four are four different jobs for us:
+ * the criterion fired on something that did not happen; the finding is right
+ * but the passage shown does not prove it; the criterion does not belong on
+ * this session at all; the finding stands but its weight is wrong.
+ */
+export const FEEDBACK_REASONS = [
+  'false_finding',
+  'wrong_quote',
+  'not_applicable',
+  'wrong_severity',
+] as const;
+export type FeedbackReason = (typeof FEEDBACK_REASONS)[number];
+
+/** '' when a finding has no step, matching `audit_feedback.finding_step`. */
+export const findingStepKey = (step: string | null | undefined): string => step ?? '';

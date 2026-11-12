@@ -1,5 +1,6 @@
 'use client';
 
+import { createContext, useContext } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Loader2, AlertTriangle, Info, Check, Minus } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
@@ -11,6 +12,7 @@ import {
   VERDICT_TONE,
   formatClock,
 } from './audit-confidence';
+import { FindingFeedback, type FindingFeedbackData } from './audit-feedback';
 
 /**
  * One audited session.
@@ -62,7 +64,32 @@ type FindingShape = {
   restsOn: string;
   notAssessed: boolean;
   quotes: { text: string; startSec: number | null }[];
+  feedback: FindingFeedbackData;
 };
+
+/** The audit being shown, so a finding four levels down can save against it. */
+const AuditIdContext = createContext<string>('');
+
+/**
+ * Agree / Disagree for one finding. Offered on everything that carries a
+ * verdict, "clear" included — a step marked as covered that the reviewer says
+ * did not happen is the miss we most need to hear about. Not offered on what
+ * was not assessed: there is no verdict there to agree with.
+ */
+function Feedback({ f }: { f: FindingShape }) {
+  const auditId = useContext(AuditIdContext);
+  if (f.notAssessed || !auditId) return null;
+  return (
+    <FindingFeedback
+      // Remount when the stored answer changes, so the note field shows it.
+      key={`${f.feedback.mine?.verdict ?? ''}|${f.feedback.mine?.note ?? ''}`}
+      auditId={auditId}
+      findingId={f.id}
+      findingStep={f.step}
+      feedback={f.feedback}
+    />
+  );
+}
 
 const toneKey = (f: FindingShape) =>
   f.notAssessed ? 'notAssessed' : f.verdict in VERDICT_TONE ? f.verdict : 'review';
@@ -122,145 +149,147 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
   const notAssessed = count((f) => f.notAssessed);
 
   return (
-    <div className="space-y-8">
-      <BackLink />
+    <AuditIdContext.Provider value={auditId}>
+      <div className="space-y-8">
+        <BackLink />
 
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {transcript.title ?? 'Untitled recording'}
-        </h1>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <ConfidenceBadge value={audit.confidence} />
-          {audit.coachLabel ? (
-            <span className="text-sm text-muted-foreground">{audit.coachLabel}</span>
-          ) : null}
-          <span className="text-xs text-muted-foreground">
-            criteria {audit.criteriaVersion}
-          </span>
-        </div>
-        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          {audit.confidenceReason}
-        </p>
-        {audit.coachNote ? (
-          <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
-            <Info className="mt-0.5 h-3 w-3 shrink-0" />
-            <span>{audit.coachNote}</span>
-          </p>
-        ) : null}
-        {examined.size > 0 && !transcript.hasCueTimes ? (
-          <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
-            <Info className="mt-0.5 h-3 w-3 shrink-0" />
-            <span>
-              No cue times were captured for this recording, so quotes below show
-              the words but cannot point at a moment in the call.
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {transcript.title ?? 'Untitled recording'}
+          </h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ConfidenceBadge value={audit.confidence} />
+            {audit.coachLabel ? (
+              <span className="text-sm text-muted-foreground">{audit.coachLabel}</span>
+            ) : null}
+            <span className="text-xs text-muted-foreground">
+              criteria {audit.criteriaVersion}
             </span>
+          </div>
+          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+            {audit.confidenceReason}
           </p>
-        ) : null}
-      </div>
-
-      {/* A recording we could not place is not judged against any outline.
-          It must not render as an empty — and therefore clean — review. */}
-      {examined.size === 0 ? (
-        <Notice>
-          <strong>Not audited.</strong> We could not establish which session this
-          recording is, so there is no outline to judge it against. Nothing below
-          means nothing was looked at — not that nothing was wrong.
-        </Notice>
-      ) : (
-        <>
-          <div className="space-y-3">
-            <p className="text-sm">
-              <span className={toRaise ? 'font-medium text-rose-700 dark:text-rose-300' : ''}>
-                {toRaise} to raise
-              </span>
-              <span className="text-muted-foreground">
-                {' · '}
-                {toReview} to review{' · '}
-                {notAssessed} not assessed
+          {audit.coachNote ? (
+            <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>{audit.coachNote}</span>
+            </p>
+          ) : null}
+          {examined.size > 0 && !transcript.hasCueTimes ? (
+            <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                No cue times were captured for this recording, so quotes below show
+                the words but cannot point at a moment in the call.
               </span>
             </p>
-            {/* The outline at a glance: scan, then jump. */}
-            <nav className="flex flex-wrap gap-1.5" aria-label="Outline steps">
-              {steps.map((s) => {
-                const worst = worstTone([s, ...under(s.step)]);
-                return (
-                  <a key={s.id} href={`#${anchorOf(s.step)}`}>
-                    <Pill className={cn(worst.pill, 'hover:opacity-80')}>
-                      {s.step} {s.name}
-                    </Pill>
-                  </a>
-                );
-              })}
-            </nav>
-          </div>
+          ) : null}
+        </div>
 
-          <section className="space-y-3">
-            <SectionHead
-              title="The session, step by step"
-              blurb={
-                'The outline in its own numbering and order, so it lines up with the ' +
-                'script the coaches work from. A step that is missing or out of order ' +
-                'is an observation, never a finding on its own.'
-              }
-            />
-            {steps.map((s) => (
-              <StepBlock key={s.id} step={s} findings={under(s.step)} />
-            ))}
-          </section>
+        {/* A recording we could not place is not judged against any outline.
+            It must not render as an empty — and therefore clean — review. */}
+        {examined.size === 0 ? (
+          <Notice>
+            <strong>Not audited.</strong> We could not establish which session this
+            recording is, so there is no outline to judge it against. Nothing below
+            means nothing was looked at — not that nothing was wrong.
+          </Notice>
+        ) : (
+          <>
+            <div className="space-y-3">
+              <p className="text-sm">
+                <span className={toRaise ? 'font-medium text-rose-700 dark:text-rose-300' : ''}>
+                  {toRaise} to raise
+                </span>
+                <span className="text-muted-foreground">
+                  {' · '}
+                  {toReview} to review{' · '}
+                  {notAssessed} not assessed
+                </span>
+              </p>
+              {/* The outline at a glance: scan, then jump. */}
+              <nav className="flex flex-wrap gap-1.5" aria-label="Outline steps">
+                {steps.map((s) => {
+                  const worst = worstTone([s, ...under(s.step)]);
+                  return (
+                    <a key={s.id} href={`#${anchorOf(s.step)}`}>
+                      <Pill className={cn(worst.pill, 'hover:opacity-80')}>
+                        {s.step} {s.name}
+                      </Pill>
+                    </a>
+                  );
+                })}
+              </nav>
+            </div>
 
-          {loose.some((f) => f.family === 'B') ? (
             <section className="space-y-3">
               <SectionHead
-                title="Across the session"
-                blurb="Findings about the session as a whole rather than one step — how the time was spent."
+                title="The session, step by step"
+                blurb={
+                  'The outline in its own numbering and order, so it lines up with the ' +
+                  'script the coaches work from. A step that is missing or out of order ' +
+                  'is an observation, never a finding on its own.'
+                }
               />
-              <div className="space-y-2">
-                {loose
-                  .filter((f) => f.family === 'B')
-                  .map((f) => (
-                    <Finding key={`${f.id}-${f.step ?? ''}`} f={f} />
-                  ))}
-              </div>
+              {steps.map((s) => (
+                <StepBlock key={s.id} step={s} findings={under(s.step)} />
+              ))}
             </section>
-          ) : null}
 
-          {WHOLE_SESSION.map(({ family, title, blurb }) => {
-            const items = loose.filter((f) => f.family === family);
-            return (
-              <section key={family} className="space-y-3">
-                <SectionHead title={title} blurb={blurb} />
-                {!examined.has(family) ? (
-                  <NotExamined />
-                ) : items.length === 0 ? (
-                  <Card className="gap-0 p-4">
-                    <p className="text-sm text-muted-foreground">Examined, nothing raised.</p>
-                  </Card>
-                ) : (
-                  <div className="space-y-2">
-                    {items.map((f) => (
+            {loose.some((f) => f.family === 'B') ? (
+              <section className="space-y-3">
+                <SectionHead
+                  title="Across the session"
+                  blurb="Findings about the session as a whole rather than one step — how the time was spent."
+                />
+                <div className="space-y-2">
+                  {loose
+                    .filter((f) => f.family === 'B')
+                    .map((f) => (
                       <Finding key={`${f.id}-${f.step ?? ''}`} f={f} />
                     ))}
-                  </div>
-                )}
+                </div>
               </section>
-            );
-          })}
+            ) : null}
 
-          <section className="space-y-3">
-            <SectionHead
-              title="Conduct"
-              blurb={
-                'A checklist against Coach Policies. A tick means nothing in the ' +
-                'transcript indicates it — a transcript cannot show what was said ' +
-                'outside the recording. Anything found is shown with the coach’s exact ' +
-                'words, to be read rather than taken on trust.'
-              }
-            />
-            {!examined.has('conduct') ? <NotExamined /> : <ConductChecklist items={conduct} />}
-          </section>
-        </>
-      )}
-    </div>
+            {WHOLE_SESSION.map(({ family, title, blurb }) => {
+              const items = loose.filter((f) => f.family === family);
+              return (
+                <section key={family} className="space-y-3">
+                  <SectionHead title={title} blurb={blurb} />
+                  {!examined.has(family) ? (
+                    <NotExamined />
+                  ) : items.length === 0 ? (
+                    <Card className="gap-0 p-4">
+                      <p className="text-sm text-muted-foreground">Examined, nothing raised.</p>
+                    </Card>
+                  ) : (
+                    <div className="space-y-2">
+                      {items.map((f) => (
+                        <Finding key={`${f.id}-${f.step ?? ''}`} f={f} />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+
+            <section className="space-y-3">
+              <SectionHead
+                title="Conduct"
+                blurb={
+                  'A checklist against Coach Policies. A tick means nothing in the ' +
+                  'transcript indicates it — a transcript cannot show what was said ' +
+                  'outside the recording. Anything found is shown with the coach’s exact ' +
+                  'words, to be read rather than taken on trust.'
+                }
+              />
+              {!examined.has('conduct') ? <NotExamined /> : <ConductChecklist items={conduct} />}
+            </section>
+          </>
+        )}
+      </div>
+    </AuditIdContext.Provider>
   );
 }
 
@@ -355,6 +384,7 @@ function StepBlock({ step, findings }: { step: FindingShape; findings: FindingSh
       <p className="mt-2 text-sm">{step.detail}</p>
       <Quotes quotes={step.quotes} />
       <Provenance f={step} />
+      <Feedback f={step} />
 
       {findings.length > 0 ? (
         <div className="mt-4 space-y-2 border-t border-border pt-4">
@@ -393,6 +423,7 @@ function Finding({ f, nested = false }: { f: FindingShape; nested?: boolean }) {
       <p className="mt-2 text-sm">{f.detail}</p>
       <Quotes quotes={f.quotes} />
       <Provenance f={f} />
+      <Feedback f={f} />
     </Card>
   );
 }
@@ -435,6 +466,7 @@ function ConductChecklist({ items }: { items: FindingShape[] }) {
             <div className="pl-6">
               <Quotes quotes={f.quotes} />
               <Provenance f={f} />
+              <Feedback f={f} />
             </div>
           </div>
         );

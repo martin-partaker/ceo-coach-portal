@@ -85,6 +85,16 @@ export interface AuditFinding {
    * "not assessed" for these and must never fold them into a pass.
    */
   notAssessed: boolean;
+  /**
+   * How the finding was reached. Absent or 'rules' means a fixed check over
+   * the transcript's words. 'model' means a language model read the transcript
+   * and judged it — used only for what a word list cannot establish (is the
+   * business explored before the goal; is the coach's perspective analysis or
+   * recap). A renderer must say so on the finding: a reviewer weighs a
+   * judgement differently from a match. Such a finding still points at lines,
+   * checked to exist, and is never a `concern`.
+   */
+  readBy?: 'rules' | 'model';
 }
 
 export interface AuditResult {

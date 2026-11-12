@@ -65,7 +65,19 @@ type FindingShape = {
   notAssessed: boolean;
   quotes: { text: string; startSec: number | null }[];
   feedback: FindingFeedbackData;
+  readBy?: string;
 };
+
+/** Said on the finding itself, beside the verdict: this one is a model's
+ *  judgement of what was said, not a match on the words. */
+function ReadByModel({ f }: { f: FindingShape }) {
+  if (f.readBy !== 'model') return null;
+  return (
+    <Pill className="bg-violet-500/15 text-violet-800 ring-1 ring-violet-500/40 ring-inset dark:text-violet-200">
+      AI reading
+    </Pill>
+  );
+}
 
 /** The audit being shown, so a finding four levels down can save against it. */
 const AuditIdContext = createContext<string>('');
@@ -418,7 +430,10 @@ function Finding({ f, nested = false }: { f: FindingShape; nested?: boolean }) {
           ) : null}
           {f.name}
         </p>
-        <Pill className={tone.pill}>{tone.label}</Pill>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <ReadByModel f={f} />
+          <Pill className={tone.pill}>{tone.label}</Pill>
+        </span>
       </div>
       <p className="mt-2 text-sm">{f.detail}</p>
       <Quotes quotes={f.quotes} />

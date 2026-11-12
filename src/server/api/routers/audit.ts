@@ -78,12 +78,26 @@ export const auditRouter = createTRPCRouter({
      * versioned, never edited in place — every criteria change regenerates
      * them all — so older audits of the same session stay in the table.
      */
+    // Every CEO on the recording is named: a session coached with two
+    // partners is one session, and showing it under one of them hides the other.
+    const names = new Map<string, Set<string>>();
+    for (const r of rows) {
+      if (!r.ceoName) continue;
+      const set = names.get(r.transcriptId) ?? new Set<string>();
+      set.add(r.ceoName);
+      names.set(r.transcriptId, set);
+    }
     const seen = new Set<string>();
-    return rows.filter((r) => {
-      if (seen.has(r.transcriptId)) return false;
-      seen.add(r.transcriptId);
-      return true;
-    });
+    return rows
+      .filter((r) => {
+        if (seen.has(r.transcriptId)) return false;
+        seen.add(r.transcriptId);
+        return true;
+      })
+      .map((r) => ({
+        ...r,
+        ceoName: [...(names.get(r.transcriptId) ?? [])].sort().join(' & ') || null,
+      }));
   }),
 
   /**

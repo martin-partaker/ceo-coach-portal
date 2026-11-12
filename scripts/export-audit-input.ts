@@ -115,7 +115,7 @@ async function main() {
     ORDER BY c.name NULLS LAST
   `)) as unknown as Row[];
 
-  const out = rows.map((r) => {
+  const perCeo = rows.map((r) => {
     const gapDays =
       r.intake_at === null
         ? null
@@ -165,6 +165,36 @@ async function main() {
     };
   });
 
+  /**
+   * One candidate per RECORDING, not per CEO.
+   *
+   * The query above yields each CEO's first transcript, and two CEOs who are
+   * coached together share one. Emitting both made two audits of the same
+   * recording in a single run — one "confirmed" for the CEO who filed the
+   * Intake, one "undetermined" for the partner who did not — and which of the
+   * two the list then showed came down to insertion order. A session is what
+   * it is for everyone in it, so the best-placed CEO decides, and every CEO on
+   * the recording is named.
+   */
+  const RANK = { confirmed: 0, probable: 1, undetermined: 2 } as const;
+  const byTranscript = new Map<string, (typeof perCeo)[number][]>();
+  for (const c of perCeo) {
+    const group = byTranscript.get(c.transcriptId) ?? [];
+    group.push(c);
+    byTranscript.set(c.transcriptId, group);
+  }
+  const out = [...byTranscript.values()].map((group) => {
+    const best = [...group].sort(
+      (a, b) => RANK[a.sessionConfidence] - RANK[b.sessionConfidence],
+    )[0];
+    const names = [...new Set(group.map((g) => g.ceoName).filter(Boolean))];
+    return {
+      ...best,
+      ceoName: names.join(' & ') || null,
+      prep: best.prep ?? group.find((g) => g.prep !== null)?.prep ?? null,
+    };
+  });
+
   writeFileSync(outPath, JSON.stringify(out, null, 1));
 
   const by = (c: string) => out.filter((o) => o.sessionConfidence === c).length;
@@ -173,7 +203,7 @@ async function main() {
   const withRails = out.filter((o) => o.prep?.guardrails).length;
   const withFigures = out.filter((o) => o.prep?.figures).length;
 
-  console.log(`${out.length} candidates -> ${outPath}`);
+  console.log(`${out.length} recordings (first transcript of ${perCeo.length} CEOs) -> ${outPath}`);
   console.log(
     `  confirmed ${by('confirmed')} · probable ${by('probable')} · ` +
       `undetermined ${by('undetermined')}`,

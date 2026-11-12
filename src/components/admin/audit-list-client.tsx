@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Loader2, Clock, AlertTriangle } from 'lucide-react';
+import { Loader2, Clock, AlertTriangle, Users } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -34,9 +34,18 @@ export function AuditListClient() {
   return (
     <div className="space-y-8">
       <section className="space-y-2">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          Audited — {audited.length}
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Audited — {audited.length}
+          </h2>
+          {/* The same findings counted across all of these sessions. */}
+          <Link
+            href="/admin/audit/cohort"
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <Users className="h-4 w-4" /> Across the cohort
+          </Link>
+        </div>
         <div className="space-y-2">
           {audited.map((r) => (
             <Link key={r.auditId} href={`/admin/audit/${r.auditId}`}>

@@ -171,6 +171,7 @@ export const auditRouter = createTRPCRouter({
           criteriaVersion: typed.criteriaVersion,
           generatedAt: row.audit.generatedAt,
           coachLabel: typed.coachLabel,
+          coachNote: typed.coachNote ?? null,
           totalSec: typed.totalSec,
           /** Empty means NO family was examined — not "examined and clean". */
           familiesExamined: typed.familiesExamined,

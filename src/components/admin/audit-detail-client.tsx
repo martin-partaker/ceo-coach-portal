@@ -141,6 +141,12 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
         <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
           {audit.confidenceReason}
         </p>
+        {audit.coachNote ? (
+          <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
+            <Info className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>{audit.coachNote}</span>
+          </p>
+        ) : null}
         {examined.size > 0 && !transcript.hasCueTimes ? (
           <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 h-3 w-3 shrink-0" />

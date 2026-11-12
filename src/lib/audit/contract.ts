@@ -99,6 +99,12 @@ export interface AuditResult {
   /** ISO 8601. */
   generatedAt: string;
   coachLabel: string | null;
+  /**
+   * Set only when the coach in the recording is not the coach on record for
+   * this CEO: who it was and how that was worked out. Optional, so audits
+   * written before it existed still satisfy the contract.
+   */
+  coachNote?: string | null;
   totalSec: number | null;
   /**
    * SHA256 of `transcripts.content` as it was when this ran. Every line

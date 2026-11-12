@@ -18,8 +18,48 @@ import {
   findingStepKey,
   isAuditResult,
   resolveEvidence,
+  splitSpeaker,
+  transcriptLines,
+  zoomRecordingUrl,
   type AuditResult,
 } from '@/lib/audit/contract';
+import { createHash } from 'node:crypto';
+
+/**
+ * Why an audit cannot be shown, if it cannot. Every quote is a line number
+ * into the transcript as it was when the audit ran: against another contract
+ * or a changed transcript the numbers would point at the wrong words, so
+ * nothing is shown rather than part of it.
+ */
+function unusable(
+  result: unknown,
+  content: string,
+): { state: 'unreadable' | 'stale'; reason: string } | null {
+  if (!isAuditResult(result)) {
+    return {
+      state: 'unreadable',
+      reason:
+        `This audit was written against contract v${
+          (result as { contractVersion?: unknown })?.contractVersion ?? '?'
+        }, and this app reads v${AUDIT_CONTRACT_VERSION}. It has to be ` +
+        'regenerated. Nothing is shown rather than part of it.',
+    };
+  }
+  const sha = createHash('sha256').update(content, 'utf8').digest('hex');
+  if (sha !== result.contentSha256) {
+    return {
+      state: 'stale',
+      reason:
+        'The transcript has changed since this audit ran. Every quote in it ' +
+        'is a line number into the old text, so the quotes would point at ' +
+        'the wrong words. Regenerate the audit.',
+    };
+  }
+  return null;
+}
+
+/** Where Zoom keeps the recording, when we were given a link for it. */
+const SHARE_URL = sql<string | null>`${rawInputs.payloadJson} -> 'meeting' ->> 'share_url'`;
 
 /**
  * Names for the cohort table where a finding's own name cannot serve: these
@@ -156,39 +196,21 @@ export const auditRouter = createTRPCRouter({
           title: transcripts.title,
           recordedAt: transcripts.recordedAt,
           duration: transcripts.duration,
+          shareUrl: SHARE_URL,
         })
         .from(transcriptAudits)
         .innerJoin(transcripts, eq(transcripts.id, transcriptAudits.transcriptId))
+        .leftJoin(rawInputs, eq(rawInputs.id, transcripts.sourceRawInputId))
         .where(eq(transcriptAudits.id, input.auditId))
         .limit(1);
 
       if (!row) return null;
 
       const result = row.audit.resultJson;
-      if (!isAuditResult(result)) {
-        return {
-          state: 'unreadable' as const,
-          reason:
-            `This audit was written against contract v${
-              (result as { contractVersion?: unknown })?.contractVersion ?? '?'
-            }, and this app reads v${AUDIT_CONTRACT_VERSION}. It has to be ` +
-            'regenerated. Nothing is shown rather than part of it.',
-        };
-      }
+      const refused = unusable(result, row.content);
+      if (refused) return refused;
 
-      const { createHash } = await import('node:crypto');
-      const sha = createHash('sha256').update(row.content, 'utf8').digest('hex');
-      if (sha !== result.contentSha256) {
-        return {
-          state: 'stale' as const,
-          reason:
-            'The transcript has changed since this audit ran. Every quote in it ' +
-            'is a line number into the old text, so the quotes would point at ' +
-            'the wrong words. Regenerate the audit.',
-        };
-      }
-
-      const typed: AuditResult = result;
+      const typed = result as AuditResult;
 
       // Answers given on THIS audit only. An answer to an earlier audit of
       // the same session was about that version's verdict and is not carried
@@ -219,9 +241,12 @@ export const auditRouter = createTRPCRouter({
         }));
         return {
           ...f,
-          quotes: f.evidence
-            .map((e) => resolveEvidence(row.content, row.cueTimes, e))
-            .filter((q): q is { text: string; startSec: number | null } => q !== null),
+          // Each quote keeps its line numbers: they are the link from the
+          // quote to its place in the transcript page.
+          quotes: f.evidence.flatMap((e) => {
+            const q = resolveEvidence(row.content, row.cueTimes, e);
+            return q ? [{ ...q, line: e.line, lineEnd: e.lineEnd ?? null }] : [];
+          }),
           feedback: {
             mine: all.find((a) => a.mine) ?? null,
             others: all.filter((a) => !a.mine),
@@ -250,7 +275,75 @@ export const auditRouter = createTRPCRouter({
           recordedAt: row.recordedAt,
           duration: row.duration,
           hasCueTimes: row.cueTimes !== null,
+          recordingUrl: zoomRecordingUrl(row.shareUrl),
         },
+      };
+    }),
+
+  /**
+   * The whole transcript of an audited session, line by line, with the
+   * passages the audit quotes marked.
+   *
+   * This is where a quote's minute leads. Zoom has no link that opens a
+   * recording at a given moment, so the minute cannot take the reviewer into
+   * the video; it takes her to the words in their place, with what was said
+   * before and after, and the recording is one link away with the time in
+   * front of her.
+   *
+   * Keyed by the audit, not the transcript: the line numbers in a link are
+   * that audit's, and the same refusals apply as on the audit itself.
+   */
+  transcript: adminProcedure
+    .input(z.object({ auditId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .select({
+          resultJson: transcriptAudits.resultJson,
+          content: transcripts.content,
+          cueTimes: transcripts.cueTimes,
+          title: transcripts.title,
+          recordedAt: transcripts.recordedAt,
+          shareUrl: SHARE_URL,
+        })
+        .from(transcriptAudits)
+        .innerJoin(transcripts, eq(transcripts.id, transcriptAudits.transcriptId))
+        .leftJoin(rawInputs, eq(rawInputs.id, transcripts.sourceRawInputId))
+        .where(eq(transcriptAudits.id, input.auditId))
+        .limit(1);
+
+      if (!row) return null;
+      const refused = unusable(row.resultJson, row.content);
+      if (refused) return refused;
+      const audit = row.resultJson as AuditResult;
+
+      const raw = transcriptLines(row.content);
+      const secs = row.cueTimes ? row.cueTimes.split(',') : null;
+      const lines = raw.map((l, i) => {
+        const sec = secs?.[i] === undefined ? Number.NaN : Number.parseInt(secs[i], 10);
+        return { ...splitSpeaker(l), sec: Number.isNaN(sec) ? null : sec };
+      });
+
+      // Every passage the audit quotes, so the reader can see the other
+      // moments it relied on, and which finding each one belongs to.
+      const cited = audit.findings.flatMap((f) =>
+        f.evidence
+          .filter((e) => resolveEvidence(row.content, row.cueTimes, e) !== null)
+          .map((e) => ({
+            from: e.line,
+            to: e.lineEnd ?? e.line,
+            step: f.step,
+            name: f.name,
+          })),
+      );
+
+      return {
+        state: 'ok' as const,
+        title: row.title,
+        recordedAt: row.recordedAt,
+        hasCueTimes: row.cueTimes !== null,
+        recordingUrl: zoomRecordingUrl(row.shareUrl),
+        lines,
+        cited,
       };
     }),
 

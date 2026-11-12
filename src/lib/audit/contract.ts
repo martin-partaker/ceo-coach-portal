@@ -143,6 +143,47 @@ export interface AuditResult {
  * this only decides what the quote looks like, and it should look the same
  * everywhere.
  */
+/**
+ * The fragment that names a passage on the transcript page: `L12`, or
+ * `L12-15` for several lines. Line numbers are the same 0-based indexes the
+ * evidence pointers use, so a quote and its place in the transcript can never
+ * disagree.
+ */
+export function passageAnchor(line: number, lineEnd?: number | null): string {
+  return lineEnd != null && lineEnd > line ? `L${line}-${lineEnd}` : `L${line}`;
+}
+
+/** The reverse. Anything that is not a well-formed passage is no passage. */
+export function parsePassageAnchor(hash: string): { from: number; to: number } | null {
+  const m = /^#?L(\d{1,6})(?:-(\d{1,6}))?$/.exec(hash);
+  if (!m) return null;
+  const from = Number.parseInt(m[1], 10);
+  const to = m[2] === undefined ? from : Number.parseInt(m[2], 10);
+  return to < from ? null : { from, to };
+}
+
+/** `Speaker: words` → the two halves. A line without a speaker is all words. */
+export function splitSpeaker(line: string): { who: string | null; text: string } {
+  const m = /^([^:]{1,60}):\s/.exec(line);
+  return m ? { who: m[1], text: line.slice(m[0].length) } : { who: null, text: line };
+}
+
+/**
+ * A recording link is only ever shown if it is a Zoom page over https. The
+ * value is stored data, and a link in an admin screen is a place where a bad
+ * value would be clicked.
+ */
+export function zoomRecordingUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 600) return null;
+  try {
+    const u = new URL(raw);
+    const zoom = u.hostname === 'zoom.us' || u.hostname.endsWith('.zoom.us');
+    return u.protocol === 'https:' && zoom && !u.username && !u.password ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function transcriptLines(content: string): string[] {
   return content.split('\n').map((l) => l.replace(/\r$/, ''));
 }

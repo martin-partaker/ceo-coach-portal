@@ -126,6 +126,10 @@ export async function ingestZoomMeeting(args: {
       topic: meeting.topic,
       start_time: meeting.start_time,
       duration: meeting.duration,
+      // Where the recording is watched. The audit screens link to it; a
+      // recording ingested before this was kept has none until
+      // scripts/fetch-recording-links.ts fills it in.
+      share_url: meeting.share_url ?? null,
     },
     participants,
     classification,

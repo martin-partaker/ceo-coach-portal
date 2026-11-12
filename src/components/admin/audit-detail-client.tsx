@@ -2,7 +2,17 @@
 
 import { createContext, useContext } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, AlertTriangle, Info, Check, Minus } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Loader2,
+  AlertTriangle,
+  Info,
+  Check,
+  Minus,
+  FileText,
+  Video,
+} from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -13,6 +23,7 @@ import {
   formatClock,
 } from './audit-confidence';
 import { FindingFeedback, type FindingFeedbackData } from './audit-feedback';
+import { passageAnchor } from '@/lib/audit/contract';
 
 /**
  * One audited session.
@@ -63,7 +74,7 @@ type FindingShape = {
   basis: string;
   restsOn: string;
   notAssessed: boolean;
-  quotes: { text: string; startSec: number | null }[];
+  quotes: { text: string; startSec: number | null; line: number; lineEnd: number | null }[];
   feedback: FindingFeedbackData;
   readBy?: string;
 };
@@ -185,6 +196,36 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
             <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
               <Info className="mt-0.5 h-3 w-3 shrink-0" />
               <span>{audit.coachNote}</span>
+            </p>
+          ) : null}
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <Link
+              href={`/admin/audit/${auditId}/transcript`}
+              target="_blank"
+              prefetch={false}
+              className="inline-flex items-center gap-1 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              <FileText className="h-4 w-4" /> Read the transcript
+            </Link>
+            {transcript.recordingUrl ? (
+              <a
+                href={transcript.recordingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                <Video className="h-4 w-4" /> Open the recording in Zoom
+              </a>
+            ) : null}
+          </div>
+          {examined.size > 0 ? (
+            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+              {transcript.hasCueTimes
+                ? 'The time beside each quote opens the transcript at that passage. '
+                : 'Each quote opens the transcript at that passage. '}
+              {transcript.recordingUrl
+                ? 'Zoom cannot open a recording at a given minute: the link starts it from the beginning.'
+                : 'No Zoom link is stored for this recording.'}
             </p>
           ) : null}
           {examined.size > 0 && !transcript.hasCueTimes ? (
@@ -348,6 +389,7 @@ function NotExamined() {
 }
 
 function Quotes({ quotes }: { quotes: FindingShape['quotes'] }) {
+  const auditId = useContext(AuditIdContext);
   if (quotes.length === 0) return null;
   return (
     <div className="mt-3 space-y-2">
@@ -358,11 +400,19 @@ function Quotes({ quotes }: { quotes: FindingShape['quotes'] }) {
             key={i}
             className="rounded-sm border-l-2 border-border bg-muted/40 py-2 pr-3 pl-3 text-sm"
           >
-            {clock ? (
-              <span className="mr-2 font-mono text-xs tabular-nums text-muted-foreground">
-                {clock}
-              </span>
-            ) : null}
+            {/* The minute is the way into the transcript: the same lines, in
+                their place, with what came before and after. Where no times
+                were captured the link is still there, under another name. */}
+            <Link
+              href={`/admin/audit/${auditId}/transcript#${passageAnchor(q.line, q.lineEnd)}`}
+              target="_blank"
+              prefetch={false}
+              title="Open the transcript at this passage"
+              className="mr-2 inline-flex items-center gap-0.5 rounded-sm font-mono text-xs tabular-nums text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              {clock ?? 'in transcript'}
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
             {/* The whole passage, never truncated: it is read from the
                 transcript when the page renders, not copied into the audit. */}
             <span>{q.text}</span>

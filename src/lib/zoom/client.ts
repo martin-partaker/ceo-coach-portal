@@ -71,6 +71,9 @@ export interface ZoomRecording {
   topic: string;
   start_time: string;
   duration: number;
+  /** The page where the recording is watched. Present on Zoom's responses;
+   *  optional here because older stored payloads never kept it. */
+  share_url?: string;
   recording_files: ZoomRecordingFile[];
 }
 
@@ -174,6 +177,31 @@ export async function fetchTranscriptByUuid(
     transcript: parsed.content,
     cueTimes: parsed.cueTimes,
     meetingTopic: data.topic ?? 'Untitled meeting',
+  };
+}
+
+/**
+ * Where one occurrence of a meeting can be watched, by meeting UUID (see
+ * `fetchTranscriptByUuid` for why the UUID and not the numeric id). Null when
+ * Zoom no longer has the recording.
+ *
+ * `passcodeProtected` says whether Zoom will ask the viewer for a passcode.
+ * The passcode itself is deliberately not returned: a link with it spliced
+ * in opens the video for anyone who holds the link.
+ */
+export async function fetchRecordingShareUrl(
+  meetingUuid: string
+): Promise<{ shareUrl: string | null; passcodeProtected: boolean } | null> {
+  const res = await zoomFetch(`/meetings/${encodeMeetingUuid(meetingUuid)}/recordings`);
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const text = await res.text();
+    throw new Error(`Zoom meeting recordings failed (${res.status}): ${text}`);
+  }
+  const data = await res.json();
+  return {
+    shareUrl: typeof data.share_url === 'string' && data.share_url ? data.share_url : null,
+    passcodeProtected: Boolean(data.password || data.recording_play_passcode),
   };
 }
 

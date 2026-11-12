@@ -96,7 +96,12 @@ async function main() {
 
     const lineCount = content.split('\n').length;
     const bad = a.findings.flatMap((f) =>
-      f.evidence.filter((e) => e.line < 0 || e.line >= lineCount),
+      f.evidence.filter(
+        (e) =>
+          e.line < 0 ||
+          e.line >= lineCount ||
+          (e.lineEnd !== undefined && (e.lineEnd < e.line || e.lineEnd >= lineCount)),
+      ),
     );
     if (bad.length) {
       rejected.push({

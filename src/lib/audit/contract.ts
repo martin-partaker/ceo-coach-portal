@@ -153,9 +153,30 @@ export function resolveEvidence(
   const raw = secs?.[from];
   const startSec = raw === undefined ? null : Number.parseInt(raw, 10);
   return {
-    text: lines.slice(from, to + 1).join(' ').trim(),
+    text: joinPassage(lines.slice(from, to + 1)),
     startSec: startSec === null || Number.isNaN(startSec) ? null : startSec,
   };
+}
+
+/**
+ * Join the lines of one passage into one quote.
+ *
+ * Every stored line opens with its speaker — "Steve Taylor: …" — and a
+ * passage is several consecutive lines by the same speaker, so a plain join
+ * would repeat the name before every sentence. The first line keeps it; the
+ * rest lose it, but only when it is the very same prefix: a line by someone
+ * else is left exactly as it is, so a passage that ever did mix speakers
+ * would show it rather than hide it.
+ */
+function joinPassage(lines: string[]): string {
+  if (lines.length === 0) return '';
+  const first = lines[0];
+  const m = /^([^:]{1,60}):\s/.exec(first);
+  if (!m) return lines.join(' ').trim();
+  const prefix = m[0];
+  return [first, ...lines.slice(1).map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l))]
+    .join(' ')
+    .trim();
 }
 
 /** Narrow a parsed blob, so a contract drift fails loudly at the boundary. */

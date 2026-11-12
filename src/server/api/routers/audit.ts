@@ -70,14 +70,18 @@ export const auditRouter = createTRPCRouter({
       .orderBy(desc(transcriptAudits.generatedAt));
 
     /**
-     * One row per audit. The attribution join fans out a group call into one
-     * row per attending CEO, which is correct for finding the audit but would
-     * show the same session several times.
+     * One row per session: its newest audit. Rows arrive newest first, so
+     * the first one seen for a transcript is the one to keep.
+     *
+     * Two reasons a transcript shows up more than once. The attribution join
+     * fans a group call out into one row per attending CEO. And audits are
+     * versioned, never edited in place — every criteria change regenerates
+     * them all — so older audits of the same session stay in the table.
      */
     const seen = new Set<string>();
     return rows.filter((r) => {
-      if (seen.has(r.auditId)) return false;
-      seen.add(r.auditId);
+      if (seen.has(r.transcriptId)) return false;
+      seen.add(r.transcriptId);
       return true;
     });
   }),

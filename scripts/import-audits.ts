@@ -45,6 +45,7 @@ async function main() {
   const ready: AuditResult[] = [];
   const rejected: { transcriptId: unknown; why: string }[] = [];
 
+  const inThisFile = new Set<string>();
   for (const a of parsed) {
     if (!isAuditResult(a)) {
       rejected.push({
@@ -55,6 +56,19 @@ async function main() {
       });
       continue;
     }
+    // One recording, one audit per run. Two CEOs coached together share a
+    // first transcript, and the exporter once emitted it twice with two
+    // different session confidences; which one the list showed was down to
+    // insertion order.
+    if (inThisFile.has(a.transcriptId)) {
+      rejected.push({
+        transcriptId: a.transcriptId,
+        why: 'a second audit of the same recording in this file',
+      });
+      continue;
+    }
+    inThisFile.add(a.transcriptId);
+
     const content = contentById.get(a.transcriptId);
     if (content === undefined) {
       rejected.push({ transcriptId: a.transcriptId, why: 'no such transcript' });
@@ -149,6 +163,9 @@ async function main() {
       `${tot.notAssessed} not assessed · ${tot.quotes} quote pointers`,
   );
 
+  await compareWithStored(sql, ready);
+  distributionWarnings(ready);
+
   if (!APPLY) {
     console.log('\nDry run. Re-run with --apply to write.');
     return;
@@ -172,6 +189,168 @@ async function main() {
     written++;
   }
   console.log(`\n${written} audits written.`);
+}
+
+const verdictOf = (f: AuditResult['findings'][number]) =>
+  f.notAssessed ? 'not assessed' : f.verdict;
+
+/**
+ * What this run changes, against the audit each recording already has.
+ *
+ * Printed before anything is written, on every run. On 12 Nov 2026 this
+ * comparison was done by hand, as an afterthought, and it was the only thing
+ * that showed nine stored audits had been produced with every timing at zero
+ * — five of them carrying "the 10x Goal was not discussed at all" for
+ * sessions where it had been. A change in verdicts is not an error. A change
+ * nobody expected is, and this is where it shows.
+ */
+async function compareWithStored(
+  sql: ReturnType<typeof neon<false, false>>,
+  ready: AuditResult[],
+): Promise<void> {
+  const stored = (await sql`
+    SELECT DISTINCT ON (transcript_id)
+           transcript_id, criteria_version, session_confidence, result_json
+    FROM transcript_audits
+    ORDER BY transcript_id, generated_at DESC
+  `) as unknown as {
+    transcript_id: string;
+    criteria_version: string;
+    session_confidence: string;
+    result_json: unknown;
+  }[];
+  const prevById = new Map(stored.map((r) => [r.transcript_id, r]));
+
+  let fresh = 0;
+  let same = 0;
+  let changed = 0;
+  let tierMoves = 0;
+  let sameVersionChanged = 0;
+  const transitions = new Map<string, number>();
+
+  for (const a of ready) {
+    const prev = prevById.get(a.transcriptId);
+    if (!prev || !isAuditResult(prev.result_json)) {
+      fresh++;
+      continue;
+    }
+    if (prev.session_confidence !== a.sessionConfidence) tierMoves++;
+    const before = new Map(
+      prev.result_json.findings.map((f) => [`${f.id}|${f.step ?? ''}`, verdictOf(f)]),
+    );
+    const after = new Map(
+      a.findings.map((f) => [`${f.id}|${f.step ?? ''}`, verdictOf(f)]),
+    );
+    let differs = false;
+    for (const key of new Set([...before.keys(), ...after.keys()])) {
+      const b = before.get(key) ?? 'absent';
+      const n = after.get(key) ?? 'absent';
+      if (b === n) continue;
+      differs = true;
+      const label = `${key.split('|')[0]}: ${b} -> ${n}`;
+      transitions.set(label, (transitions.get(label) ?? 0) + 1);
+    }
+    if (differs) {
+      changed++;
+      if (prev.criteria_version === a.criteriaVersion) sameVersionChanged++;
+    } else {
+      same++;
+    }
+  }
+
+  console.log('\nCompared with the audits already stored:');
+  console.log(`  ${same} recordings with every verdict unchanged`);
+  console.log(`  ${changed} recordings with at least one verdict changed`);
+  if (fresh) console.log(`  ${fresh} recordings audited for the first time`);
+  if (tierMoves) console.log(`  ${tierMoves} recordings whose session confidence changed`);
+  if (sameVersionChanged) {
+    console.log(
+      `  ! ${sameVersionChanged} of those changed under the SAME criteria version — ` +
+        'the criteria did not move, so the input or the code did',
+    );
+  }
+  const top = [...transitions.entries()].sort((x, y) => y[1] - x[1]);
+  for (const [label, n] of top.slice(0, 15)) console.log(`    ${String(n).padStart(3)} x  ${label}`);
+  if (top.length > 15) console.log(`    ...and ${top.length - 15} more kinds of change`);
+}
+
+/**
+ * Findings that track a property of the INPUT rather than of the session.
+ *
+ * If a criterion raises a concern on most recordings that lack something —
+ * cue times, a prep record — and on almost none that have it, the likelier
+ * explanation is a check running on missing data, not a pattern in the
+ * coaching. Printed as a prompt to look, never as a block: with groups this
+ * small a real difference can look the same.
+ */
+function distributionWarnings(ready: AuditResult[]): void {
+  const evaluated = ready.filter((a) => a.familiesExamined.length > 0);
+  if (evaluated.length < 4) {
+    console.log(
+      `\nDistribution check: skipped — only ${evaluated.length} evaluated recordings, ` +
+        'too few to compare groups.',
+    );
+    return;
+  }
+
+  const splits: [string, string, (a: AuditResult) => boolean][] = [
+    ['without cue times', 'with cue times', (a) => a.totalSec === null],
+    [
+      'without a prep record',
+      'with a prep record',
+      (a) => a.findings.some((f) => f.id.startsWith('prep.') && f.notAssessed),
+    ],
+    ['session inferred', 'session confirmed', (a) => a.sessionConfidence === 'probable'],
+  ];
+  const ids = new Set(evaluated.flatMap((a) => a.findings.map((f) => f.id)));
+  const raises = (a: AuditResult, id: string) =>
+    a.findings.some((f) => f.id === id && f.verdict === 'concern' && !f.notAssessed);
+
+  const lines: string[] = [];
+  // Which splits could be compared at all. Said out loud below: a check that
+  // prints nothing when it finds nothing cannot be told apart from one that
+  // never ran, and that is the very failure this function exists to catch.
+  const usable = splits.filter(([, , test]) => {
+    const k = evaluated.filter(test).length;
+    return k >= 2 && evaluated.length - k >= 2;
+  });
+  for (const id of ids) {
+    for (const [yes, no, test] of splits) {
+      const inGroup = evaluated.filter(test);
+      const outGroup = evaluated.filter((a) => !test(a));
+      if (inGroup.length < 2 || outGroup.length < 2) continue;
+      const a = inGroup.filter((x) => raises(x, id)).length;
+      const b = outGroup.filter((x) => raises(x, id)).length;
+      if (Math.abs(a / inGroup.length - b / outGroup.length) >= 0.6) {
+        lines.push(
+          `  ! ${id}: raised on ${a} of ${inGroup.length} ${yes}, ` +
+            `${b} of ${outGroup.length} ${no}`,
+        );
+      }
+    }
+    const all = evaluated.filter((x) => raises(x, id)).length;
+    if (evaluated.length >= 10 && all / evaluated.length >= 0.9) {
+      lines.push(
+        `  ! ${id}: raised on ${all} of ${evaluated.length} recordings — a cohort-wide ` +
+          'finding, or a check that cannot fail to fire',
+      );
+    }
+  }
+  const compared = usable
+    .map(([yes, , test]) => `${evaluated.filter(test).length} ${yes}`)
+    .join(', ');
+  console.log(
+    `\nDistribution check: ${ids.size} criteria across ${evaluated.length} evaluated ` +
+      `recordings` +
+      (usable.length ? ` (${compared})` : ' — no group large enough to compare') +
+      '.',
+  );
+  if (lines.length) {
+    console.log('  Worth a look before applying:');
+    for (const l of lines) console.log(l);
+  } else {
+    console.log('  Nothing stands out.');
+  }
 }
 
 main().catch((e) => {

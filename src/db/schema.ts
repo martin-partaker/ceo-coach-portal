@@ -676,7 +676,9 @@ export const auditFeedback = pgTable(
       .references(() => transcriptAudits.id, { onDelete: 'cascade' }),
     findingId: text('finding_id').notNull(),
     findingStep: text('finding_step').notNull().default(''),
-    /** `agree` | `disagree` | `unsure`. */
+    /** `agree` | `disagree` | `unsure` — or `withdrawn`, which is not an
+     *  answer: it records that an answer carried over from an earlier audit
+     *  was taken back here (see src/lib/audit/feedback-carry.ts). */
     verdict: text('verdict').notNull(),
     /** `false_finding` | `wrong_quote` | `not_applicable` | `wrong_severity`. */
     reason: text('reason'),

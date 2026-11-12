@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
   auditFeedback,
@@ -23,6 +23,12 @@ import {
   zoomRecordingUrl,
   type AuditResult,
 } from '@/lib/audit/contract';
+import {
+  FEEDBACK_WITHDRAWN,
+  feedbackFor,
+  type EarlierAnswer,
+  type StoredAnswer,
+} from '@/lib/audit/feedback-carry';
 import { createHash } from 'node:crypto';
 
 /**
@@ -121,6 +127,39 @@ export const auditRouter = createTRPCRouter({
           SELECT count(*)::int FROM ${auditFeedback} af
           WHERE af.audit_id = ${transcriptAudits.id}
             AND af.coach_id = ${ctx.coach.id}
+            AND af.verdict <> ${FEEDBACK_WITHDRAWN}
+        )`,
+        /**
+         * Findings of this audit she has not answered here but did answer on
+         * an earlier audit of the same recording — her latest word on each,
+         * unless that was to take it back. Whether each still stands is
+         * decided on the session's page, where the two versions are compared;
+         * this is only "there are answers of yours waiting in there".
+         */
+        carriedCount: sql<number>`(
+          SELECT count(*)::int FROM (
+            SELECT DISTINCT ON (af.finding_id, af.finding_step) af.verdict
+            FROM audit_feedback af
+            JOIN transcript_audits pa ON pa.id = af.audit_id
+            WHERE pa.transcript_id = ${transcriptAudits.transcriptId}
+              AND pa.generated_at < ${transcriptAudits.generatedAt}
+              AND af.coach_id = ${ctx.coach.id}
+              AND NOT EXISTS (
+                SELECT 1 FROM audit_feedback cur
+                WHERE cur.audit_id = ${transcriptAudits.id}
+                  AND cur.coach_id = af.coach_id
+                  AND cur.finding_id = af.finding_id
+                  AND cur.finding_step = af.finding_step
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(${transcriptAudits.resultJson} -> 'findings') f
+                WHERE f ->> 'id' = af.finding_id
+                  AND coalesce(f ->> 'step', '') = af.finding_step
+              )
+            ORDER BY af.finding_id, af.finding_step, pa.generated_at DESC, af.updated_at DESC
+          ) latest
+          WHERE latest.verdict <> ${FEEDBACK_WITHDRAWN}
         )`,
         title: transcripts.title,
         recordedAt: transcripts.recordedAt,
@@ -212,47 +251,73 @@ export const auditRouter = createTRPCRouter({
 
       const typed = result as AuditResult;
 
-      // Answers given on THIS audit only. An answer to an earlier audit of
-      // the same session was about that version's verdict and is not carried
-      // over to this one.
-      const answers = await ctx.db
-        .select({
-          findingId: auditFeedback.findingId,
-          findingStep: auditFeedback.findingStep,
-          verdict: auditFeedback.verdict,
-          reason: auditFeedback.reason,
-          note: auditFeedback.note,
-          coachId: auditFeedback.coachId,
-          coachName: coaches.name,
-          updatedAt: auditFeedback.updatedAt,
-        })
+      // Answers stored on THIS audit, and the same reviewers' answers on
+      // earlier audits of the same recording. Nothing is copied forward: an
+      // earlier answer is shown as carried over, and only stands if the
+      // finding is still the same claim (see feedback-carry.ts).
+      const answerColumns = {
+        findingId: auditFeedback.findingId,
+        findingStep: auditFeedback.findingStep,
+        verdict: auditFeedback.verdict,
+        reason: auditFeedback.reason,
+        note: auditFeedback.note,
+        coachId: auditFeedback.coachId,
+        coachName: coaches.name,
+        updatedAt: auditFeedback.updatedAt,
+      };
+      const current: StoredAnswer[] = await ctx.db
+        .select(answerColumns)
         .from(auditFeedback)
         .innerJoin(coaches, eq(coaches.id, auditFeedback.coachId))
         .where(eq(auditFeedback.auditId, input.auditId));
-      const answersFor = (id: string, step: string | null) =>
-        answers.filter(
-          (a) => a.findingId === id && a.findingStep === findingStepKey(step),
+
+      const earlier: EarlierAnswer[] = await ctx.db
+        .select({
+          ...answerColumns,
+          auditId: transcriptAudits.id,
+          criteriaVersion: transcriptAudits.criteriaVersion,
+          generatedAt: transcriptAudits.generatedAt,
+        })
+        .from(auditFeedback)
+        .innerJoin(transcriptAudits, eq(transcriptAudits.id, auditFeedback.auditId))
+        .innerJoin(coaches, eq(coaches.id, auditFeedback.coachId))
+        .where(
+          and(
+            eq(transcriptAudits.transcriptId, row.audit.transcriptId),
+            lt(transcriptAudits.generatedAt, row.audit.generatedAt),
+          ),
         );
 
-      const findings = typed.findings.map((f) => {
-        const all = answersFor(f.id, f.step).map(({ coachId, ...a }) => ({
-          ...a,
-          mine: coachId === ctx.coach.id,
-        }));
-        return {
-          ...f,
-          // Each quote keeps its line numbers: they are the link from the
-          // quote to its place in the transcript page.
-          quotes: f.evidence.flatMap((e) => {
-            const q = resolveEvidence(row.content, row.cueTimes, e);
-            return q ? [{ ...q, line: e.line, lineEnd: e.lineEnd ?? null }] : [];
-          }),
-          feedback: {
-            mine: all.find((a) => a.mine) ?? null,
-            others: all.filter((a) => !a.mine),
-          },
-        };
-      });
+      // Only the earlier audits somebody answered on, which is few.
+      const earlierIds = [...new Set(earlier.map((a) => a.auditId))];
+      const earlierAudits = new Map<string, AuditResult | null>();
+      if (earlierIds.length > 0) {
+        const olds = await ctx.db
+          .select({ id: transcriptAudits.id, resultJson: transcriptAudits.resultJson })
+          .from(transcriptAudits)
+          .where(inArray(transcriptAudits.id, earlierIds));
+        for (const o of olds) {
+          earlierAudits.set(o.id, isAuditResult(o.resultJson) ? o.resultJson : null);
+        }
+      }
+
+      const findings = typed.findings.map((f) => ({
+        ...f,
+        // Each quote keeps its line numbers: they are the link from the
+        // quote to its place in the transcript page.
+        quotes: f.evidence.flatMap((e) => {
+          const q = resolveEvidence(row.content, row.cueTimes, e);
+          return q ? [{ ...q, line: e.line, lineEnd: e.lineEnd ?? null }] : [];
+        }),
+        feedback: feedbackFor({
+          finding: f,
+          viewerId: ctx.coach.id,
+          contentSha256: typed.contentSha256,
+          current,
+          earlier,
+          earlierAudits,
+        }),
+      }));
 
       return {
         state: 'ok' as const,
@@ -551,15 +616,74 @@ export const auditRouter = createTRPCRouter({
       return { ok: true as const };
     }),
 
-  /** Take back the signed-in reviewer's own answer to one finding. */
+  /**
+   * Take back the signed-in reviewer's own answer to one finding.
+   *
+   * If an earlier answer of hers to the same finding would otherwise be
+   * carried forward onto this audit, removing the row is not enough — the old
+   * answer would simply reappear. In that case a withdrawal is stored on this
+   * audit instead, which says "no answer here, and do not bring the old one
+   * forward". The earlier answer itself is left where it was given.
+   */
   clearFeedback: adminProcedure.input(feedbackTarget).mutation(async ({ ctx, input }) => {
+    const step = findingStepKey(input.findingStep);
+    const [audit] = await ctx.db
+      .select({
+        transcriptId: transcriptAudits.transcriptId,
+        generatedAt: transcriptAudits.generatedAt,
+      })
+      .from(transcriptAudits)
+      .where(eq(transcriptAudits.id, input.auditId))
+      .limit(1);
+    if (!audit) throw new TRPCError({ code: 'NOT_FOUND', message: 'Audit not found.' });
+
+    const [previous] = await ctx.db
+      .select({ verdict: auditFeedback.verdict })
+      .from(auditFeedback)
+      .innerJoin(transcriptAudits, eq(transcriptAudits.id, auditFeedback.auditId))
+      .where(
+        and(
+          eq(transcriptAudits.transcriptId, audit.transcriptId),
+          lt(transcriptAudits.generatedAt, audit.generatedAt),
+          eq(auditFeedback.findingId, input.findingId),
+          eq(auditFeedback.findingStep, step),
+          eq(auditFeedback.coachId, ctx.coach.id),
+        ),
+      )
+      .orderBy(desc(transcriptAudits.generatedAt), desc(auditFeedback.updatedAt))
+      .limit(1);
+
+    if (previous && previous.verdict !== FEEDBACK_WITHDRAWN) {
+      await ctx.db
+        .insert(auditFeedback)
+        .values({
+          auditId: input.auditId,
+          findingId: input.findingId,
+          findingStep: step,
+          verdict: FEEDBACK_WITHDRAWN,
+          reason: null,
+          note: null,
+          coachId: ctx.coach.id,
+        })
+        .onConflictDoUpdate({
+          target: [
+            auditFeedback.auditId,
+            auditFeedback.findingId,
+            auditFeedback.findingStep,
+            auditFeedback.coachId,
+          ],
+          set: { verdict: FEEDBACK_WITHDRAWN, reason: null, note: null, updatedAt: new Date() },
+        });
+      return { ok: true as const };
+    }
+
     await ctx.db
       .delete(auditFeedback)
       .where(
         and(
           eq(auditFeedback.auditId, input.auditId),
           eq(auditFeedback.findingId, input.findingId),
-          eq(auditFeedback.findingStep, findingStepKey(input.findingStep)),
+          eq(auditFeedback.findingStep, step),
           eq(auditFeedback.coachId, ctx.coach.id),
         ),
       );

@@ -9,6 +9,11 @@ import {
   type FeedbackReason,
   type FeedbackVerdict,
 } from '@/lib/audit/contract';
+import type {
+  CarriedAnswer,
+  ClaimChange,
+  FindingFeedbackShape,
+} from '@/lib/audit/feedback-carry';
 
 /**
  * Agree / Disagree on one finding.
@@ -24,20 +29,43 @@ import {
  *
  * A disagreement asks why, with four fixed reasons, because "disagree" alone
  * does not say whether to fix the criterion or the quote.
+ *
+ * Audits are regenerated when a criterion is corrected, and an answer belongs
+ * to the audit it was given on. So an answer from an earlier audit is carried
+ * over here, in one of two ways. If the finding is still the same claim, it
+ * is shown as her answer, marked as carried over. If the finding has changed,
+ * it is shown as what she said then, with what changed, and the question is
+ * put to her again: agreement with one claim is never shown as agreement with
+ * another.
  */
 
-export type FeedbackEntry = {
-  verdict: string;
-  reason: string | null;
-  note: string | null;
-  coachName: string;
-  updatedAt: Date;
+export type FindingFeedbackData = FindingFeedbackShape;
+
+const CHANGE_WORDS: Record<ClaimChange, string> = {
+  verdict: 'its verdict is different',
+  wording: 'it is worded differently',
+  quote: 'it quotes a different passage',
+  transcript: 'the transcript itself has changed',
+  unknown: 'the earlier version can no longer be compared',
 };
 
-export type FindingFeedbackData = {
-  mine: FeedbackEntry | null;
-  others: FeedbackEntry[];
+const WAS_WORDS: Record<string, string> = {
+  concern: 'to raise',
+  review: 'to review',
+  ok: 'clear',
+  notAssessed: 'not assessed',
 };
+
+/** "its verdict is different (it was “to review”) and it quotes a different passage" */
+function whatChanged(c: CarriedAnswer): string {
+  const parts = c.changes.map((k) =>
+    k === 'verdict' && c.was
+      ? `${CHANGE_WORDS.verdict} (it was “${WAS_WORDS[c.was] ?? c.was}”)`
+      : CHANGE_WORDS[k],
+  );
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
 
 const VERDICTS: {
   value: FeedbackVerdict;
@@ -97,7 +125,14 @@ export function FindingFeedback({
 }) {
   const utils = trpc.useUtils();
   const mine = feedback.mine;
-  const [note, setNote] = useState(mine?.note ?? '');
+  // An earlier answer of hers, when she has said nothing on this audit.
+  const carried = mine ? null : feedback.carried.mine;
+  // It counts as her answer only while the finding is the same claim.
+  const standing = carried?.stillStands ? carried : null;
+  const asked = carried && !carried.stillStands ? carried : null;
+  /** What the chips show: an answer given here, or one that still stands. */
+  const shown = mine ?? standing;
+  const [note, setNote] = useState(shown?.note ?? '');
   const [noteOpen, setNoteOpen] = useState(Boolean(mine?.note));
 
   const refresh = () => {
@@ -119,7 +154,7 @@ export function FindingFeedback({
   const save = (verdict: FeedbackVerdict, reason: FeedbackReason | null) =>
     set.mutate({ ...target, verdict, reason, note: note.trim() || null });
 
-  const myReason = (mine?.verdict === 'disagree' ? mine.reason : null) as FeedbackReason | null;
+  const myReason = (shown?.verdict === 'disagree' ? shown.reason : null) as FeedbackReason | null;
   const noteDirty = (mine?.note ?? '') !== note.trim();
 
   return (
@@ -127,17 +162,20 @@ export function FindingFeedback({
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-xs text-muted-foreground">Your view</span>
         {VERDICTS.map(({ value, label, Icon, on }) => {
-          const selected = mine?.verdict === value;
+          const selected = shown?.verdict === value;
           return (
             <button
               key={value}
               type="button"
               disabled={busy}
               aria-pressed={selected}
+              // Clicking a carried-over answer saves it on this audit: it is
+              // then hers here, and can take a note.
+              title={selected && standing ? 'Confirm this answer on this version' : undefined}
               onClick={() => {
-                if (!selected) save(value, value === 'disagree' ? myReason : null);
+                if (!selected || standing) save(value, value === 'disagree' ? myReason : null);
               }}
-              className={cn(CHIP, selected ? on : CHIP_OFF)}
+              className={cn(CHIP, selected ? on : CHIP_OFF, selected && standing && 'border-dashed')}
             >
               <Icon className="h-3 w-3" />
               {label}
@@ -165,9 +203,39 @@ export function FindingFeedback({
             </button>
           </>
         ) : null}
+        {carried && !busy ? (
+          <button
+            type="button"
+            onClick={() => clear.mutate(target)}
+            className="ml-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {standing ? 'Clear' : 'Dismiss'}
+          </button>
+        ) : null}
       </div>
 
-      {mine?.verdict === 'disagree' ? (
+      {standing ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Carried over from your answer on criteria {standing.fromCriteria}. The finding has
+          not changed since, so it stands.
+          {standing.note ? ` Your note: “${standing.note}”` : ''}
+        </p>
+      ) : null}
+
+      {asked ? (
+        <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.08] px-2.5 py-1.5 text-xs">
+          On an earlier version (criteria {asked.fromCriteria}) you answered{' '}
+          <span className="font-medium">
+            {VERDICT_LABEL[asked.verdict] ?? asked.verdict}
+            {asked.reason ? ` — ${REASON_LABEL[asked.reason as FeedbackReason] ?? asked.reason}` : ''}
+          </span>
+          {asked.note ? ` — “${asked.note}”` : ''}. The finding has changed since:{' '}
+          {whatChanged(asked)}. Your earlier answer is not applied to it — answer again if it
+          still holds.
+        </p>
+      ) : null}
+
+      {shown?.verdict === 'disagree' ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <span className="mr-1 text-xs text-muted-foreground">Because</span>
           {FEEDBACK_REASONS.map((r) => {
@@ -218,7 +286,7 @@ export function FindingFeedback({
         <p className="mt-2 text-xs text-destructive">Not saved: {error.message}</p>
       ) : null}
 
-      {feedback.others.length > 0 ? (
+      {feedback.others.length + feedback.carried.others.length > 0 ? (
         <ul className="mt-2 space-y-0.5">
           {feedback.others.map((o, i) => (
             <li key={i} className="text-xs text-muted-foreground">
@@ -227,6 +295,18 @@ export function FindingFeedback({
               {VERDICT_LABEL[o.verdict] ?? o.verdict}
               {o.reason ? ` — ${REASON_LABEL[o.reason as FeedbackReason] ?? o.reason}` : ''}
               {o.note ? ` — “${o.note}”` : ''}
+            </li>
+          ))}
+          {feedback.carried.others.map((o, i) => (
+            <li key={`c${i}`} className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground/80">{o.coachName}</span>
+              {': '}
+              {VERDICT_LABEL[o.verdict] ?? o.verdict}
+              {o.reason ? ` — ${REASON_LABEL[o.reason as FeedbackReason] ?? o.reason}` : ''}
+              {o.note ? ` — “${o.note}”` : ''}
+              {o.stillStands
+                ? ` (on criteria ${o.fromCriteria}; the finding has not changed)`
+                : ` (on criteria ${o.fromCriteria}; the finding has changed since: ${whatChanged(o)})`}
             </li>
           ))}
         </ul>

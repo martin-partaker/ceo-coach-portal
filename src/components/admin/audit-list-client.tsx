@@ -108,9 +108,15 @@ export function AuditListClient() {
                     </span>
                   ) : null}
                   {/* The reviewer's own progress through this session. */}
-                  {r.answeredCount > 0 ? (
+                  {r.answeredCount + r.carriedCount > 0 ? (
                     <span className="ml-auto text-emerald-700 dark:text-emerald-300">
-                      {r.answeredCount} answered by you
+                      {r.answeredCount > 0 ? `${r.answeredCount} answered by you` : ''}
+                      {r.answeredCount > 0 && r.carriedCount > 0 ? ' · ' : ''}
+                      {/* Answers given on an earlier version of this audit:
+                          inside, each either still stands or asks again. */}
+                      {r.carriedCount > 0
+                        ? `${r.carriedCount} from an earlier version`
+                        : ''}
                     </span>
                   ) : null}
                 </div>

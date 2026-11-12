@@ -104,8 +104,14 @@ function Feedback({ f }: { f: FindingShape }) {
   if (f.notAssessed || !auditId) return null;
   return (
     <FindingFeedback
-      // Remount when the stored answer changes, so the note field shows it.
-      key={`${f.feedback.mine?.verdict ?? ''}|${f.feedback.mine?.note ?? ''}`}
+      // Remount when the stored answer changes — here or carried over from an
+      // earlier audit — so the note field starts from what is now shown.
+      key={[
+        f.feedback.mine?.verdict,
+        f.feedback.mine?.note,
+        f.feedback.carried.mine?.verdict,
+        f.feedback.carried.mine?.stillStands,
+      ].join('|')}
       auditId={auditId}
       findingId={f.id}
       findingStep={f.step}

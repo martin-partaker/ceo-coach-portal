@@ -23,7 +23,9 @@ import {
   formatClock,
 } from './audit-confidence';
 import { FindingFeedback, type FindingFeedbackData } from './audit-feedback';
-import { passageAnchor } from '@/lib/audit/contract';
+import { AUDITED_SESSIONS, passageAnchor } from '@/lib/audit/contract';
+import { sessionWords } from '@/lib/audit/session-override';
+import { SessionControl } from './audit-session-control';
 
 /**
  * One audited session.
@@ -157,9 +159,13 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
     );
   }
 
-  const { audit, transcript } = data;
+  const { audit, transcript, session } = data;
   const findings = audit.findings as FindingShape[];
   const examined = new Set<string>(audit.familiesExamined);
+  // A reviewer has said this is another session than the audit was run as.
+  // What is on file was judged against the wrong outline: it is not shown.
+  const superseded = session.standing === 'superseded';
+  const showFindings = examined.size > 0 && !superseded;
 
   const steps = findings.filter((f) => f.family === 'A');
   const stepIds = new Set(steps.map((s) => s.step));
@@ -187,7 +193,11 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
             {transcript.title ?? 'Untitled recording'}
           </h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <ConfidenceBadge value={audit.confidence} />
+            <ConfidenceBadge
+              value={audit.confidence}
+              sessionNo={audit.sessionNo}
+              setBy={session.override}
+            />
             {audit.coachLabel ? (
               <span className="text-sm text-muted-foreground">{audit.coachLabel}</span>
             ) : null}
@@ -195,9 +205,20 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
               criteria {audit.criteriaVersion}
             </span>
           </div>
-          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            {audit.confidenceReason}
-          </p>
+          {/* How the session was inferred. Once a reviewer has said which
+              session it is, the inference is history and is not repeated. */}
+          {session.override ? null : (
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              {audit.confidenceReason}
+            </p>
+          )}
+          <SessionControl
+            // Remount when the stored word changes, so the form starts from it.
+            key={`${session.override?.sessionNo ?? 'auto'}|${session.override?.note ?? ''}`}
+            auditId={auditId}
+            auditedAs={session.auditedAs}
+            override={session.override}
+          />
           {audit.coachNote ? (
             <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
               <Info className="mt-0.5 h-3 w-3 shrink-0" />
@@ -224,7 +245,7 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
               </a>
             ) : null}
           </div>
-          {examined.size > 0 ? (
+          {showFindings ? (
             <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
               {transcript.hasCueTimes
                 ? 'The time beside each quote opens the transcript at that passage. '
@@ -235,7 +256,7 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
                 : 'No Zoom link is stored for this recording.'}
             </p>
           ) : null}
-          {examined.size > 0 && !transcript.hasCueTimes ? (
+          {showFindings && !transcript.hasCueTimes ? (
             <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
               <Info className="mt-0.5 h-3 w-3 shrink-0" />
               <span>
@@ -248,11 +269,37 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
 
         {/* A recording we could not place is not judged against any outline.
             It must not render as an empty — and therefore clean — review. */}
-        {examined.size === 0 ? (
+        {superseded && session.override ? (
           <Notice>
-            <strong>Not audited.</strong> We could not establish which session this
-            recording is, so there is no outline to judge it against. Nothing below
-            means nothing was looked at — not that nothing was wrong.
+            <strong>
+              {session.override.setByName} set this recording to{' '}
+              {sessionWords(session.override.sessionNo)}.
+            </strong>{' '}
+            {examined.size > 0
+              ? `The audit on file was run as Session ${session.auditedAs}, against another ` +
+                'outline, so its findings are not shown. '
+              : 'No audit has been run for it. '}
+            {session.override.sessionNo !== null &&
+            AUDITED_SESSIONS.includes(session.override.sessionNo)
+              ? `It will be audited as ${sessionWords(session.override.sessionNo)} the next ` +
+                'time the audits are generated.'
+              : session.override.sessionNo !== null
+                ? `There are no criteria for ${sessionWords(session.override.sessionNo)} yet, ` +
+                  'so it will be listed without an audit until there are.'
+                : 'It will be listed without an audit.'}
+          </Notice>
+        ) : examined.size === 0 ? (
+          <Notice>
+            <strong>Not audited.</strong>{' '}
+            {session.noCriteria && session.auditedAs !== null
+              ? `This is Session ${session.auditedAs}, and there are no criteria for that ` +
+                'session yet, so there is no outline of ours to judge it against. '
+              : session.override && session.override.sessionNo === null
+                ? 'It is marked as not a numbered coaching session, so there is no outline ' +
+                  'to judge it against. '
+                : 'We could not establish which session this recording is, so there is no ' +
+                  'outline to judge it against. '}
+            Nothing below means nothing was looked at — not that nothing was wrong.
           </Notice>
         ) : (
           <>

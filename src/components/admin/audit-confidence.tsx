@@ -106,9 +106,37 @@ export function Pill({
  * sure we are IS the feature. A verdict against the wrong outline is not a
  * weaker audit, it is a void one.
  */
-export function ConfidenceBadge({ value }: { value: Confidence }) {
+export function ConfidenceBadge({
+  value,
+  sessionNo,
+  setBy,
+}: {
+  value: Confidence;
+  /** The session the audit was run as. Absent or null reads as before. */
+  sessionNo?: number | null;
+  /**
+   * A reviewer's word on the session, when there is one. It outranks the
+   * inference and is shown as what it is: a person said so, and who.
+   */
+  setBy?: { sessionNo: number | null; setByName: string } | null;
+}) {
+  if (setBy) {
+    return (
+      <Pill className={CONFIDENCE_TONE.confirmed.pill}>
+        {setBy.sessionNo === null ? 'Not a numbered session' : `Session ${setBy.sessionNo}`} —
+        set by {setBy.setByName.split(/\s+/)[0]}
+      </Pill>
+    );
+  }
   const tone = CONFIDENCE_TONE[value] ?? CONFIDENCE_TONE.undetermined;
-  return <Pill className={tone.pill}>{tone.text}</Pill>;
+  const n = sessionNo ?? 1;
+  const text =
+    value === 'confirmed'
+      ? `Session ${n} — confirmed`
+      : value === 'probable'
+        ? `Session ${n} — inferred`
+        : tone.text;
+  return <Pill className={tone.pill}>{text}</Pill>;
 }
 
 export function formatClock(sec: number | null): string | null {

@@ -651,6 +651,43 @@ export const transcriptAudits = pgTable(
   }),
 );
 
+
+/**
+ * A reviewer's word on which session a recording is.
+ *
+ * The session number is otherwise inferred — from the Intake date and from
+ * what is said — and the inference is sometimes wrong and sometimes not
+ * possible at all. The Director of Coaching knows. One row per recording: her
+ * latest word, which overrides the inference the next time audits are
+ * generated (scripts/export-audit-input.ts reads this table).
+ *
+ * `sessionNo` NULL means "not a numbered coaching session" (a support call, a
+ * group call): a decision, as distinct from no row, which is no decision.
+ *
+ * It is not written into `transcript_audits`: an audit records what it was
+ * run as, and stays true to that. An audit run as another session than the
+ * one set here is shown as superseded, not edited.
+ */
+export const transcriptSessionOverrides = pgTable(
+  'transcript_session_overrides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    transcriptId: uuid('transcript_id')
+      .notNull()
+      .references(() => transcripts.id, { onDelete: 'cascade' }),
+    sessionNo: integer('session_no'),
+    note: text('note'),
+    /** The real signed-in person, never an impersonated coach. */
+    setBy: uuid('set_by')
+      .notNull()
+      .references(() => coaches.id),
+    setAt: timestamp('set_at').notNull().defaultNow(),
+  },
+  (t) => ({
+    oneWord: uniqueIndex('transcript_session_overrides_transcript_idx').on(t.transcriptId),
+  }),
+);
+
 /**
  * What a reviewer said about one finding of one audit.
  *

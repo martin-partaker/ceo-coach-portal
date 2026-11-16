@@ -6,6 +6,7 @@ import { trpc } from '@/lib/trpc/client';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { ConfidenceBadge, CONFIDENCE_TONE } from './audit-confidence';
+import { sessionWords } from '@/lib/audit/session-override';
 
 export function AuditListClient() {
   const { data, isLoading, error } = trpc.audit.list.useQuery();
@@ -28,8 +29,13 @@ export function AuditListClient() {
     );
   }
 
-  const audited = data.filter((r) => r.familiesExamined.length > 0);
-  const notAudited = data.filter((r) => r.familiesExamined.length === 0);
+  // A reviewer has said these are another session than their audit was run
+  // as. The audit on file is void until the next run, so they are neither
+  // "audited" nor "not placed": they are waiting.
+  const waiting = data.filter((r) => r.session.standing === 'superseded');
+  const settled = data.filter((r) => r.session.standing !== 'superseded');
+  const audited = settled.filter((r) => r.familiesExamined.length > 0);
+  const notAudited = settled.filter((r) => r.familiesExamined.length === 0);
 
   return (
     <div className="space-y-8">
@@ -75,7 +81,11 @@ export function AuditListClient() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <ConfidenceBadge value={r.confidence} />
+                    <ConfidenceBadge
+                      value={r.confidence}
+                      sessionNo={r.sessionNo}
+                      setBy={r.session.override}
+                    />
                     {!r.hasCueTimes ? (
                       <span
                         className="flex items-center gap-1 text-xs text-muted-foreground"
@@ -126,52 +136,98 @@ export function AuditListClient() {
         </div>
       </section>
 
+      {waiting.length > 0 ? (
+        <section className="space-y-2">
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Session set by a reviewer, waiting for the next run — {waiting.length}
+          </h2>
+          <p className="max-w-3xl text-xs text-muted-foreground">
+            A reviewer has said these are another session than their audit was run
+            as. That audit was judged against the wrong outline and is not shown; a
+            new one replaces it the next time audits are generated.
+          </p>
+          <div className="space-y-2">
+            {waiting.map((r) => (
+              <Link key={r.auditId} href={`/admin/audit/${r.auditId}`}>
+                <Card className="border-l-4 border-l-sky-500 p-4 transition-colors hover:bg-accent/40">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <Who r={r} />
+                    <ConfidenceBadge
+                      value={r.confidence}
+                      sessionNo={r.sessionNo}
+                      setBy={r.session.override}
+                    />
+                  </div>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {r.familiesExamined.length > 0
+                      ? `Audited as Session ${r.sessionNo}; now set to ${sessionWords(
+                          r.session.override?.sessionNo ?? null,
+                        )}.`
+                      : `Was not placed; now set to ${sessionWords(
+                          r.session.override?.sessionNo ?? null,
+                        )}.`}
+                  </p>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {notAudited.length > 0 ? (
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-muted-foreground">
             Not audited — {notAudited.length}
           </h2>
           <p className="max-w-3xl text-xs text-muted-foreground">
-            These recordings could not be placed in the programme, so there is
-            no outline to judge them against. They are listed rather than
-            dropped: a missing row looks like nothing to review, and that is a
-            different statement from &ldquo;we do not know what this is&rdquo;.
+            These recordings could not be placed in the programme, or are a session
+            there are no criteria for yet, so there is no outline to judge them
+            against. They are listed rather than dropped: a missing row looks like
+            nothing to review, and that is a different statement from &ldquo;we do
+            not know what this is&rdquo;. Open one to say which session it is.
           </p>
           <div className="space-y-2">
             {notAudited.map((r) => (
-              <Card
-                key={r.auditId}
-                className="border-l-4 border-l-zinc-400 p-4 dark:border-l-zinc-500"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">
-                      {r.ceoName ?? 'Unattributed CEO'}
-                      {r.coachName ? (
-                        <span className="text-muted-foreground">
-                          {' '}
-                          with {r.coachName}
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {r.title ?? 'Untitled recording'}
-                      {r.recordedAt
-                        ? ` · ${new Date(r.recordedAt).toLocaleDateString()}`
-                        : ''}
-                    </p>
+              <Link key={r.auditId} href={`/admin/audit/${r.auditId}`}>
+                <Card className="border-l-4 border-l-zinc-400 p-4 transition-colors hover:bg-accent/40 dark:border-l-zinc-500">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <Who r={r} />
+                    <ConfidenceBadge
+                      value={r.confidence}
+                      sessionNo={r.sessionNo}
+                      setBy={r.session.override}
+                    />
                   </div>
-                  <ConfidenceBadge value={r.confidence} />
-                </div>
-                <p className="mt-3 flex gap-2 text-xs text-muted-foreground">
-                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
-                  <span>{r.confidenceReason}</span>
-                </p>
-              </Card>
+                  <p className="mt-3 flex gap-2 text-xs text-muted-foreground">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>{r.confidenceReason}</span>
+                  </p>
+                </Card>
+              </Link>
             ))}
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/** Who the session is with, and which recording it is. */
+function Who({
+  r,
+}: {
+  r: { ceoName: string | null; coachName: string | null; title: string | null; recordedAt: Date | null };
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="truncate font-medium">
+        {r.ceoName ?? 'Unattributed CEO'}
+        {r.coachName ? <span className="text-muted-foreground"> with {r.coachName}</span> : null}
+      </p>
+      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+        {r.title ?? 'Untitled recording'}
+        {r.recordedAt ? ` · ${new Date(r.recordedAt).toLocaleDateString()}` : ''}
+      </p>
     </div>
   );
 }

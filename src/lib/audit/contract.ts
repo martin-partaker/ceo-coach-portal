@@ -97,11 +97,27 @@ export interface AuditFinding {
   readBy?: 'rules' | 'model';
 }
 
+/**
+ * The session numbers there are criteria for. A recording known to be another
+ * session is listed, and says so, but is not judged: there is no outline of
+ * ours to judge it against. Mirrors `AUDITED_SESSIONS` in
+ * `tool/make_audit_json.py`.
+ */
+export const AUDITED_SESSIONS: readonly number[] = [1];
+
 export interface AuditResult {
   contractVersion: typeof AUDIT_CONTRACT_VERSION;
   transcriptId: string;
   sessionNo: number | null;
   sessionConfidence: SessionConfidence;
+  /**
+   * True when the session IS known but there are no criteria for that session
+   * number yet. `familiesExamined` and `findings` are then empty, and that is
+   * said outright here rather than left to be inferred from the emptiness —
+   * a placed session with nothing examined is otherwise a bug, and is
+   * rejected at import.
+   */
+  noCriteria?: boolean;
   /** Why that confidence, in words, for the screen to show verbatim. */
   sessionConfidenceReason: string;
   /** Identifies the criteria set this run used, so a verdict can be traced. */

@@ -91,6 +91,18 @@ export function AuditCohortClient() {
             </span>
           </p>
         ) : null}
+        {data.superseded > 0 ? (
+          <p className="mt-2 flex gap-2 text-xs text-muted-foreground">
+            <Info className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>
+              {data.superseded} more{' '}
+              {data.superseded === 1 ? 'recording has' : 'recordings have'} been set to
+              another session by a reviewer since the audit ran. That audit was judged
+              against the wrong outline, so it is not in any number on this page until
+              it is replaced.
+            </span>
+          </p>
+        ) : null}
         {data.versions.length > 1 ? (
           <p className="mt-2 flex gap-2 text-xs text-amber-700 dark:text-amber-300">
             <Info className="mt-0.5 h-3 w-3 shrink-0" />

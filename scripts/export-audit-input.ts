@@ -16,6 +16,11 @@
  *
  * 2. The SESSION 1 CONFIDENCE tiers are a classifier that declares its own
  *    uncertainty, not a guess dressed as a fact. Thresholds below.
+ *
+ * 3. A REVIEWER'S WORD outranks the classifier. Where someone has said on the
+ *    audit screen which session a recording is (`transcript_session_overrides`),
+ *    that is the session, the tier is `confirmed`, and the reason names who
+ *    said it and when — it is never presented as something we inferred.
  */
 import 'dotenv/config';
 import { writeFileSync } from 'node:fs';
@@ -195,20 +200,89 @@ async function main() {
     };
   });
 
-  writeFileSync(outPath, JSON.stringify(out, null, 1));
+  // What reviewers have said. The table exists only where the audit screens
+  // have been deployed, so its absence is "nobody could have said anything",
+  // not an error.
+  type OverrideRow = {
+    transcript_id: string;
+    session_no: number | null;
+    note: string | null;
+    set_at: string;
+    set_by: string;
+  };
+  const [{ present }] = (await sql`
+    SELECT to_regclass('public.transcript_session_overrides') IS NOT NULL AS present
+  `) as unknown as { present: boolean }[];
+  const overrideRows = present
+    ? ((await sql`
+        SELECT o.transcript_id, o.session_no, o.note, o.set_at, c.name AS set_by
+        FROM transcript_session_overrides o
+        JOIN coaches c ON c.id = o.set_by
+      `) as unknown as OverrideRow[])
+    : [];
+  const overrides = new Map(overrideRows.map((o) => [o.transcript_id, o]));
 
-  const by = (c: string) => out.filter((o) => o.sessionConfidence === c).length;
-  const withPrep = out.filter((o) => o.prep !== null).length;
-  const withConstraint = out.filter((o) => o.prep?.stated_constraint).length;
-  const withRails = out.filter((o) => o.prep?.guardrails).length;
-  const withFigures = out.filter((o) => o.prep?.figures).length;
+  let setByReviewer = 0;
+  const final = out.map((o) => {
+    const ov = overrides.get(o.transcriptId);
+    if (!ov) return o;
+    setByReviewer += 1;
+    const said =
+      `Set by ${ov.set_by} on ${new Date(ov.set_at).toISOString().slice(0, 10)}` +
+      (ov.note ? ` (“${ov.note}”)` : '') +
+      '.';
+    if (ov.session_no === null) {
+      return {
+        ...o,
+        sessionNo: null,
+        sessionConfidence: 'undetermined' as const,
+        sessionConfidenceReason:
+          `${said} Marked as not a numbered coaching session, so there is no ` +
+          'outline to judge it against and no audit was run.',
+      };
+    }
+    return {
+      ...o,
+      sessionNo: ov.session_no,
+      sessionConfidence: 'confirmed' as const,
+      sessionConfidenceReason:
+        `${said} The session number is the reviewer’s word, not inferred from ` +
+        'the dates or from what was said.',
+    };
+  });
+  const exported = new Set(out.map((o) => o.transcriptId));
+  const elsewhere = overrideRows.filter((o) => !exported.has(o.transcript_id)).length;
 
-  console.log(`${out.length} recordings (first transcript of ${perCeo.length} CEOs) -> ${outPath}`);
+  writeFileSync(outPath, JSON.stringify(final, null, 1));
+
+  const by = (c: string) => final.filter((o) => o.sessionConfidence === c).length;
+  const withPrep = final.filter((o) => o.prep !== null).length;
+  const withConstraint = final.filter((o) => o.prep?.stated_constraint).length;
+  const withRails = final.filter((o) => o.prep?.guardrails).length;
+  const withFigures = final.filter((o) => o.prep?.figures).length;
+
+  console.log(`${final.length} recordings (first transcript of ${perCeo.length} CEOs) -> ${outPath}`);
   console.log(
     `  confirmed ${by('confirmed')} · probable ${by('probable')} · ` +
       `undetermined ${by('undetermined')}`,
   );
-  console.log(`  ${out.filter((o) => o.cueTimes).length} have cue times`);
+  const bySession = new Map<string, number>();
+  for (const o of final) {
+    const k = o.sessionNo === null ? 'none' : String(o.sessionNo);
+    bySession.set(k, (bySession.get(k) ?? 0) + 1);
+  }
+  console.log(
+    `  session set by a reviewer: ${setByReviewer}` +
+      (present ? '' : ' (no overrides table in this database)') +
+      (elsewhere ? ` · ${elsewhere} more set on recordings this export does not include` : ''),
+  );
+  console.log(
+    `  by session: ${[...bySession.entries()]
+      .sort()
+      .map(([k, n]) => `${k === 'none' ? 'not placed' : `S${k}`} ${n}`)
+      .join(' · ')}`,
+  );
+  console.log(`  ${final.filter((o) => o.cueTimes).length} have cue times`);
   console.log(
     `  prep record: ${withPrep} (constraint ${withConstraint}, ` +
       `guardrails ${withRails}, figures ${withFigures})`,

@@ -5,6 +5,7 @@ import { createTRPCRouter, adminProcedure } from '@/server/api/trpc';
 import {
   auditFeedback,
   transcriptAudits,
+  transcriptSessionOverrides,
   transcripts,
   rawInputs,
   rawInputCeos,
@@ -29,6 +30,11 @@ import {
   type EarlierAnswer,
   type StoredAnswer,
 } from '@/lib/audit/feedback-carry';
+import {
+  sessionStanding,
+  type SessionOverride,
+} from '@/lib/audit/session-override';
+import type { db as database } from '@/db';
 import { createHash } from 'node:crypto';
 
 /**
@@ -62,6 +68,31 @@ function unusable(
     };
   }
   return null;
+}
+
+/**
+ * What reviewers have said about which session each recording is, by
+ * transcript. A small table — one row per recording somebody has corrected —
+ * so it is read whole and joined in code.
+ */
+async function loadSessionOverrides(
+  db: typeof database,
+  transcriptId?: string,
+): Promise<Map<string, SessionOverride>> {
+  const base = db
+    .select({
+      transcriptId: transcriptSessionOverrides.transcriptId,
+      sessionNo: transcriptSessionOverrides.sessionNo,
+      note: transcriptSessionOverrides.note,
+      setByName: coaches.name,
+      setAt: transcriptSessionOverrides.setAt,
+    })
+    .from(transcriptSessionOverrides)
+    .innerJoin(coaches, eq(coaches.id, transcriptSessionOverrides.setBy));
+  const rows = await (transcriptId
+    ? base.where(eq(transcriptSessionOverrides.transcriptId, transcriptId))
+    : base);
+  return new Map(rows.map(({ transcriptId: id, ...o }) => [id, o]));
 }
 
 /** Where Zoom keeps the recording, when we were given a link for it. */
@@ -201,6 +232,7 @@ export const auditRouter = createTRPCRouter({
       set.add(r.ceoName);
       names.set(r.transcriptId, set);
     }
+    const overrides = await loadSessionOverrides(ctx.db);
     const seen = new Set<string>();
     return rows
       .filter((r) => {
@@ -208,10 +240,16 @@ export const auditRouter = createTRPCRouter({
         seen.add(r.transcriptId);
         return true;
       })
-      .map((r) => ({
-        ...r,
-        ceoName: [...(names.get(r.transcriptId) ?? [])].sort().join(' & ') || null,
-      }));
+      .map((r) => {
+        const override = overrides.get(r.transcriptId) ?? null;
+        return {
+          ...r,
+          ceoName: [...(names.get(r.transcriptId) ?? [])].sort().join(' & ') || null,
+          /** A reviewer's word on the session, and whether this audit still
+           *  stands against it (see session-override.ts). */
+          session: { override, standing: sessionStanding(r.sessionNo, override) },
+        };
+      });
   }),
 
   /**
@@ -319,8 +357,23 @@ export const auditRouter = createTRPCRouter({
         }),
       }));
 
+      const override =
+        (await loadSessionOverrides(ctx.db, row.audit.transcriptId)).get(
+          row.audit.transcriptId,
+        ) ?? null;
+
       return {
         state: 'ok' as const,
+        /** A reviewer's word on which session this is. When it names another
+         *  session than the audit was run as, the findings below were judged
+         *  against the wrong outline: the screen must not show them as
+         *  verdicts. */
+        session: {
+          auditedAs: typed.sessionNo,
+          noCriteria: typed.noCriteria === true,
+          override,
+          standing: sessionStanding(typed.sessionNo, override),
+        },
         audit: {
           id: row.audit.id,
           sessionNo: typed.sessionNo,
@@ -478,13 +531,22 @@ export const auditRouter = createTRPCRouter({
     const order: string[] = [];
     const coachSessions = new Map<string, number>();
     const versions = new Set<string>();
+    const overrides = await loadSessionOverrides(ctx.db);
     let sessionCount = 0;
     let notPlaced = 0;
     let unreadable = 0;
+    let superseded = 0;
 
-    for (const s of byTranscript.values()) {
+    for (const [transcriptId, s] of byTranscript) {
       if (!isAuditResult(s.result)) { unreadable += 1; continue; }
       const audit: AuditResult = s.result;
+      // A reviewer has said this recording is another session than the audit
+      // was run as. Its findings were judged against the wrong outline, so
+      // they are not counted — as a number of their own, not as "nothing found".
+      if (sessionStanding(audit.sessionNo, overrides.get(transcriptId) ?? null) === 'superseded') {
+        superseded += 1;
+        continue;
+      }
       if (audit.familiesExamined.length === 0) { notPlaced += 1; continue; }
       sessionCount += 1;
       versions.add(s.version);
@@ -536,6 +598,7 @@ export const auditRouter = createTRPCRouter({
       sessionCount,
       notPlaced,
       unreadable,
+      superseded,
       versions: [...versions].sort(),
       coaches: [...coachSessions.entries()]
         .map(([name, sessions]) => ({ name, sessions }))
@@ -552,6 +615,65 @@ export const auditRouter = createTRPCRouter({
         ),
     };
   }),
+
+  /**
+   * Say which session a recording is. One word per recording, the latest:
+   * saying it again replaces it.
+   *
+   * It does not touch the audit. Audits are produced offline, and an audit
+   * records what it was run as; this is read the next time they are
+   * generated. Until then the screens show the audit as superseded if it was
+   * run as another session.
+   *
+   * `sessionNo` null means "not a numbered coaching session".
+   */
+  setSession: adminProcedure
+    .input(
+      z.object({
+        auditId: z.string().uuid(),
+        sessionNo: z.number().int().min(1).max(24).nullable(),
+        note: z.string().max(500).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [audit] = await ctx.db
+        .select({ transcriptId: transcriptAudits.transcriptId })
+        .from(transcriptAudits)
+        .where(eq(transcriptAudits.id, input.auditId))
+        .limit(1);
+      if (!audit) throw new TRPCError({ code: 'NOT_FOUND', message: 'Audit not found.' });
+
+      const note = input.note?.trim() ? input.note.trim() : null;
+      await ctx.db
+        .insert(transcriptSessionOverrides)
+        .values({
+          transcriptId: audit.transcriptId,
+          sessionNo: input.sessionNo,
+          note,
+          setBy: ctx.coach.id,
+        })
+        .onConflictDoUpdate({
+          target: transcriptSessionOverrides.transcriptId,
+          set: { sessionNo: input.sessionNo, note, setBy: ctx.coach.id, setAt: new Date() },
+        });
+      return { ok: true as const };
+    }),
+
+  /** Take the word back: the session is inferred again. */
+  clearSession: adminProcedure
+    .input(z.object({ auditId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [audit] = await ctx.db
+        .select({ transcriptId: transcriptAudits.transcriptId })
+        .from(transcriptAudits)
+        .where(eq(transcriptAudits.id, input.auditId))
+        .limit(1);
+      if (!audit) throw new TRPCError({ code: 'NOT_FOUND', message: 'Audit not found.' });
+      await ctx.db
+        .delete(transcriptSessionOverrides)
+        .where(eq(transcriptSessionOverrides.transcriptId, audit.transcriptId));
+      return { ok: true as const };
+    }),
 
   /**
    * Record what the signed-in reviewer thinks of one finding. One answer per

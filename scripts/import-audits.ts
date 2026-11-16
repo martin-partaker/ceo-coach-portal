@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { neon } from '@neondatabase/serverless';
 import {
+  AUDITED_SESSIONS,
   AUDIT_CONTRACT_VERSION,
   isAuditResult,
   type AuditResult,
@@ -100,7 +101,27 @@ async function main() {
       });
       continue;
     }
-    if (a.sessionConfidence !== 'undetermined' && a.familiesExamined.length === 0) {
+    // A placed session with nothing examined is a bug — unless the audit
+    // says outright that there are no criteria for that session number, and
+    // that is true: the session is known, is not one we audit, and nothing
+    // was judged. Stated, never inferred from the emptiness.
+    if (a.noCriteria === true) {
+      const lie =
+        a.sessionNo === null
+          ? 'has no session number'
+          : AUDITED_SESSIONS.includes(a.sessionNo)
+            ? `is Session ${a.sessionNo}, which does have criteria`
+            : a.findings.length > 0 || a.familiesExamined.length > 0
+              ? 'carries findings or examined families'
+              : null;
+      if (lie) {
+        rejected.push({
+          transcriptId: a.transcriptId,
+          why: `says there are no criteria for its session, but ${lie}`,
+        });
+        continue;
+      }
+    } else if (a.sessionConfidence !== 'undetermined' && a.familiesExamined.length === 0) {
       rejected.push({
         transcriptId: a.transcriptId,
         why: `session ${a.sessionConfidence} but no family was examined`,

@@ -1,11 +1,14 @@
 'use client';
 
+import { useState } from 'react';
+import { keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { ArrowLeft, Info, Loader2 } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Pill, VERDICT_TONE } from './audit-confidence';
+import { OUTLINE_GROUP_LABEL } from '@/lib/audit/contract';
 
 /**
  * The cohort view.
@@ -41,8 +44,18 @@ function Count({ n, tone }: { n: number; tone: Tone }) {
   return <Pill className={VERDICT_TONE[tone].pill}>{n}</Pill>;
 }
 
+const GROUPS = [1, 2, 3, 4] as const;
+
 export function AuditCohortClient() {
-  const { data, isLoading, error } = trpc.audit.cohort.useQuery();
+  // One outline at a time. Sessions judged against different outlines have
+  // different steps; a count across them would add up unlike things.
+  const [group, setGroup] = useState<(typeof GROUPS)[number]>(1);
+  // The previous outline's table stays up while the next one is counted, so
+  // the tabs do not vanish under the pointer.
+  const { data, isLoading, error } = trpc.audit.cohort.useQuery(
+    { group },
+    { placeholderData: keepPreviousData },
+  );
 
   if (isLoading) {
     return (
@@ -52,24 +65,63 @@ export function AuditCohortClient() {
     );
   }
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
-  if (!data || data.sessionCount === 0) {
+  if (!data) {
     return <p className="text-sm text-muted-foreground">No audited sessions yet.</p>;
   }
 
   const n = data.sessionCount;
+  const tabs = (
+    <div className="flex flex-wrap gap-1.5">
+      {GROUPS.map((g) => (
+        <button
+          key={g}
+          type="button"
+          onClick={() => setGroup(g)}
+          aria-pressed={g === group}
+          className={cn(
+            'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors',
+            g === group
+              ? 'border-foreground/40 bg-foreground/10 font-medium'
+              : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+          )}
+        >
+          {OUTLINE_GROUP_LABEL[g]}
+          <span className="tabular-nums text-xs text-muted-foreground">{data.perGroup[g]}</span>
+        </button>
+      ))}
+    </div>
+  );
+  const back = (
+    <Link
+      href="/admin/audit"
+      className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+    >
+      <ArrowLeft className="h-4 w-4" /> All sessions
+    </Link>
+  );
+
+  if (n === 0) {
+    return (
+      <div className="space-y-6">
+        {back}
+        {tabs}
+        <p className="text-sm text-muted-foreground">
+          No audited {OUTLINE_GROUP_LABEL[data.group]} recordings yet.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
-      <Link
-        href="/admin/audit"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="h-4 w-4" /> All sessions
-      </Link>
+      {back}
+      {tabs}
 
       <Card className="gap-0 p-4">
         <p className="text-sm">
-          <span className="font-medium">{n} audited sessions</span>
+          <span className="font-medium">
+            {n} audited {OUTLINE_GROUP_LABEL[data.group]} recordings
+          </span>
           <span className="text-muted-foreground">
             {' · '}criteria {data.versions.join(', ')}
           </span>
@@ -86,7 +138,7 @@ export function AuditCohortClient() {
           <p className="mt-3 flex gap-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
-              {data.notPlaced} more recordings could not be placed as a Session 1 and
+              {data.notPlaced} more recordings could not be placed in the programme and
               were not audited. They are not in any number on this page.
             </span>
           </p>

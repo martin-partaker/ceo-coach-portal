@@ -18,6 +18,7 @@ import {
   FEEDBACK_VERDICTS,
   findingStepKey,
   isAuditResult,
+  outlineGroup,
   resolveEvidence,
   splitSpeaker,
   transcriptLines,
@@ -379,6 +380,7 @@ export const auditRouter = createTRPCRouter({
           sessionNo: typed.sessionNo,
           confidence: typed.sessionConfidence,
           confidenceReason: typed.sessionConfidenceReason,
+          outlineSource: typed.outlineSource ?? null,
           criteriaVersion: typed.criteriaVersion,
           generatedAt: row.audit.generatedAt,
           coachLabel: typed.coachLabel,
@@ -478,7 +480,15 @@ export const auditRouter = createTRPCRouter({
    * sessions that were actually audited are counted; the ones we could not
    * place are reported as a number, never folded into "nothing found".
    */
-  cohort: adminProcedure.query(async ({ ctx }) => {
+  cohort: adminProcedure
+    .input(
+      // Which outline: 1, 2, 3, or 4 for Sessions 4 to 12. One at a time,
+      // always: a step count across sessions judged against different
+      // outlines would add up things that are not the same thing.
+      z.object({ group: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]) })
+        .default({ group: 1 }),
+    )
+    .query(async ({ ctx, input }) => {
     const rows = await ctx.db
       .select({
         auditId: transcriptAudits.id,
@@ -536,6 +546,8 @@ export const auditRouter = createTRPCRouter({
     let notPlaced = 0;
     let unreadable = 0;
     let superseded = 0;
+    /** Audited sessions per outline, for the tabs. */
+    const perGroup: Record<1 | 2 | 3 | 4, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
 
     for (const [transcriptId, s] of byTranscript) {
       if (!isAuditResult(s.result)) { unreadable += 1; continue; }
@@ -548,6 +560,10 @@ export const auditRouter = createTRPCRouter({
         continue;
       }
       if (audit.familiesExamined.length === 0) { notPlaced += 1; continue; }
+      const group = outlineGroup(audit.sessionNo);
+      if (group === null) { notPlaced += 1; continue; }
+      perGroup[group] += 1;
+      if (group !== input.group) continue;
       sessionCount += 1;
       versions.add(s.version);
       const coach =
@@ -595,6 +611,8 @@ export const auditRouter = createTRPCRouter({
     });
 
     return {
+      group: input.group,
+      perGroup,
       sessionCount,
       notPlaced,
       unreadable,

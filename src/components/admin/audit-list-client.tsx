@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { Loader2, Clock, AlertTriangle, Users } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
@@ -7,9 +8,15 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { ConfidenceBadge, CONFIDENCE_TONE } from './audit-confidence';
 import { sessionWords } from '@/lib/audit/session-override';
+import { OUTLINE_GROUP_LABEL, outlineGroup } from '@/lib/audit/contract';
+
+type Filter = 'all' | 1 | 2 | 3 | 4;
 
 export function AuditListClient() {
   const { data, isLoading, error } = trpc.audit.list.useQuery();
+  // Which sessions to show. Starts on Session 1: two hundred cards at once is
+  // a wall, and the first session is where a review usually starts.
+  const [filter, setFilter] = useState<Filter>(1);
 
   if (isLoading) {
     return (
@@ -34,15 +41,40 @@ export function AuditListClient() {
   // "audited" nor "not placed": they are waiting.
   const waiting = data.filter((r) => r.session.standing === 'superseded');
   const settled = data.filter((r) => r.session.standing !== 'superseded');
-  const audited = settled.filter((r) => r.familiesExamined.length > 0);
+  const allAudited = settled.filter((r) => r.familiesExamined.length > 0);
+  const audited =
+    filter === 'all' ? allAudited : allAudited.filter((r) => outlineGroup(r.sessionNo) === filter);
   const notAudited = settled.filter((r) => r.familiesExamined.length === 0);
+  const perGroup = (g: 1 | 2 | 3 | 4) =>
+    allAudited.filter((r) => outlineGroup(r.sessionNo) === g).length;
+  const chip = (value: Filter, label: string, count: number) => (
+    <button
+      key={String(value)}
+      type="button"
+      onClick={() => setFilter(value)}
+      aria-pressed={filter === value}
+      className={cn(
+        'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors',
+        filter === value
+          ? 'border-foreground/40 bg-foreground/10 font-medium'
+          : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {label}
+      <span className="tabular-nums text-xs text-muted-foreground">{count}</span>
+    </button>
+  );
 
   return (
     <div className="space-y-8">
+      <div className="flex flex-wrap gap-1.5">
+        {([1, 2, 3, 4] as const).map((g) => chip(g, OUTLINE_GROUP_LABEL[g], perGroup(g)))}
+        {chip('all', 'All', allAudited.length)}
+      </div>
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium text-muted-foreground">
-            Audited — {audited.length}
+            Audited{filter === 'all' ? '' : `, ${OUTLINE_GROUP_LABEL[filter]}`} — {audited.length}
           </h2>
           {/* The same findings counted across all of these sessions. */}
           <Link

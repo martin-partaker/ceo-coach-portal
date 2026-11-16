@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Loader2, Pencil } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { cn } from '@/lib/utils';
-import { sessionWords, type SessionOverride } from '@/lib/audit/session-override';
+import type { SessionOverride } from '@/lib/audit/session-override';
 
 /**
  * Which session is this recording? — said by the reviewer.
@@ -64,7 +64,8 @@ export function SessionControl({
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         {override ? (
           <span className="text-xs text-muted-foreground">
-            {sessionWords(override.sessionNo)} — set by {override.setByName} on{' '}
+            {/* The badge above already names the session and who set it. */}
+            Set on{' '}
             {new Date(override.setAt).toLocaleDateString('en-GB', {
               day: 'numeric',
               month: 'short',

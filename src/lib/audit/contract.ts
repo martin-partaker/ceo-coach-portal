@@ -98,12 +98,31 @@ export interface AuditFinding {
 }
 
 /**
- * The session numbers there are criteria for. A recording known to be another
- * session is listed, and says so, but is not judged: there is no outline of
- * ours to judge it against. Mirrors `AUDITED_SESSIONS` in
- * `tool/make_audit_json.py`.
+ * The session numbers there are criteria for: every session that has an
+ * outline. Sessions 4 to 12 share one. A recording known to be a session
+ * beyond these is listed, and says so, but is not judged: there is no outline
+ * to judge it against. Mirrors `AUDITED_SESSIONS` in `tool/make_audit_json.py`.
  */
-export const AUDITED_SESSIONS: readonly number[] = [1];
+export const AUDITED_SESSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+/**
+ * The outline a session is judged against, as a group: 1, 2, 3, or 4 for
+ * Sessions 4 to 12, which share one document. Null where there is none. Used
+ * wherever sessions are put side by side — counts across sessions judged
+ * against different outlines would add up things that are not the same thing.
+ */
+export function outlineGroup(sessionNo: number | null | undefined): 1 | 2 | 3 | 4 | null {
+  if (sessionNo === 1 || sessionNo === 2 || sessionNo === 3) return sessionNo;
+  if (typeof sessionNo === 'number' && sessionNo >= 4 && sessionNo <= 12) return 4;
+  return null;
+}
+
+export const OUTLINE_GROUP_LABEL: Record<1 | 2 | 3 | 4, string> = {
+  1: 'Session 1',
+  2: 'Session 2',
+  3: 'Session 3',
+  4: 'Sessions 4–12',
+};
 
 export interface AuditResult {
   contractVersion: typeof AUDIT_CONTRACT_VERSION;
@@ -118,6 +137,13 @@ export interface AuditResult {
    * rejected at import.
    */
   noCriteria?: boolean;
+  /**
+   * The outline document this session was judged against, by its name — e.g.
+   * "Session 2 August 2026". Shown beside the recording's date: the outlines
+   * are dated, most recordings are older than the version we hold, and a
+   * reviewer should see that rather than have to know it.
+   */
+  outlineSource?: string;
   /** Why that confidence, in words, for the screen to show verbatim. */
   sessionConfidenceReason: string;
   /** Identifies the criteria set this run used, so a verdict can be traced. */

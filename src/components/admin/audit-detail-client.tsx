@@ -60,6 +60,45 @@ const WHOLE_SESSION: { family: string; title: string; blurb: string }[] = [
   },
 ];
 
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+  'september', 'october', 'november', 'december'];
+
+/**
+ * "Session 2 August 2026" -> the first day of that month, or null. The
+ * outlines carry their date in their name and nowhere else.
+ */
+function outlineMonth(source: string | null): Date | null {
+  const m = /\b([A-Za-z]+)\s+(20\d\d)\b/.exec(source ?? '');
+  const month = m ? MONTHS.indexOf(m[1].toLowerCase()) : -1;
+  return m && month >= 0 ? new Date(Date.UTC(Number(m[2]), month, 1)) : null;
+}
+
+/**
+ * Which outline the session was judged against, and when it was recorded.
+ * The outlines we hold are dated August and October 2026, and most recordings
+ * are older. Whether an earlier version asked for the same things is not
+ * something this tool knows, so it says what it compared with what.
+ */
+function OutlineLine({ source, recordedAt }: { source: string | null; recordedAt: Date | null }) {
+  if (!source) return null;
+  const rec = recordedAt ? new Date(recordedAt) : null;
+  const dated = outlineMonth(source);
+  const older = rec !== null && dated !== null && rec.getTime() < dated.getTime();
+  return (
+    <p className="mt-2 max-w-3xl text-xs text-muted-foreground">
+      Judged against the outline “{source}”
+      {rec
+        ? `; recorded ${rec.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+        : ''}
+      .
+      {older
+        ? ' The recording is older than this version of the outline: the coach may have ' +
+          'been working from an earlier one.'
+        : ''}
+    </p>
+  );
+}
+
 const BASIS_LABEL: Record<string, string> = {
   source: 'from a ScaleOS document',
   documented: 'named by Lauren and/or Megan',
@@ -212,6 +251,9 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
               {audit.confidenceReason}
             </p>
           )}
+          {showFindings ? (
+            <OutlineLine source={audit.outlineSource} recordedAt={transcript.recordedAt} />
+          ) : null}
           <SessionControl
             // Remount when the stored word changes, so the form starts from it.
             key={`${session.override?.sessionNo ?? 'auto'}|${session.override?.note ?? ''}`}
@@ -363,7 +405,17 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
               const items = loose.filter((f) => f.family === family);
               return (
                 <section key={family} className="space-y-3">
-                  <SectionHead title={title} blurb={blurb} />
+                  <SectionHead
+                    title={title}
+                    blurb={
+                      // The preparation check reads Session 1's pre-work. For
+                      // any other session it has not been built, and the
+                      // heading must not describe documents that do not apply.
+                      family === 'D' && audit.sessionNo !== 1
+                        ? 'Against what the CEO filed before the session. Built for Session 1 only so far.'
+                        : blurb
+                    }
+                  />
                   {!examined.has(family) ? (
                     <NotExamined />
                   ) : items.length === 0 ? (

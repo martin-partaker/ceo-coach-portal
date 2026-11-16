@@ -19,8 +19,8 @@ export default async function AuditCohortPage() {
         </div>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
           The same findings as the session reviews, counted across every audited
-          Session 1. What shows up on most sessions is about the programme or the
-          training, not about one coach.
+          recording of one session at a time. What shows up on most sessions is
+          about the programme or the training, not about one coach.
         </p>
       </div>
 

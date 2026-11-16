@@ -116,6 +116,8 @@ const COHORT_LABEL: Record<string, string> = {
   'read.not_run': 'Business reality, order and perspective: read by a model',
   'conduct.outside_engagement': 'No work with the CEO outside the programme',
   'conduct.own_services': 'No offering of the coach’s own services',
+  'conduct.confidential': 'No confidential information about another client shared',
+  'prep.journal': 'The coach uses the CEO’s Momentum Journal',
 };
 
 const feedbackTarget = z.object({
@@ -393,6 +395,7 @@ export const auditRouter = createTRPCRouter({
           outlineSource: typed.outlineSource ?? null,
           predatesOutline: predatesOutline(typed, row.recordedAt),
           stepReading: typed.stepReading ?? null,
+          sessionReading: typed.sessionReading ?? null,
           criteriaVersion: typed.criteriaVersion,
           generatedAt: row.audit.generatedAt,
           coachLabel: typed.coachLabel,

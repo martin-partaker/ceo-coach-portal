@@ -195,14 +195,26 @@ export interface AuditResult {
    */
   stepReading?: string | null;
   /**
+   * Which model read the session as a whole — five Coaching Standards,
+   * confidentiality, and the CEO's Momentum Journal — and with which prompt.
+   * Null or absent when that reading has not been made: then the Coaching
+   * Standards and Preparation are not in `familiesExamined` for Sessions 2 to
+   * 12, and confidentiality says it was not checked.
+   */
+  sessionReading?: string | null;
+  /**
    * Whether the session was recorded before the month its outline is dated.
    * Null or absent when either date is unknown — unknown is not "no".
    *
    * It decides how a missing step may be read. Of the Session 2s read against
-   * the August 2026 outline, "Their Guardrails" was found in 1 of the 25
-   * recorded before August and in 5 of the 5 recorded since: a step missing
-   * from a session held before the outline asked for it says nothing about
-   * the coach. Read it through `predatesOutline()` below, never directly.
+   * the August 2026 outline, "Their Guardrails" was found, at least in part,
+   * in 1 of the 25 recorded before August and in 5 of the 5 recorded since
+   * (fully in 1): a step missing from a session held before the outline asked
+   * for it may say nothing about the coach. That comparison is weaker than it
+   * looks — the five were coached by two coaches who have no earlier session,
+   * so there the date and the coach cannot be told apart — which is a reason
+   * to show the split, not to conclude from it. Read it through
+   * `predatesOutline()` below, never directly.
    */
   predatesOutline?: boolean | null;
   /** Why that confidence, in words, for the screen to show verbatim. */

@@ -71,12 +71,15 @@ function OutlineLine({
   recordedAt,
   older,
   stepReading,
+  sessionReading,
 }: {
   source: string | null;
   recordedAt: Date | null;
   /** Recorded before the month the outline is dated; null = unknown. */
   older: boolean | null;
   stepReading: string | null;
+  /** Which model read the standards, confidentiality and the journal. */
+  sessionReading: string | null;
 }) {
   if (!source) return null;
   const rec = recordedAt ? new Date(recordedAt) : null;
@@ -95,6 +98,10 @@ function OutlineLine({
       {stepReading
         ? ` The outline’s steps were read by an AI model (${stepReading}); every quote it ` +
           'points at was checked against the transcript.'
+        : ''}
+      {sessionReading
+        ? ` The Coaching Standards, confidentiality and the use of the Momentum Journal were ` +
+          `read by an AI model too (${sessionReading}), with the same check on every quote.`
         : ''}
     </p>
   );
@@ -258,6 +265,7 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
               recordedAt={transcript.recordedAt}
               older={audit.predatesOutline}
               stepReading={audit.stepReading}
+              sessionReading={audit.sessionReading}
             />
           ) : null}
           <SessionControl
@@ -414,12 +422,21 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
                   <SectionHead
                     title={title}
                     blurb={
-                      // The preparation check reads Session 1's pre-work. For
-                      // any other session it has not been built, and the
-                      // heading must not describe documents that do not apply.
-                      family === 'D' && audit.sessionNo !== 1
-                        ? 'Against what the CEO filed before the session. Built for Session 1 only so far.'
-                        : blurb
+                      // The headings describe what was read, and that differs:
+                      // Session 1 is judged by rules against the Intake Survey
+                      // and the worksheet; later sessions by a model reading,
+                      // against the standards and the Momentum Journal.
+                      audit.sessionNo === 1
+                        ? blurb
+                        : family === 'D'
+                          ? 'Against the Momentum Journal entries the CEO filed between the ' +
+                            'previous session and this one.'
+                          : // Said here, once, rather than as a "not assessed" line
+                            // on every audit: it is the same for every session.
+                            'Standards 2, 3, 4, 5 and 8, read by an AI model against the ' +
+                            'document’s own words. Standard 1 is read under Preparation, for ' +
+                            'the Momentum Journal. Standards 6, 7 and 9 are not judged here: ' +
+                            'what they describe is not something a transcript shows reliably.'
                     }
                   />
                   {!examined.has(family) ? (
@@ -631,9 +648,10 @@ function ConductChecklist({ items }: { items: FindingShape[] }) {
         return (
           <div key={f.id} className="p-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <p className="flex items-start gap-2 font-medium">
+              <p className="flex flex-wrap items-start gap-2 font-medium">
                 <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', iconColor)} />
                 {f.name}
+                <ReadByModel f={f} />
               </p>
               <Pill className={tone.pill}>
                 {f.notAssessed ? 'not assessed' : f.verdict === 'ok' ? 'nothing found' : 'to verify'}

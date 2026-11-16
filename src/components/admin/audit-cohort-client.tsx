@@ -189,7 +189,9 @@ export function AuditCohortClient() {
                 ? 'They are left out of the counts below.'
                 : 'A step not found in those may not have been asked of the coach yet: ' +
                   `compare “before” and “since” ${dated} before reading a count as a ` +
-                  'finding about coaching.'}
+                  'finding about coaching. Check who coached each group too: where ' +
+                  'they are not the same coaches, the date and the coach cannot be ' +
+                  'told apart.'}
             </span>
           </p>
         ) : null}
@@ -238,8 +240,9 @@ export function AuditCohortClient() {
           <h2 className="text-lg font-semibold">Outline steps</h2>
           <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">
             In how many sessions each step of the outline was found. “To review”
-            means found weakly or not found — by a list of phrasings, so a step done
-            in other words can be missed.
+            means found only in part, or not found. A step marked “AI reading” was
+            judged by a model reading the whole session; open a row, then a
+            session, to read the passages it points at.
           </p>
         </div>
         <CohortTable rows={data.steps as Row[]} total={n} showNotRaised={false} />

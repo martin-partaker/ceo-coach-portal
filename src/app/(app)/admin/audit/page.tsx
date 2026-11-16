@@ -20,7 +20,7 @@ export default async function AuditPage() {
           </h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Session 1 quality audits. Each row says how sure we are which session
+          Session quality audits. Each row says how sure we are which session
           it is — sessions we cannot place are listed with the reason rather
           than hidden.
         </p>

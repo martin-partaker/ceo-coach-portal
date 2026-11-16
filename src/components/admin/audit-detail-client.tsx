@@ -79,7 +79,15 @@ function outlineMonth(source: string | null): Date | null {
  * are older. Whether an earlier version asked for the same things is not
  * something this tool knows, so it says what it compared with what.
  */
-function OutlineLine({ source, recordedAt }: { source: string | null; recordedAt: Date | null }) {
+function OutlineLine({
+  source,
+  recordedAt,
+  stepReading,
+}: {
+  source: string | null;
+  recordedAt: Date | null;
+  stepReading: string | null;
+}) {
   if (!source) return null;
   const rec = recordedAt ? new Date(recordedAt) : null;
   const dated = outlineMonth(source);
@@ -94,6 +102,10 @@ function OutlineLine({ source, recordedAt }: { source: string | null; recordedAt
       {older
         ? ' The recording is older than this version of the outline: the coach may have ' +
           'been working from an earlier one.'
+        : ''}
+      {stepReading
+        ? ` The outline’s steps were read by an AI model (${stepReading}); every quote it ` +
+          'points at was checked against the transcript.'
         : ''}
     </p>
   );
@@ -252,7 +264,11 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
             </p>
           )}
           {showFindings ? (
-            <OutlineLine source={audit.outlineSource} recordedAt={transcript.recordedAt} />
+            <OutlineLine
+              source={audit.outlineSource}
+              recordedAt={transcript.recordedAt}
+              stepReading={audit.stepReading}
+            />
           ) : null}
           <SessionControl
             // Remount when the stored word changes, so the form starts from it.

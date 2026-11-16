@@ -381,6 +381,7 @@ export const auditRouter = createTRPCRouter({
           confidence: typed.sessionConfidence,
           confidenceReason: typed.sessionConfidenceReason,
           outlineSource: typed.outlineSource ?? null,
+          stepReading: typed.stepReading ?? null,
           criteriaVersion: typed.criteriaVersion,
           generatedAt: row.audit.generatedAt,
           coachLabel: typed.coachLabel,

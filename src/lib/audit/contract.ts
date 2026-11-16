@@ -144,6 +144,13 @@ export interface AuditResult {
    * reviewer should see that rather than have to know it.
    */
   outlineSource?: string;
+  /**
+   * Which model read the outline's steps, and with which prompt — e.g.
+   * "claude-opus-4-7, prompt outline-steps-1". Null or absent when the steps
+   * on this audit do not come from a reading. Said once here rather than on
+   * every step: each step is already marked as an AI reading.
+   */
+  stepReading?: string | null;
   /** Why that confidence, in words, for the screen to show verbatim. */
   sessionConfidenceReason: string;
   /** Identifies the criteria set this run used, so a verdict can be traced. */

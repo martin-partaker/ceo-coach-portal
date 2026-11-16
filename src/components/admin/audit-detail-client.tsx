@@ -60,19 +60,6 @@ const WHOLE_SESSION: { family: string; title: string; blurb: string }[] = [
   },
 ];
 
-const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
-  'september', 'october', 'november', 'december'];
-
-/**
- * "Session 2 August 2026" -> the first day of that month, or null. The
- * outlines carry their date in their name and nowhere else.
- */
-function outlineMonth(source: string | null): Date | null {
-  const m = /\b([A-Za-z]+)\s+(20\d\d)\b/.exec(source ?? '');
-  const month = m ? MONTHS.indexOf(m[1].toLowerCase()) : -1;
-  return m && month >= 0 ? new Date(Date.UTC(Number(m[2]), month, 1)) : null;
-}
-
 /**
  * Which outline the session was judged against, and when it was recorded.
  * The outlines we hold are dated August and October 2026, and most recordings
@@ -82,16 +69,17 @@ function outlineMonth(source: string | null): Date | null {
 function OutlineLine({
   source,
   recordedAt,
+  older,
   stepReading,
 }: {
   source: string | null;
   recordedAt: Date | null;
+  /** Recorded before the month the outline is dated; null = unknown. */
+  older: boolean | null;
   stepReading: string | null;
 }) {
   if (!source) return null;
   const rec = recordedAt ? new Date(recordedAt) : null;
-  const dated = outlineMonth(source);
-  const older = rec !== null && dated !== null && rec.getTime() < dated.getTime();
   return (
     <p className="mt-2 max-w-3xl text-xs text-muted-foreground">
       Judged against the outline “{source}”
@@ -99,9 +87,10 @@ function OutlineLine({
         ? `; recorded ${rec.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
         : ''}
       .
-      {older
+      {older === true
         ? ' The recording is older than this version of the outline: the coach may have ' +
-          'been working from an earlier one.'
+          'been working from an earlier one, so a step marked “not found” here may not ' +
+          'have been asked of them yet.'
         : ''}
       {stepReading
         ? ` The outline’s steps were read by an AI model (${stepReading}); every quote it ` +
@@ -267,6 +256,7 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
             <OutlineLine
               source={audit.outlineSource}
               recordedAt={transcript.recordedAt}
+              older={audit.predatesOutline}
               stepReading={audit.stepReading}
             />
           ) : null}

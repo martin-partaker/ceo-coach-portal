@@ -19,6 +19,8 @@ import {
   findingStepKey,
   isAuditResult,
   outlineGroup,
+  outlineMonthLabel,
+  predatesOutline,
   resolveEvidence,
   splitSpeaker,
   transcriptLines,
@@ -195,6 +197,8 @@ export const auditRouter = createTRPCRouter({
         )`,
         title: transcripts.title,
         recordedAt: transcripts.recordedAt,
+        outlineSource: sql<string | null>`${transcriptAudits.resultJson} ->> 'outlineSource'`,
+        predatesStored: sql<boolean | null>`(${transcriptAudits.resultJson} ->> 'predatesOutline')::boolean`,
         hasCueTimes: sql<boolean>`${transcripts.cueTimes} IS NOT NULL`,
         ceoName: ceos.name,
         /**
@@ -243,8 +247,14 @@ export const auditRouter = createTRPCRouter({
       })
       .map((r) => {
         const override = overrides.get(r.transcriptId) ?? null;
+        const { predatesStored, ...rest } = r;
         return {
-          ...r,
+          ...rest,
+          /** Recorded before the month its outline is dated; null = unknown. */
+          predatesOutline: predatesOutline(
+            { predatesOutline: predatesStored, outlineSource: r.outlineSource },
+            r.recordedAt,
+          ),
           ceoName: [...(names.get(r.transcriptId) ?? [])].sort().join(' & ') || null,
           /** A reviewer's word on the session, and whether this audit still
            *  stands against it (see session-override.ts). */
@@ -381,6 +391,7 @@ export const auditRouter = createTRPCRouter({
           confidence: typed.sessionConfidence,
           confidenceReason: typed.sessionConfidenceReason,
           outlineSource: typed.outlineSource ?? null,
+          predatesOutline: predatesOutline(typed, row.recordedAt),
           stepReading: typed.stepReading ?? null,
           criteriaVersion: typed.criteriaVersion,
           generatedAt: row.audit.generatedAt,
@@ -486,8 +497,14 @@ export const auditRouter = createTRPCRouter({
       // Which outline: 1, 2, 3, or 4 for Sessions 4 to 12. One at a time,
       // always: a step count across sessions judged against different
       // outlines would add up things that are not the same thing.
-      z.object({ group: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]) })
-        .default({ group: 1 }),
+      // And which recordings: all, or only those recorded before / since the
+      // month the outline is dated. The outlines are from August and October
+      // 2026 and most recordings are older; a step missing before the outline
+      // asked for it is not the same fact as one missing after.
+      z.object({
+        group: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+        period: z.enum(['all', 'before', 'since']).default('all'),
+      }).default({ group: 1, period: 'all' }),
     )
     .query(async ({ ctx, input }) => {
     const rows = await ctx.db
@@ -496,6 +513,7 @@ export const auditRouter = createTRPCRouter({
         transcriptId: transcriptAudits.transcriptId,
         criteriaVersion: transcriptAudits.criteriaVersion,
         resultJson: transcriptAudits.resultJson,
+        recordedAt: transcripts.recordedAt,
         ceoName: ceos.name,
         currentCoach: coaches.name,
       })
@@ -518,13 +536,14 @@ export const auditRouter = createTRPCRouter({
     // A recording coached with two partners arrives as two rows.
     const byTranscript = new Map<
       string,
-      { auditId: string; version: string; result: unknown; ceos: Set<string>; currentCoach: string | null }
+      { auditId: string; version: string; result: unknown; recordedAt: Date | null;
+        ceos: Set<string>; currentCoach: string | null }
     >();
     for (const r of rows) {
       const s =
         byTranscript.get(r.transcriptId) ??
         { auditId: r.auditId, version: r.criteriaVersion, result: r.resultJson,
-          ceos: new Set<string>(), currentCoach: r.currentCoach };
+          recordedAt: r.recordedAt, ceos: new Set<string>(), currentCoach: r.currentCoach };
       if (r.ceoName) s.ceos.add(r.ceoName);
       byTranscript.set(r.transcriptId, s);
     }
@@ -549,6 +568,10 @@ export const auditRouter = createTRPCRouter({
     let superseded = 0;
     /** Audited sessions per outline, for the tabs. */
     const perGroup: Record<1 | 2 | 3 | 4, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    /** This outline's audited sessions by when they were recorded. `unknown`
+     *  has no date to compare and is in "all" only. */
+    const perPeriod = { before: 0, since: 0, unknown: 0 };
+    const outlineNames = new Map<string, number>();
 
     for (const [transcriptId, s] of byTranscript) {
       if (!isAuditResult(s.result)) { unreadable += 1; continue; }
@@ -565,6 +588,13 @@ export const auditRouter = createTRPCRouter({
       if (group === null) { notPlaced += 1; continue; }
       perGroup[group] += 1;
       if (group !== input.group) continue;
+      if (audit.outlineSource) {
+        outlineNames.set(audit.outlineSource, (outlineNames.get(audit.outlineSource) ?? 0) + 1);
+      }
+      const older = predatesOutline(audit, s.recordedAt);
+      perPeriod[older === null ? 'unknown' : older ? 'before' : 'since'] += 1;
+      if (input.period === 'before' && older !== true) continue;
+      if (input.period === 'since' && older !== false) continue;
       sessionCount += 1;
       versions.add(s.version);
       const coach =
@@ -611,9 +641,14 @@ export const auditRouter = createTRPCRouter({
       };
     });
 
+    const outlineSource = commonest(outlineNames);
     return {
       group: input.group,
+      period: input.period,
       perGroup,
+      perPeriod,
+      /** The outline these were judged against, and the month in its name. */
+      outline: { source: outlineSource, dated: outlineMonthLabel(outlineSource) },
       sessionCount,
       notPlaced,
       unreadable,

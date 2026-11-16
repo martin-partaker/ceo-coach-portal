@@ -6,6 +6,8 @@
 #   bash scripts/regenerate-audits.sh --apply      # ...and write the audits
 #   bash scripts/regenerate-audits.sh --read       # also have the model read what it has not read yet
 #   bash scripts/regenerate-audits.sh --read=3     # ...only Session 3 (1, 2, 3, or 4 for Sessions 4-12; commas allowed)
+#   bash scripts/regenerate-audits.sh --read=4 --since=2026-10
+#                                                  # ...only those recorded in or after that month
 #
 # Run it after a reviewer has set or corrected a session on the audit screen,
 # or after a criteria change. The steps:
@@ -34,15 +36,25 @@ WORK="$(dirname "$TOOL")"
 APPLY=""
 READ=""
 SESSIONS=""
+SINCE=""
 for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
     --read) READ=1 ;;
     --read=*) READ=1; SESSIONS="${arg#--read=}" ;;
-    *) echo "unknown option: $arg (use --apply, --read, --read=3)" >&2; exit 2 ;;
+    --since=*) SINCE="${arg#--since=}" ;;
+    *) echo "unknown option: $arg (use --apply, --read, --read=3, --since=2026-10)" >&2; exit 2 ;;
   esac
 done
 
+case "$SESSIONS" in
+  *[!0-9,]*) echo "--read takes session numbers, like --read=3 or --read=2,3" >&2; exit 2 ;;
+esac
+case "$SINCE" in
+  ""|20[0-9][0-9]-[0-1][0-9]) ;;
+  *) echo "--since takes a month, like --since=2026-10" >&2; exit 2 ;;
+esac
+[ -z "$SINCE" ] || [ -n "$READ" ] || { echo "--since only narrows a reading: use it with --read" >&2; exit 2; }
 [ -f .env.staging ] || { echo ".env.staging not found in $(pwd)" >&2; exit 1; }
 [ -f "$TOOL/make_audit_json.py" ] || { echo "evaluators not found in $TOOL" >&2; exit 1; }
 
@@ -60,13 +72,14 @@ echo "== 2/5  place the sessions"
 
 echo
 if [ -n "$READ" ]; then
-  echo "== 3/5  model reading of what has not been read yet${SESSIONS:+ (sessions: $SESSIONS)}"
+  echo "== 3/5  model reading of what has not been read yet${SESSIONS:+ (sessions: $SESSIONS)}${SINCE:+ (recorded since $SINCE)}"
   # No arrays: macOS ships bash 3.2, where an empty array under `set -u` is an error.
-  if [ -n "$SESSIONS" ]; then
-    (cd "$TOOL" && python3 model_read_outline.py --in ../candidates.json --out ../model_readings_outline.json --sessions "$SESSIONS")
-  else
-    (cd "$TOOL" && python3 model_read_outline.py --in ../candidates.json --out ../model_readings_outline.json)
-  fi
+  # Unquoted on purpose: both are checked above to hold no spaces.
+  OUTLINE_ARGS=""
+  [ -n "$SESSIONS" ] && OUTLINE_ARGS="$OUTLINE_ARGS --sessions $SESSIONS"
+  [ -n "$SINCE" ] && OUTLINE_ARGS="$OUTLINE_ARGS --since $SINCE"
+  # shellcheck disable=SC2086
+  (cd "$TOOL" && python3 model_read_outline.py --in ../candidates.json --out ../model_readings_outline.json $OUTLINE_ARGS)
   case ",${SESSIONS:-1}," in
     *,1,*) (cd "$TOOL" && python3 model_read.py --in ../candidates.json --out ../model_readings.json) ;;
   esac

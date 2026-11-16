@@ -124,6 +124,49 @@ export const OUTLINE_GROUP_LABEL: Record<1 | 2 | 3 | 4, string> = {
   4: 'Sessions 4–12',
 };
 
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+  'september', 'october', 'november', 'december'];
+
+/**
+ * "Session 2 August 2026" -> the first day of that month (UTC), or null. The
+ * outlines carry their date in their name and nowhere else.
+ *
+ * The month and the year are looked for separately: one outline is called
+ * "Sessions 4-12 October Final 2026", and reading "a word, then a year" found
+ * "Final 2026" there and so no date at all.
+ */
+export function outlineMonth(source: string | null | undefined): Date | null {
+  const words = (source ?? '').toLowerCase().split(/[^a-z0-9]+/);
+  const month = MONTHS.findIndex((m) => words.includes(m));
+  const year = words.find((w) => /^20\d\d$/.test(w));
+  return month >= 0 && year ? new Date(Date.UTC(Number(year), month, 1)) : null;
+}
+
+/** "August 2026", for a sentence. */
+export function outlineMonthLabel(source: string | null | undefined): string | null {
+  const d = outlineMonth(source);
+  return d
+    ? d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    : null;
+}
+
+/**
+ * Was this session recorded before its outline is dated? The evaluators' own
+ * answer when the audit carries one; otherwise the same comparison made here
+ * (month of the recording, in UTC, against the month in the outline's name),
+ * so audits written before the field existed are split the same way.
+ */
+export function predatesOutline(
+  audit: { predatesOutline?: boolean | null; outlineSource?: string | null },
+  recordedAt: Date | string | null | undefined,
+): boolean | null {
+  if (typeof audit.predatesOutline === 'boolean') return audit.predatesOutline;
+  const dated = outlineMonth(audit.outlineSource);
+  if (!dated || !recordedAt) return null;
+  const rec = new Date(recordedAt);
+  return Number.isNaN(rec.getTime()) ? null : rec.getTime() < dated.getTime();
+}
+
 export interface AuditResult {
   contractVersion: typeof AUDIT_CONTRACT_VERSION;
   transcriptId: string;
@@ -151,6 +194,17 @@ export interface AuditResult {
    * every step: each step is already marked as an AI reading.
    */
   stepReading?: string | null;
+  /**
+   * Whether the session was recorded before the month its outline is dated.
+   * Null or absent when either date is unknown — unknown is not "no".
+   *
+   * It decides how a missing step may be read. Of the Session 2s read against
+   * the August 2026 outline, "Their Guardrails" was found in 1 of the 25
+   * recorded before August and in 5 of the 5 recorded since: a step missing
+   * from a session held before the outline asked for it says nothing about
+   * the coach. Read it through `predatesOutline()` below, never directly.
+   */
+  predatesOutline?: boolean | null;
   /** Why that confidence, in words, for the screen to show verbatim. */
   sessionConfidenceReason: string;
   /** Identifies the criteria set this run used, so a verdict can be traced. */

@@ -11,12 +11,17 @@ import { sessionWords } from '@/lib/audit/session-override';
 import { OUTLINE_GROUP_LABEL, outlineGroup } from '@/lib/audit/contract';
 
 type Filter = 'all' | 1 | 2 | 3 | 4;
+type Period = 'all' | 'before' | 'since';
 
 export function AuditListClient() {
   const { data, isLoading, error } = trpc.audit.list.useQuery();
   // Which sessions to show. Starts on Session 1: two hundred cards at once is
   // a wall, and the first session is where a review usually starts.
   const [filter, setFilter] = useState<Filter>(1);
+  // Recorded before or since the month the outline is dated. Most recordings
+  // are older than the outline they are judged against, and a step missing
+  // from those may not have been asked of the coach yet.
+  const [period, setPeriod] = useState<Period>('all');
 
   if (isLoading) {
     return (
@@ -42,8 +47,11 @@ export function AuditListClient() {
   const waiting = data.filter((r) => r.session.standing === 'superseded');
   const settled = data.filter((r) => r.session.standing !== 'superseded');
   const allAudited = settled.filter((r) => r.familiesExamined.length > 0);
-  const audited =
+  const inFilter =
     filter === 'all' ? allAudited : allAudited.filter((r) => outlineGroup(r.sessionNo) === filter);
+  const before = inFilter.filter((r) => r.predatesOutline === true);
+  const since = inFilter.filter((r) => r.predatesOutline === false);
+  const audited = period === 'before' ? before : period === 'since' ? since : inFilter;
   const notAudited = settled.filter((r) => r.familiesExamined.length === 0);
   const perGroup = (g: 1 | 2 | 3 | 4) =>
     allAudited.filter((r) => outlineGroup(r.sessionNo) === g).length;
@@ -71,6 +79,33 @@ export function AuditListClient() {
         {([1, 2, 3, 4] as const).map((g) => chip(g, OUTLINE_GROUP_LABEL[g], perGroup(g)))}
         {chip('all', 'All', allAudited.length)}
       </div>
+      {before.length + since.length > 0 ? (
+        <div className="-mt-5 flex flex-wrap items-center gap-1.5">
+          {(
+            [
+              ['all', 'Any date', inFilter.length],
+              ['before', 'Recorded before the outline', before.length],
+              ['since', 'Recorded since the outline', since.length],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setPeriod(value)}
+              aria-pressed={period === value}
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors',
+                period === value
+                  ? 'border-foreground/40 bg-foreground/10 font-medium'
+                  : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {label}
+              <span className="tabular-nums text-muted-foreground">{count}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium text-muted-foreground">
@@ -110,6 +145,7 @@ export function AuditListClient() {
                       {r.recordedAt
                         ? ` · ${new Date(r.recordedAt).toLocaleDateString()}`
                         : ''}
+                      {r.predatesOutline === true ? ' · older than the outline' : ''}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

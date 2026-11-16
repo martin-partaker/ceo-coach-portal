@@ -45,15 +45,20 @@ function Count({ n, tone }: { n: number; tone: Tone }) {
 }
 
 const GROUPS = [1, 2, 3, 4] as const;
+type Period = 'all' | 'before' | 'since';
 
 export function AuditCohortClient() {
   // One outline at a time. Sessions judged against different outlines have
   // different steps; a count across them would add up unlike things.
   const [group, setGroup] = useState<(typeof GROUPS)[number]>(1);
+  // All recordings, or only those recorded before / since the month the
+  // outline is dated. Kept when the outline changes: someone comparing
+  // "since" across sessions should not have to set it four times.
+  const [period, setPeriod] = useState<Period>('all');
   // The previous outline's table stays up while the next one is counted, so
   // the tabs do not vanish under the pointer.
   const { data, isLoading, error } = trpc.audit.cohort.useQuery(
-    { group },
+    { group, period },
     { placeholderData: keepPreviousData },
   );
 
@@ -91,6 +96,42 @@ export function AuditCohortClient() {
       ))}
     </div>
   );
+  // Offered only when there is a date to split on.
+  const dated = data.outline.dated;
+  const periods =
+    dated && data.perPeriod.before + data.perPeriod.since > 0 ? (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {(
+          [
+            ['all', 'All recordings', data.perGroup[data.group]],
+            ['before', `Recorded before ${dated}`, data.perPeriod.before],
+            ['since', `Recorded since ${dated}`, data.perPeriod.since],
+          ] as const
+        ).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setPeriod(value)}
+            aria-pressed={period === value}
+            className={cn(
+              'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors',
+              period === value
+                ? 'border-foreground/40 bg-foreground/10 font-medium'
+                : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+            )}
+          >
+            {label}
+            <span className="tabular-nums text-muted-foreground">{count}</span>
+          </button>
+        ))}
+      </div>
+    ) : null;
+  const periodWords =
+    data.period === 'before' && dated
+      ? `, recorded before ${dated}`
+      : data.period === 'since' && dated
+        ? `, recorded since ${dated}`
+        : '';
   const back = (
     <Link
       href="/admin/audit"
@@ -105,8 +146,9 @@ export function AuditCohortClient() {
       <div className="space-y-6">
         {back}
         {tabs}
+        {periods}
         <p className="text-sm text-muted-foreground">
-          No audited {OUTLINE_GROUP_LABEL[data.group]} recordings yet.
+          No audited {OUTLINE_GROUP_LABEL[data.group]} recordings{periodWords || ' yet'}.
         </p>
       </div>
     );
@@ -116,11 +158,13 @@ export function AuditCohortClient() {
     <div className="space-y-8">
       {back}
       {tabs}
+      {periods}
 
       <Card className="gap-0 p-4">
         <p className="text-sm">
           <span className="font-medium">
-            {n} audited {OUTLINE_GROUP_LABEL[data.group]} recordings
+            {n} audited {OUTLINE_GROUP_LABEL[data.group]} recording{n === 1 ? '' : 's'}
+            {periodWords}
           </span>
           <span className="text-muted-foreground">
             {' · '}criteria {data.versions.join(', ')}
@@ -133,6 +177,22 @@ export function AuditCohortClient() {
             </span>
           ))}
         </p>
+        {/* The one thing that most changes how a "not found" should be read. */}
+        {dated && data.perPeriod.before > 0 ? (
+          <p className="mt-3 flex gap-2 text-xs text-amber-700 dark:text-amber-300">
+            <Info className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>
+              {data.perPeriod.before} of the {data.perGroup[data.group]}{' '}
+              {OUTLINE_GROUP_LABEL[data.group]} recordings are older than the outline
+              they are judged against (“{data.outline.source}”).{' '}
+              {data.period === 'since'
+                ? 'They are left out of the counts below.'
+                : 'A step not found in those may not have been asked of the coach yet: ' +
+                  `compare “before” and “since” ${dated} before reading a count as a ` +
+                  'finding about coaching.'}
+            </span>
+          </p>
+        ) : null}
         {/* Never folded into the counts below: these were not looked at. */}
         {data.notPlaced > 0 ? (
           <p className="mt-3 flex gap-2 text-xs text-muted-foreground">

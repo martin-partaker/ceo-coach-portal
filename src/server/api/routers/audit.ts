@@ -37,6 +37,7 @@ import {
   sessionStanding,
   type SessionOverride,
 } from '@/lib/audit/session-override';
+import { firstBatch } from '@/lib/audit/first-batch';
 import type { db as database } from '@/db';
 import { createHash } from 'node:crypto';
 
@@ -202,6 +203,10 @@ export const auditRouter = createTRPCRouter({
         outlineSource: sql<string | null>`${transcriptAudits.resultJson} ->> 'outlineSource'`,
         predatesStored: sql<boolean | null>`(${transcriptAudits.resultJson} ->> 'predatesOutline')::boolean`,
         hasCueTimes: sql<boolean>`${transcripts.cueTimes} IS NOT NULL`,
+        /** Both model readings are on this audit: the outline's steps, and
+         *  the session as a whole (standards, journal, confidentiality). */
+        fullyRead: sql<boolean>`(${transcriptAudits.resultJson} ->> 'stepReading') IS NOT NULL
+          AND (${transcriptAudits.resultJson} ->> 'sessionReading') IS NOT NULL`,
         ceoName: ceos.name,
         /**
          * Who coached THIS session, read from the transcript's own speaker
@@ -241,7 +246,7 @@ export const auditRouter = createTRPCRouter({
     }
     const overrides = await loadSessionOverrides(ctx.db);
     const seen = new Set<string>();
-    return rows
+    const listed = rows
       .filter((r) => {
         if (seen.has(r.transcriptId)) return false;
         seen.add(r.transcriptId);
@@ -263,6 +268,29 @@ export const auditRouter = createTRPCRouter({
           session: { override, standing: sessionStanding(r.sessionNo, override) },
         };
       });
+    // The dozen the list opens on: recent, and spread across session types
+    // and coaches (see first-batch.ts). Only audits that stand and that
+    // carry both readings can be in it.
+    const batch = firstBatch(
+      listed
+        .filter(
+          (r) =>
+            r.fullyRead && r.familiesExamined.length > 0 && r.session.standing !== 'superseded',
+        )
+        .map((r) => ({
+          id: r.auditId,
+          sessionNo: r.sessionNo,
+          coach: r.coachName,
+          ceo: r.ceoName,
+          recordedAt: r.recordedAt,
+        })),
+    );
+    const rank = new Map(batch.map((id, i) => [id, i]));
+    return listed.map((r) => ({
+      ...r,
+      /** Position in the first batch, or null when the audit is not in it. */
+      firstBatchRank: rank.get(r.auditId) ?? null,
+    }));
   }),
 
   /**

@@ -10,14 +10,15 @@ import { ConfidenceBadge, CONFIDENCE_TONE } from './audit-confidence';
 import { sessionWords } from '@/lib/audit/session-override';
 import { OUTLINE_GROUP_LABEL, outlineGroup } from '@/lib/audit/contract';
 
-type Filter = 'all' | 1 | 2 | 3 | 4;
+type Filter = 'start' | 'all' | 1 | 2 | 3 | 4;
 type Period = 'all' | 'before' | 'since';
 
 export function AuditListClient() {
   const { data, isLoading, error } = trpc.audit.list.useQuery();
-  // Which sessions to show. Starts on Session 1: two hundred cards at once is
-  // a wall, and the first session is where a review usually starts.
-  const [filter, setFilter] = useState<Filter>(1);
+  // Which sessions to show. Starts on the first batch: two hundred cards at
+  // once is a wall, and a dozen recent sessions spread across the session
+  // types and the coaches are enough to find where the criteria are wrong.
+  const [chosen, setFilter] = useState<Filter>('start');
   // Recorded before or since the month the outline is dated. Most recordings
   // are older than the outline they are judged against, and a step missing
   // from those may not have been asked of the coach yet.
@@ -47,11 +48,22 @@ export function AuditListClient() {
   const waiting = data.filter((r) => r.session.standing === 'superseded');
   const settled = data.filter((r) => r.session.standing !== 'superseded');
   const allAudited = settled.filter((r) => r.familiesExamined.length > 0);
+  const batch = allAudited
+    .filter((r) => r.firstBatchRank !== null)
+    .sort((a, b) => (a.firstBatchRank ?? 0) - (b.firstBatchRank ?? 0));
+  // No batch (nothing fully read yet): open on Session 1, as before.
+  const filter: Filter = chosen === 'start' && batch.length === 0 ? 1 : chosen;
   const inFilter =
-    filter === 'all' ? allAudited : allAudited.filter((r) => outlineGroup(r.sessionNo) === filter);
-  const before = inFilter.filter((r) => r.predatesOutline === true);
-  const since = inFilter.filter((r) => r.predatesOutline === false);
-  const audited = period === 'before' ? before : period === 'since' ? since : inFilter;
+    filter === 'start'
+      ? batch
+      : filter === 'all'
+        ? allAudited
+        : allAudited.filter((r) => outlineGroup(r.sessionNo) === filter);
+  // The batch is recent by construction, so the date choice is not offered on it.
+  const before = filter === 'start' ? [] : inFilter.filter((r) => r.predatesOutline === true);
+  const since = filter === 'start' ? [] : inFilter.filter((r) => r.predatesOutline === false);
+  const audited =
+    filter === 'start' ? batch : period === 'before' ? before : period === 'since' ? since : inFilter;
   const notAudited = settled.filter((r) => r.familiesExamined.length === 0);
   const perGroup = (g: 1 | 2 | 3 | 4) =>
     allAudited.filter((r) => outlineGroup(r.sessionNo) === g).length;
@@ -76,6 +88,7 @@ export function AuditListClient() {
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap gap-1.5">
+        {batch.length > 0 ? chip('start', 'Start here', batch.length) : null}
         {([1, 2, 3, 4] as const).map((g) => chip(g, OUTLINE_GROUP_LABEL[g], perGroup(g)))}
         {chip('all', 'All', allAudited.length)}
       </div>
@@ -109,7 +122,9 @@ export function AuditListClient() {
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium text-muted-foreground">
-            Audited{filter === 'all' ? '' : `, ${OUTLINE_GROUP_LABEL[filter]}`} — {audited.length}
+            {filter === 'start'
+              ? `Start here — ${audited.length}`
+              : `Audited${filter === 'all' ? '' : `, ${OUTLINE_GROUP_LABEL[filter]}`} — ${audited.length}`}
           </h2>
           {/* The same findings counted across all of these sessions. */}
           <Link
@@ -119,6 +134,14 @@ export function AuditListClient() {
             <Users className="h-4 w-4" /> Across the cohort
           </Link>
         </div>
+        {filter === 'start' ? (
+          <p className="max-w-3xl text-xs text-muted-foreground">
+            A first batch to review: the most recent sessions, spread across the session
+            types and the coaches, with no CEO twice. Two each from Sessions 1, 2 and 3
+            and up to six from Sessions 4–12. Your answers on these show where the
+            criteria are wrong; everything else is under the other tabs.
+          </p>
+        ) : null}
         <div className="space-y-2">
           {audited.map((r) => (
             <Link key={r.auditId} href={`/admin/audit/${r.auditId}`}>

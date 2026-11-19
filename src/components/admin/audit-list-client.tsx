@@ -23,6 +23,11 @@ export function AuditListClient() {
   // are older than the outline they are judged against, and a step missing
   // from those may not have been asked of the coach yet.
   const [period, setPeriod] = useState<Period>('all');
+  // The tabs for every other session stay out of sight until asked for. A
+  // reviewer sent here to answer a dozen audits should not have to work out
+  // which of two hundred those are; one link at the foot of the batch opens
+  // the rest.
+  const [showAll, setShowAll] = useState(false);
 
   if (isLoading) {
     return (
@@ -53,6 +58,8 @@ export function AuditListClient() {
     .sort((a, b) => (a.firstBatchRank ?? 0) - (b.firstBatchRank ?? 0));
   // No batch (nothing fully read yet): open on Session 1, as before.
   const filter: Filter = chosen === 'start' && batch.length === 0 ? 1 : chosen;
+  // Without a batch there is nothing to narrow to, so the tabs are the list.
+  const tabs = showAll || batch.length === 0;
   const inFilter =
     filter === 'start'
       ? batch
@@ -87,11 +94,13 @@ export function AuditListClient() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap gap-1.5">
-        {batch.length > 0 ? chip('start', 'Start here', batch.length) : null}
-        {([1, 2, 3, 4] as const).map((g) => chip(g, OUTLINE_GROUP_LABEL[g], perGroup(g)))}
-        {chip('all', 'All', allAudited.length)}
-      </div>
+      {tabs ? (
+        <div className="flex flex-wrap gap-1.5">
+          {batch.length > 0 ? chip('start', 'Start here', batch.length) : null}
+          {([1, 2, 3, 4] as const).map((g) => chip(g, OUTLINE_GROUP_LABEL[g], perGroup(g)))}
+          {chip('all', 'All', allAudited.length)}
+        </div>
+      ) : null}
       {before.length + since.length > 0 ? (
         <div className="-mt-5 flex flex-wrap items-center gap-1.5">
           {(
@@ -139,7 +148,10 @@ export function AuditListClient() {
             A first batch to review: the most recent sessions, spread across the session
             types and the coaches, with no CEO twice. Two each from Sessions 1, 2 and 3
             and up to six from Sessions 4–12. Your answers on these show where the
-            criteria are wrong; everything else is under the other tabs.
+            criteria are wrong.{' '}
+            {tabs
+              ? 'Everything else is under the other tabs.'
+              : 'Every other session is behind the link at the foot of this list.'}
           </p>
         ) : null}
         <div className="space-y-2">
@@ -225,6 +237,21 @@ export function AuditListClient() {
             </Link>
           ))}
         </div>
+        {!tabs ? (
+          <p className="pt-2 text-sm">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAll(true);
+                setFilter('all');
+                window.scrollTo({ top: 0 });
+              }}
+              className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              Show all {allAudited.length} audited sessions
+            </button>
+          </p>
+        ) : null}
       </section>
 
       {waiting.length > 0 ? (

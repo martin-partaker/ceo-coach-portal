@@ -268,6 +268,21 @@ export function AuditDetailClient({ auditId }: { auditId: string }) {
               sessionReading={audit.sessionReading}
             />
           ) : null}
+          {/* Her number, our audit: said, so the two are not read as a mismatch. */}
+          {session.override &&
+          !superseded &&
+          session.override.sessionNo !== null &&
+          session.override.sessionNo !== session.auditedAs ? (
+            <p className="mt-2 flex max-w-3xl gap-2 text-xs text-muted-foreground">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                {session.override.setByName} set this recording to{' '}
+                {sessionWords(session.override.sessionNo)}; the audit was run as Session{' '}
+                {session.auditedAs}. Both are judged against the same outline, so the
+                findings below stand as they are.
+              </span>
+            </p>
+          ) : null}
           <SessionControl
             // Remount when the stored word changes, so the form starts from it.
             key={`${session.override?.sessionNo ?? 'auto'}|${session.override?.note ?? ''}`}

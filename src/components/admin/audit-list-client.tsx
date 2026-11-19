@@ -265,7 +265,10 @@ export function AuditListClient() {
         </section>
       ) : null}
 
-      {notAudited.length > 0 ? (
+      {/* Not on the first batch: placing thirteen recordings is another job
+          than answering twelve audits, and it is one tab away. Sessions a
+          reviewer has just corrected stay in view above, on every tab. */}
+      {notAudited.length > 0 && filter !== 'start' ? (
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-muted-foreground">
             Not audited — {notAudited.length}
